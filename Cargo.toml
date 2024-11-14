@@ -1,0 +1,15 @@
+[package]
+name = "inetlang"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "inetlib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "inetcc"
+path = "src/main.rs"
+
+[dependencies]
+chumsky = "0.9.3"
