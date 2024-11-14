@@ -3,6 +3,9 @@ name = "inetlang"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["serde"]
+
 [lib]
 name = "inetlib"
 path = "src/lib.rs"
@@ -13,3 +16,4 @@ path = "src/main.rs"
 
 [dependencies]
 chumsky = "0.9.3"
+serde = { version = "1.0.215", features = ["derive"] , optional = true }
