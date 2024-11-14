@@ -1,12 +1,10 @@
-use chumsky::{prelude::*, text};
-use std::fmt;
-
-#[cfg(feature = "serde")]
+use chumsky::{prelude::*, text, Error};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub type VarName = String;
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum Expr {
     Application {
         rules: Vec<Rule>,
@@ -47,8 +45,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     lhs: RuleActivePair,
     rhs: Vec<InstanceActivePair>,
@@ -69,8 +66,7 @@ impl fmt::Display for Rule {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuleActivePair {
     pub lhs: ActivePairMember,
     pub rhs: ActivePairMember,
@@ -82,8 +78,7 @@ impl fmt::Display for RuleActivePair {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstanceActivePair {
     pub lhs: ActivePairMember,
     pub rhs: ActivePairMember,
@@ -95,8 +90,7 @@ impl fmt::Display for InstanceActivePair {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ActivePairMember {
     Var(VarName),
     Agent {
@@ -136,14 +130,29 @@ impl fmt::Display for ActivePairMember {
 pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     let active_pair_member = recursive(|input| {
         let agent = text::ident()
+            .try_map(|s: String, span: <Simple<char> as Error<char>>::Span| {
+                if s.chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or_default()
+                {
+                    Ok(s)
+                } else {
+                    Err(<Simple<char>>::custom(
+                        span,
+                        "agent names must be capitalized".to_owned(),
+                    ))
+                }
+            })
             .then(
                 input
                     .separated_by(just(',').padded())
-                    .delimited_by(just('['), just(']')),
+                    .delimited_by(just('['), just(']'))
+                    .or_not(),
             )
             .map(|(name, inactive_vars)| ActivePairMember::Agent {
                 name,
-                inactive_vars,
+                inactive_vars: inactive_vars.unwrap_or_default(),
             });
         let var = text::ident().map(ActivePairMember::Var);
 
@@ -203,7 +212,10 @@ mod test {
                                     ActivePairMember::Var("y".into())
                                 ]
                             },
-                            rhs: ActivePairMember::Var("Z".into()),
+                            rhs: ActivePairMember::Agent {
+                                name: "Z".into(),
+                                inactive_vars: Vec::new()
+                            },
                         },
                         rhs: vec![InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
@@ -268,7 +280,10 @@ mod test {
                                     ActivePairMember::Var("y".into())
                                 ]
                             },
-                            rhs: ActivePairMember::Var("Z".into()),
+                            rhs: ActivePairMember::Agent {
+                                name: "Z".into(),
+                                inactive_vars: Vec::new()
+                            },
                         },
                         rhs: vec![InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
