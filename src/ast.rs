@@ -15,6 +15,15 @@ pub enum Expr {
     },
 }
 
+impl Expr {
+    pub fn to_application(self) -> Option<(Vec<Rule>, RuleActivePair)> {
+        match self {
+            Self::Application { rules, instance } => Some((rules, instance)),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -97,6 +106,15 @@ pub enum ActivePairMember {
         name: VarName,
         inactive_vars: Vec<ActivePairMember>,
     },
+}
+
+impl ActivePairMember {
+    pub fn get_inactive_vars(&self) -> Option<&[ActivePairMember]> {
+        match self {
+            Self::Var(_) => None,
+            Self::Agent { inactive_vars, .. } => Some(inactive_vars.as_slice()),
+        }
+    }
 }
 
 impl fmt::Display for ActivePairMember {
