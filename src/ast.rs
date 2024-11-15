@@ -56,8 +56,8 @@ impl fmt::Display for Expr {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
-    lhs: RuleActivePair,
-    rhs: Vec<InstanceActivePair>,
+    pub lhs: RuleActivePair,
+    pub rhs: Vec<InstanceActivePair>,
 }
 
 impl fmt::Display for Rule {

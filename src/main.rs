@@ -34,7 +34,7 @@ fn main() {
             });
         }
         Some(("eval", arg_matches)) => {
-            transform_input_to_output(arg_matches, |e: Expr| match e.to_application() {
+            transform_input_to_output(arg_matches, |e: Expr| match e.clone().to_application() {
                 Some((rules, instance)) => reducers::reduce_to_end_or_infinity(rules, instance)
                     .to_string()
                     .as_bytes()

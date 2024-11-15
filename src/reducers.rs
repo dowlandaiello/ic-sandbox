@@ -6,14 +6,133 @@ use std::{
 
 pub type AgentId = usize;
 
-#[derive(Default)]
+/// Reduces an expression to completion in the context of some rule.
+pub fn reduce_to_end_or_infinity(rules: Vec<Rule>, instance: RuleActivePair) -> RuleActivePair {
+    // Gather all nets representing rules
+    let nets = rules
+        .into_iter()
+        .map(|rule| {
+            let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
+
+            net_lhs.push_net(rule.lhs.lhs, rule.lhs.rhs);
+
+            for member in rule.rhs {
+                net_rhs.push_net(member.lhs, member.rhs);
+            }
+
+            (net_lhs, net_rhs)
+        })
+        .collect::<Vec<_>>();
+
+    let mut curr = instance;
+
+    loop {
+        // Attempt reduction with all rules
+        let instance_net = {
+            let mut n = Net::default();
+            n.push_net(curr.lhs.clone(), curr.rhs.clone());
+
+            n
+        };
+
+        let new = if let Some(result) = reduce(nets.as_slice(), instance_net) {
+            result
+        } else {
+            break;
+        };
+
+        if &new == &curr {
+            curr = new;
+
+            break;
+        }
+
+        curr = new;
+    }
+
+    curr
+}
+
+fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair> {
+    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
+    let (redex_agent_a, redex_agent_b) = (&instance.agents[redex_lhs], &instance.agents[redex_rhs]);
+
+    let (_, matching_replacement_ref) = rules_nets
+        .iter()
+        .filter_map(|(lhs, rhs)| {
+            let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
+
+            if lhs.agents[*agent_a].id == redex_agent_a.id
+                && lhs.agents[*agent_b].id == redex_agent_b.id
+            {
+                return Some((lhs, rhs));
+            }
+
+            None
+        })
+        .next()?;
+    let mut matching_replacement = matching_replacement_ref.clone();
+
+    // Replace vars in rhs with nets in instance matching vars
+    let to_replace = matching_replacement
+        .agents
+        .iter()
+        .enumerate()
+        .map(|(i, agent)| {
+            agent
+                .ports
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.is_none())
+                .map(|(j, _)| (i, j))
+                .collect::<Vec<_>>()
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let replacements = redex_agent_a
+        .ports
+        .iter()
+        .skip(1)
+        .chain(redex_agent_b.ports.iter().skip(1))
+        .map(|port| port.clone().map(|p| instance.agents[p.agent].clone()))
+        .collect::<Vec<_>>();
+
+    if replacements.len() != to_replace.len() {
+        return None;
+    }
+
+    // Work clockwise to replace ports
+    for ((agent_id_replace, port_num_replace), replacement) in
+        to_replace.into_iter().zip(replacements)
+    {
+        match replacement {
+            Some(agent) => {
+                // Insert the actual agent
+                let id = matching_replacement.push_agent(agent.id, agent.ports.len());
+
+                // Connect all connected agents
+                matching_replacement.connect(agent_id_replace, port_num_replace, id, 1);
+            }
+            None => {
+                continue;
+            }
+        }
+    }
+
+    None
+}
+
+#[derive(Default, Clone)]
 pub struct Net {
     agents: Vec<Box<Agent>>,
-    wires: Vec<Port>,
     active_pairs: LinkedList<(usize, usize)>,
 }
 
 impl Net {
+    pub fn get_port(&self, node_a_idx: usize, port_idx: usize) -> Option<&Port> {
+        self.agents[node_a_idx].ports[port_idx].as_deref()
+    }
+
     pub fn push_net(&mut self, lhs: ActivePairMember, rhs: ActivePairMember) {
         // Push and connect lhs and rhs
         let locs = self.push_redex(lhs.clone(), rhs.clone());
@@ -104,19 +223,18 @@ impl Net {
     pub fn push_agent(&mut self, id: AgentId, arity: usize) -> usize {
         self.agents.push(Box::new(Agent {
             id,
-            ports: Vec::with_capacity(arity),
-            vals: Vec::with_capacity(arity),
+            ports: vec![None; arity],
         }));
 
         self.agents.len() - 1
     }
 
     pub fn connect(&mut self, idx_a: usize, port_a: usize, idx_b: usize, port_b: usize) {
-        self.agents[idx_a].ports.push(Box::new(Port {
+        self.agents[idx_a].ports[port_a] = Some(Box::new(Port {
             agent: idx_b,
             port_num: port_b,
         }));
-        self.agents[idx_b].ports.push(Box::new(Port {
+        self.agents[idx_b].ports[port_b] = Some(Box::new(Port {
             agent: idx_a,
             port_num: port_a,
         }));
@@ -127,30 +245,14 @@ impl Net {
     }
 }
 
+#[derive(Clone)]
 pub struct Agent {
     pub id: AgentId,
-    pub ports: Vec<Box<Port>>,
-    pub vals: Vec<Box<Val>>,
+    pub ports: Vec<Option<Box<Port>>>,
 }
 
+#[derive(Clone, PartialEq)]
 pub struct Port {
     pub port_num: usize,
     pub agent: AgentId,
 }
-
-pub enum Val {
-    Char(char),
-    I128(i128),
-    I64(i64),
-    I32(i32),
-    I16(i16),
-    I8(i8),
-    U128(u128),
-    U64(u64),
-    U32(u32),
-    U16(u16),
-    U8(u8),
-}
-
-/// Reduces an expression to completion in the context of some rule.
-pub fn reduce_to_end_or_infinity(rules: Vec<Rule>, instance: RuleActivePair) -> RuleActivePair {}
