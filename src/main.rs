@@ -1,3 +1,4 @@
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::Parser;
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
 use inetlib::{
@@ -6,10 +7,12 @@ use inetlib::{
 };
 use std::{
     fs::OpenOptions,
-    io::{Read, Write},
+    io::{self, Read, Write},
 };
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let cmd = clap::Command::new("icc")
         .bin_name("icc")
         .subcommand_required(true)
@@ -24,7 +27,11 @@ fn main() {
             .about("Parses an input .inet file, reducing the input to completion and echoing the reduced expression, if not out file is specified")
             .arg(arg_in_file())
             .arg(arg_out_file_default("STDOUT".into())
-        ));
+        ))
+        .subcommand(
+            Command::new("dev")
+            .about("Interactively evaluates interaction nets")
+        );
 
     let arg_matches = cmd.get_matches();
     match arg_matches.subcommand() {
@@ -35,12 +42,65 @@ fn main() {
         }
         Some(("eval", arg_matches)) => {
             transform_input_to_output(arg_matches, |e: Expr| match e.clone().to_application() {
-                Some((rules, instance)) => reducers::reduce_to_end_or_infinity(rules, instance)
-                    .to_string()
-                    .as_bytes()
-                    .to_vec(),
+                Some((rules, instance)) => {
+                    reducers::reduce_to_end_or_infinity(rules.clone(), instance)
+                        .into_iter()
+                        .map(|reduction| reduction.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                        .as_bytes()
+                        .to_vec()
+                }
                 _ => e.to_string().as_bytes().to_vec(),
             });
+        }
+        Some(("dev", _)) => {
+            loop {
+                let mut input = String::new();
+
+                loop {
+                    print!("> ");
+                    io::stdout().flush().unwrap();
+
+                    let n_chars_read = io::stdin().read_line(&mut input).unwrap();
+
+                    if n_chars_read == 0 {
+                        return;
+                    }
+
+                    if input.ends_with("\n\n") {
+                        break;
+                    }
+                }
+
+                // Try parsing input as an expr
+                let in_expr = assert_parse_ok(input.trim());
+
+                match in_expr.clone().to_application() {
+                    Some((rules, instance)) => loop {
+                        print!("reduce|exit > ");
+                        io::stdout().flush().unwrap();
+
+                        let mut cmd = String::new();
+
+                        if io::stdin().read_line(&mut cmd).unwrap() == 0
+                            || !cmd.starts_with("reduce")
+                        {
+                            return;
+                        }
+
+                        println!(
+                            "{}",
+                            Expr::Application {
+                                rules: rules.clone(),
+                                instance: reducers::reduce_once(rules.clone(), instance.clone())
+                                    .expect("no reduction occurred")
+                            }
+                        );
+                    },
+                    _ => println!("{}", in_expr),
+                }
+            }
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };
@@ -62,16 +122,23 @@ fn transform_input_to_output(args: &ArgMatches, transformer: impl Fn(Expr) -> Ve
         .read_to_string(&mut input)
         .expect("failed to read input file");
 
-    let parsed: Expr = parser().parse(input).expect("failed to parse input");
+    let parsed: Expr = assert_parse_ok(input.trim());
     let out = transformer(parsed);
 
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(out_fname)
-        .expect("failed to open output file")
-        .write_all(out.as_slice())
-        .expect("failed to write results to out file");
+    match out_fname.as_str() {
+        "STDOUT" => {
+            println!("{}", String::from_utf8(out).expect("invalid utf-8 string"));
+        }
+        out_fname => {
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(out_fname)
+                .expect("failed to open output file")
+                .write_all(out.as_slice())
+                .expect("failed to write results to out file");
+        }
+    }
 }
 
 fn arg_in_file() -> Arg {
@@ -89,4 +156,28 @@ fn arg_out_file_default(default: OsStr) -> Arg {
         .require_equals(true)
         .default_value(default)
         .action(ArgAction::Set)
+}
+
+fn assert_parse_ok(input: &str) -> Expr {
+    let errs = match parser().parse(input) {
+        Ok(v) => {
+            return v;
+        }
+        Err(e) => e,
+    };
+
+    for err in errs {
+        Report::build(ReportKind::Error, ((), err.span()))
+            .with_message(err.to_string())
+            .with_label(
+                Label::new(((), err.span()))
+                    .with_message(err)
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint(Source::from(&input))
+            .unwrap();
+    }
+
+    unreachable!()
 }

@@ -1,13 +1,16 @@
-use super::ast::{ActivePairMember, Rule, RuleActivePair, VarName};
+use super::ast::{ActivePairMember, FreeVarId, Rule, RuleActivePair, VarName};
 use std::{
-    collections::{LinkedList, VecDeque},
-    hash::{DefaultHasher, Hash, Hasher},
+    collections::{HashSet, LinkedList, VecDeque},
+    fmt,
 };
 
 pub type AgentId = usize;
 
 /// Reduces an expression to completion in the context of some rule.
-pub fn reduce_to_end_or_infinity(rules: Vec<Rule>, instance: RuleActivePair) -> RuleActivePair {
+pub fn reduce_to_end_or_infinity(
+    rules: Vec<Rule>,
+    instance: Vec<RuleActivePair>,
+) -> Vec<RuleActivePair> {
     // Gather all nets representing rules
     let nets = rules
         .into_iter()
@@ -24,47 +27,102 @@ pub fn reduce_to_end_or_infinity(rules: Vec<Rule>, instance: RuleActivePair) -> 
         })
         .collect::<Vec<_>>();
 
-    let mut curr = instance;
-
-    loop {
-        // Attempt reduction with all rules
-        let instance_net = {
+    // Attempt reduction with all rules
+    let mut to_reduce = instance
+        .iter()
+        .map(|instance| {
             let mut n = Net::default();
-            n.push_net(curr.lhs.clone(), curr.rhs.clone());
+            n.push_net(instance.lhs.clone(), instance.rhs.clone());
 
             n
-        };
+        })
+        .collect::<Vec<_>>();
+    let mut results = Vec::new();
 
-        let new = if let Some(result) = reduce(nets.as_slice(), instance_net) {
+    while let Some(curr_redex) = to_reduce.pop() {
+        let new = if let Some(result) = reduce_net(nets.as_slice(), curr_redex.clone()) {
             result
         } else {
             break;
         };
 
-        if &new == &curr {
-            curr = new;
-
-            break;
+        if !new
+            .active_pairs
+            .iter()
+            .filter_map(|(a, b)| (*a).zip(*b))
+            .count()
+            > 0
+        {
+            to_reduce.push(new);
+        } else {
+            results.push(new);
         }
-
-        curr = new;
     }
 
-    curr
+    results
+        .into_iter()
+        .map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
+        .flatten()
+        .collect::<Vec<_>>()
 }
 
-fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair> {
-    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
-    let (redex_agent_a, redex_agent_b) = (&instance.agents[redex_lhs], &instance.agents[redex_rhs]);
+pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Vec<RuleActivePair>> {
+    // Gather all nets representing rules
+    let nets = rules
+        .into_iter()
+        .map(|rule| {
+            let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
 
-    let (_, matching_replacement_ref) = rules_nets
+            net_lhs.push_net(rule.lhs.lhs, rule.lhs.rhs);
+
+            for member in rule.rhs {
+                net_rhs.push_net(member.lhs, member.rhs);
+            }
+
+            (net_lhs, net_rhs)
+        })
+        .collect::<Vec<_>>();
+
+    // Attempt reduction with all rules
+    let instance_net = {
+        let mut n = Net::default();
+        n.push_net(
+            instance.iter().next()?.lhs.clone(),
+            instance.iter().next()?.rhs.clone(),
+        );
+
+        n
+    };
+
+    reduce_net(nets.as_slice(), instance_net).map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
+}
+
+fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
+    tracing::debug!(
+        "reducing net {} with next active pairs {:?}",
+        instance,
+        instance.active_pairs
+    );
+
+    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
+    let (redex_agent_a, redex_agent_b) =
+        (&instance.agents[redex_lhs?], &instance.agents[redex_rhs?]);
+
+    let (matching_rule, matching_replacement_ref) = rules_nets
         .iter()
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
 
-            if lhs.agents[*agent_a].id == redex_agent_a.id
-                && lhs.agents[*agent_b].id == redex_agent_b.id
-            {
+            let pair_a: HashSet<&str> = HashSet::from_iter(vec![
+                lhs.names[lhs.agents[(*agent_a)?].id].as_str(),
+                lhs.names[lhs.agents[(*agent_b)?].id].as_str(),
+            ]);
+            let pair_b = HashSet::from_iter(vec![
+                instance.names[redex_agent_a.id].as_str(),
+                instance.names[redex_agent_b.id].as_str(),
+            ]);
+
+            if pair_a == pair_b {
                 return Some((lhs, rhs));
             }
 
@@ -72,6 +130,9 @@ fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair
         })
         .next()?;
     let mut matching_replacement = matching_replacement_ref.clone();
+
+    tracing::debug!("matching rule candidate: {}", matching_rule);
+    tracing::debug!("matching replacement candidate: {}", matching_replacement);
 
     // Replace vars in rhs with nets in instance matching vars
     let to_replace = matching_replacement
@@ -89,6 +150,7 @@ fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair
         })
         .flatten()
         .collect::<Vec<_>>();
+
     let replacements = redex_agent_a
         .ports
         .iter()
@@ -97,8 +159,40 @@ fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair
         .map(|port| port.clone().map(|p| instance.agents[p.agent].clone()))
         .collect::<Vec<_>>();
 
+    tracing::debug!(
+        "replacing (agents, ports) {:?} with {:?} in net {:?}",
+        to_replace,
+        replacements,
+        matching_replacement
+    );
+
     if replacements.len() != to_replace.len() {
-        return None;
+        if to_replace.len() > 2 || replacements.len() > 2 {
+            return None;
+        }
+
+        if replacements.len() == 1 {
+            let agent = &replacements[0];
+
+            // Insert the actual agent
+            matching_replacement.push_agent(agent.as_ref()?.id, agent.as_ref()?.ports.len());
+
+            return Some(matching_replacement);
+        }
+
+        match (&replacements[0]).as_ref().zip((&replacements[1]).as_ref()) {
+            Some((redex_lhs, redex_rhs)) => {
+                // Insert the actual agent
+                let id_lhs = matching_replacement.push_agent(redex_lhs.id, redex_lhs.ports.len());
+                let id_rhs = matching_replacement.push_agent(redex_rhs.id, redex_rhs.ports.len());
+
+                // Connect all connected agents
+                matching_replacement.connect(id_lhs, 0, id_rhs, 0);
+            }
+            _ => {
+                return Some(matching_replacement);
+            }
+        }
     }
 
     // Work clockwise to replace ports
@@ -108,10 +202,11 @@ fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair
         match replacement {
             Some(agent) => {
                 // Insert the actual agent
-                let id = matching_replacement.push_agent(agent.id, agent.ports.len());
+                let id = matching_replacement
+                    .push_ast_agent(instance.names[agent.id].clone(), agent.ports.len());
 
                 // Connect all connected agents
-                matching_replacement.connect(agent_id_replace, port_num_replace, id, 1);
+                matching_replacement.connect(agent_id_replace, port_num_replace, id, 0);
             }
             None => {
                 continue;
@@ -119,44 +214,131 @@ fn reduce(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<RuleActivePair
         }
     }
 
-    None
+    Some(matching_replacement)
 }
 
-#[derive(Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Net {
+    names: Vec<VarName>,
     agents: Vec<Box<Agent>>,
-    active_pairs: LinkedList<(usize, usize)>,
+    active_pairs: LinkedList<(Option<usize>, Option<usize>)>,
+}
+
+impl fmt::Display for Net {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pairs: Vec<RuleActivePair> = self.clone().into();
+
+        write!(
+            f,
+            "{}",
+            pairs
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+impl From<Net> for Vec<RuleActivePair> {
+    fn from(n: Net) -> Self {
+        // Identity net
+        if n.agents.len() == 0 {
+            return vec![RuleActivePair {
+                lhs: ActivePairMember::Var("x".to_string()),
+                rhs: ActivePairMember::Var("y".to_string()),
+            }];
+        }
+
+        n.active_pairs
+            .iter()
+            .enumerate()
+            .map(|(i, (redex_lhs, redex_rhs))| RuleActivePair {
+                lhs: redex_lhs
+                    .map(|redex| {
+                        n.agent_to_pair_member(redex, FreeVarId::prefixed(i.to_string()).next())
+                    })
+                    .unwrap_or(ActivePairMember::Var(
+                        FreeVarId::prefixed(i.to_string()).next().0,
+                    )),
+                rhs: redex_rhs
+                    .map(|redex| {
+                        n.agent_to_pair_member(
+                            redex,
+                            FreeVarId::prefixed(i.to_string()).succ().next(),
+                        )
+                    })
+                    .unwrap_or(ActivePairMember::Var(
+                        FreeVarId::prefixed(i.to_string()).next().0,
+                    )),
+            })
+            .collect::<Vec<_>>()
+    }
 }
 
 impl Net {
+    pub fn agent_to_pair_member(
+        &self,
+        agent_idx: usize,
+        curr_free_var: FreeVarId,
+    ) -> ActivePairMember {
+        let a = &self.agents[agent_idx];
+
+        ActivePairMember::Agent {
+            name: self.names[a.id].clone(),
+            inactive_vars: a
+                .ports
+                .iter()
+                .skip(1)
+                .enumerate()
+                .map(|(i, maybe_p)| {
+                    maybe_p
+                        .as_ref()
+                        .map(|port| {
+                            self.agent_to_pair_member(
+                                port.agent,
+                                curr_free_var.prefix(i.to_string()).succ(),
+                            )
+                        })
+                        .unwrap_or(ActivePairMember::Var(
+                            curr_free_var.prefix(i.to_string()).0.clone(),
+                        ))
+                })
+                .collect::<Vec<_>>(),
+        }
+    }
+
     pub fn get_port(&self, node_a_idx: usize, port_idx: usize) -> Option<&Port> {
         self.agents[node_a_idx].ports[port_idx].as_deref()
     }
 
+    #[tracing::instrument]
     pub fn push_net(&mut self, lhs: ActivePairMember, rhs: ActivePairMember) {
         // Push and connect lhs and rhs
-        let locs = self.push_redex(lhs.clone(), rhs.clone());
-        let (lhs_loc, rhs_loc) = locs
-            .0
-            .zip(locs.1)
-            .expect("redex active pairs were not inserted");
+        let (lhs_loc, rhs_loc) = self.push_redex(lhs.clone(), rhs.clone());
 
         // Connect all aux ports to lhs and rhs
-        let mut to_insert = lhs
-            .get_inactive_vars()
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-            .map(|(i, member)| (lhs_loc, self.agents[lhs_loc].ports.len() + i, member))
-            .collect::<VecDeque<_>>();
-        to_insert.extend(
-            rhs.get_inactive_vars()
-                .unwrap_or_default()
-                .iter()
-                .enumerate()
-                .map(|(i, member)| (rhs_loc, self.agents[rhs_loc].ports.len() + i, member))
-                .collect::<VecDeque<_>>(),
-        );
+        let mut to_insert = lhs_loc
+            .map(|loc| {
+                lhs.get_inactive_vars()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, member)| (loc, 1 + i, member))
+                    .collect::<VecDeque<_>>()
+            })
+            .unwrap_or_default();
+
+        if let Some(loc) = rhs_loc {
+            to_insert.extend(
+                rhs.get_inactive_vars()
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, member)| (loc, 1 + i, member))
+                    .collect::<VecDeque<_>>(),
+            );
+        }
 
         while let Some((conn_agent_idx, conn_port, expr_insert)) = to_insert.pop_front() {
             match expr_insert {
@@ -181,6 +363,7 @@ impl Net {
         }
     }
 
+    #[tracing::instrument]
     pub fn push_redex(
         &mut self,
         lhs: ActivePairMember,
@@ -210,16 +393,26 @@ impl Net {
             self.connect(lhs_loc, 0, rhs_loc, 0);
         }
 
+        self.active_pairs.push_front((lhs_loc, rhs_loc));
+
         (lhs_loc, rhs_loc)
     }
 
+    #[tracing::instrument]
     pub fn push_ast_agent(&mut self, name: VarName, arity: usize) -> usize {
-        let mut s = DefaultHasher::new();
-        name.hash(&mut s);
+        let idx = self
+            .names
+            .iter()
+            .position(|maybe_name| *maybe_name == *name)
+            .unwrap_or_else(|| {
+                self.names.push(name);
+                self.names.len() - 1
+            });
 
-        self.push_agent(s.finish() as usize, arity)
+        self.push_agent(idx, arity)
     }
 
+    #[tracing::instrument]
     pub fn push_agent(&mut self, id: AgentId, arity: usize) -> usize {
         self.agents.push(Box::new(Agent {
             id,
@@ -229,6 +422,7 @@ impl Net {
         self.agents.len() - 1
     }
 
+    #[tracing::instrument]
     pub fn connect(&mut self, idx_a: usize, port_a: usize, idx_b: usize, port_b: usize) {
         self.agents[idx_a].ports[port_a] = Some(Box::new(Port {
             agent: idx_b,
@@ -238,20 +432,16 @@ impl Net {
             agent: idx_a,
             port_num: port_a,
         }));
-
-        if port_a == 0 && port_b == 0 {
-            self.active_pairs.push_front((idx_a, idx_b));
-        }
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Agent {
     pub id: AgentId,
     pub ports: Vec<Option<Box<Port>>>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Port {
     pub port_num: usize,
     pub agent: AgentId,
