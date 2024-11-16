@@ -23,13 +23,10 @@ pub fn reduce_to_end_or_infinity(
         .into_iter()
         .map(|rule| {
             let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
-
             net_lhs.push_net(rule.lhs.lhs, rule.lhs.rhs);
-
             for member in rule.rhs {
                 net_rhs.push_net(member.lhs, member.rhs);
             }
-
             (net_lhs, net_rhs)
         })
         .collect::<Vec<_>>();
@@ -40,25 +37,20 @@ pub fn reduce_to_end_or_infinity(
         .map(|instance| {
             let mut n = Net::default();
             n.push_net(instance.lhs.clone(), instance.rhs.clone());
-
             n
         })
         .collect::<Vec<_>>();
     let mut results = Vec::new();
-
     while let Some(curr_redex) = to_reduce.pop() {
         let new = if let Some(result) = reduce_net(nets.as_slice(), curr_redex.clone()) {
             result
         } else {
             break;
         };
-
         if new == curr_redex {
             results.push(new);
-
             break;
         };
-
         if new
             .active_pairs
             .iter()
@@ -71,7 +63,6 @@ pub fn reduce_to_end_or_infinity(
             results.push(new);
         }
     }
-
     results
         .into_iter()
         .map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
@@ -85,13 +76,10 @@ pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Ve
         .into_iter()
         .map(|rule| {
             let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
-
             net_lhs.push_net(rule.lhs.lhs, rule.lhs.rhs);
-
             for member in rule.rhs {
                 net_rhs.push_net(member.lhs, member.rhs);
             }
-
             (net_lhs, net_rhs)
         })
         .collect::<Vec<_>>();
@@ -103,10 +91,8 @@ pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Ve
             instance.iter().next()?.lhs.clone(),
             instance.iter().next()?.rhs.clone(),
         );
-
         n
     };
-
     reduce_net(nets.as_slice(), instance_net).map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
 }
 
@@ -120,18 +106,15 @@ fn matching_nets<'a>(
         .iter()
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
-
             let pair_a: HashSet<&str> =
                 HashSet::from_iter(vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)]);
             let pair_b = HashSet::from_iter(vec![
                 instance.get_name_for(&redex_lhs),
                 instance.get_name_for(&redex_rhs),
             ]);
-
             if pair_a == pair_b || pair_a.is_subset(&pair_b) {
                 return Some((lhs, rhs));
             }
-
             None
         })
         .collect::<Vec<_>>()
@@ -143,88 +126,39 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         instance,
         instance.active_pairs
     );
-
     let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
-
     tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
-
     let (matching_rule, matching_replacement_ref) =
         matching_nets(rules_nets, &instance, redex_lhs, redex_rhs).get(0)?;
     let mut matching_replacement = matching_replacement_ref.clone();
-
     tracing::debug!("matching rule candidate: {}", matching_rule);
     tracing::debug!("matching replacement candidate: {}", matching_replacement);
 
-    /*
-        // Replace vars in rhs with nets in instance matching vars
-        let to_replace = matching_replacement
-        .agents
-        .iter()
-        .enumerate()
-        .map(|(i, agent)| {
-        agent
-        .ports
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.is_none())
-        .map(|(j, _)| (i, j))
-        .collect::<Vec<_>>()
-    })
-        .flatten()
-        .collect::<Vec<_>>();
-
-        let replacements = redex_agent_a
-        .map(|agent| agent.ports.clone())
-        .unwrap_or_default()
-        .iter()
-        .skip(1)
-        .chain(
-        redex_agent_b
-        .map(|agent| agent.ports.clone())
-        .unwrap_or_default()
-        .iter()
-        .skip(1),
-    )
-        .map(|port| port.clone().map(|p| instance.agents[p.agent].clone()))
-        .collect::<Vec<_>>();
-
-        tracing::debug!(
-        "replacing (agents, ports) {:?} with {:?} in net {:?}",
-        to_replace,
-        replacements,
-        matching_replacement
-    );
-
-        // Work clockwise to replace ports
-        for ((agent_id_replace, port_num_replace), replacement) in
-        to_replace.into_iter().zip(replacements)
-        {
-        match replacement {
-        Some(agent) => {
-        // Insert the actual agent
-        let id = matching_replacement
-        .push_ast_agent(instance.names[agent.id].clone(), agent.ports.len());
-
-        // Connect all connected agents
-        matching_replacement.connect(agent_id_replace, port_num_replace, id, 0);
-        matching_replacement.active_pairs = matching_replacement
-        .active_pairs
-        .into_iter()
-        .filter(|(a, b)| a != &Some(agent_id_replace) && b != &Some(agent_id_replace))
-        .collect();
-        matching_replacement
-        .active_pairs
-        .push_front((Some(agent_id_replace), Some(id)));
-    }
-        None => {
-        continue;
-    }
-    }
-    }
-
-         */
-
-    Some(matching_replacement)
+    // // Replace vars in rhs with nets in instance matching vars let to_replace =
+    // matching_replacement .agents .iter() .enumerate() .map(|(i, agent)| { agent
+    // .ports .iter() .enumerate() .filter(|(_, p)| p.is_none()) .map(|(j, _)| (i, j))
+    // .collect::<Vec<_>>() }) .flatten() .collect::<Vec<_>>();
+    //
+    // let replacements = redex_agent_a .map(|agent| agent.ports.clone())
+    // .unwrap_or_default() .iter() .skip(1) .chain( redex_agent_b .map(|agent|
+    // agent.ports.clone()) .unwrap_or_default() .iter() .skip(1), ) .map(|port|
+    // port.clone().map(|p| instance.agents[p.agent].clone())) .collect::<Vec<_>>();
+    //
+    // tracing::debug!( "replacing (agents, ports) {:?} with {:?} in net {:?}",
+    // to_replace, replacements, matching_replacement );
+    //
+    // // Work clockwise to replace ports for ((agent_id_replace, port_num_replace),
+    // replacement) in to_replace.into_iter().zip(replacements) { match replacement {
+    // Some(agent) => { // Insert the actual agent let id = matching_replacement
+    // .push_ast_agent(instance.names[agent.id].clone(), agent.ports.len());
+    //
+    // // Connect all connected agents matching_replacement.connect(agent_id_replace,
+    // port_num_replace, id, 0); matching_replacement.active_pairs =
+    // matching_replacement .active_pairs .into_iter() .filter(|(a, b)| a !=
+    // &Some(agent_id_replace) && b != &Some(agent_id_replace)) .collect();
+    // matching_replacement .active_pairs .push_front((Some(agent_id_replace),
+    // Some(id))); } None => { continue; } } }
+    None
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -243,7 +177,6 @@ pub enum PairElem {
 impl fmt::Display for Net {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pairs: Vec<RuleActivePair> = self.clone().into();
-
         write!(
             f,
             "{}",
@@ -284,7 +217,6 @@ impl Net {
 
     pub fn agent_to_pair_member(&self, agent_idx: usize) -> ActivePairMember {
         let a = &self.agents[agent_idx];
-
         ActivePairMember::Agent {
             name: self.names[a.id].clone(),
             inactive_vars: a
@@ -319,8 +251,8 @@ impl Net {
         // Push and connect lhs and rhs
         let (lhs_loc, rhs_loc) = self.push_redex(lhs.clone(), rhs.clone());
 
-        // Connect all aux ports to lhs and rhs
-        // Note: these vars are necessarily inactive, no need to skip first
+        // Connect all aux ports to lhs and rhs Note: these vars are necessarily inactive,
+        // no need to skip first
         let mut to_insert = lhs_loc
             .map(|loc| {
                 lhs.get_inactive_vars()
@@ -343,7 +275,6 @@ impl Net {
                     .collect::<VecDeque<_>>(),
             );
         }
-
         while let Some((conn_agent_idx, conn_port, expr_insert)) = to_insert.pop_front() {
             match expr_insert {
                 ActivePairMember::Agent {
@@ -389,12 +320,9 @@ impl Net {
             ) => {
                 let idx_agent_a = self.push_ast_agent(name_lhs, inactive_vars_lhs.len() + 1);
                 let idx_agent_b = self.push_ast_agent(name_rhs, inactive_vars_rhs.len() + 1);
-
                 self.connect(idx_agent_a, 0, idx_agent_b, 0);
-
                 self.active_pairs
                     .push_front((PairElem::Agent(idx_agent_a), PairElem::Agent(idx_agent_b)));
-
                 (Some(idx_agent_a), Some(idx_agent_b))
             }
             (
@@ -405,12 +333,9 @@ impl Net {
                 ActivePairMember::Var(v),
             ) => {
                 let idx_agent_a = self.push_ast_agent(name, inactive_vars.len() + 1);
-
                 let name_idx = self.push_var(idx_agent_a, 0, v);
-
                 self.active_pairs
                     .push_front((PairElem::Agent(idx_agent_a), PairElem::Var(name_idx)));
-
                 (Some(idx_agent_a), None)
             }
             (
@@ -421,21 +346,16 @@ impl Net {
                 },
             ) => {
                 let idx_agent_a = self.push_ast_agent(name, inactive_vars.len() + 1);
-
                 let name_idx = self.push_var(idx_agent_a, 0, v);
-
                 self.active_pairs
                     .push_front((PairElem::Agent(idx_agent_a), PairElem::Var(name_idx)));
-
                 (None, Some(idx_agent_a))
             }
             (ActivePairMember::Var(v1), ActivePairMember::Var(v2)) => {
                 let name_idx_1 = self.push_name(v1);
                 let name_idx_2 = self.push_name(v2);
-
                 self.active_pairs
                     .push_front((PairElem::Var(name_idx_1), PairElem::Var(name_idx_2)));
-
                 (Some(name_idx_1), Some(name_idx_2))
             }
         }
@@ -444,14 +364,12 @@ impl Net {
     #[tracing::instrument]
     pub fn push_ast_agent(&mut self, name: VarName, arity: usize) -> usize {
         let idx = self.push_name(name);
-
         self.push_agent(idx, arity)
     }
 
     pub fn push_var(&mut self, node_idx: usize, port_idx: usize, name: String) -> usize {
         let name_idx = self.push_name(name);
         self.agents[node_idx].ports[port_idx] = Some(PortElem::Var(name_idx));
-
         name_idx
     }
 
@@ -461,7 +379,6 @@ impl Net {
             id,
             ports: vec![None; arity],
         }));
-
         self.agents.len() - 1
     }
 
@@ -506,29 +423,50 @@ mod test {
         [
             ("identity", "x >< y => x ~ y
              x >< y", "x >< y => x ~ y"),
-            ("addition", "Add[x, y] >< Z => x ~ y
+            (
+                "addition",
+                "Add[x, y] >< Z => x ~ y
              S[x] >< Add[y, z] => Add[y, S[z]] ~ x
-             Add[Z, y] >< Z", "Add[x, y] >< Z => x ~ y"),
-            ("combinators", "Constr[a, b] >< Dup[c, d] => Dup[a, b] ~ c, Dup[d, e] ~ f, Constr[g, d] ~ h, Constr[i, j] ~ a
+             Add[Z, y] >< Z",
+                "Add[x, y] >< Z => x ~ y",
+            ),
+            (
+                "combinators",
+                "Constr[a, b] >< Dup[c, d] => Dup[a, b] ~ c, Dup[d, e] ~ f, Constr[g, d] ~ h, Constr[i, j] ~ a
              Era >< Constr[a, b] => Era ~ a, Era ~ b
              Era >< Dup[a, b] => Era ~ a, Era ~ b
              Constr[a, b] >< Constr[c, d] => a ~ b, c ~ d
              Dup[a, b] >< Dup[c, d] => a ~ c, b ~ d
              Era >< Era => ()
-             Era >< Era", "Era >< Era => ()"),
-        ].iter().map(|(name, src, expected_rule)| (name, ast::parser().parse(*src).unwrap(), ast::parser().parse(*expected_rule).unwrap())).for_each(|(name, e, expected_rule)| {
-            let (rules, instance) = e.to_application().unwrap();
-
-            let mut instance_n = Net::default();
-            instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
-
-            let mut rule_n_lhs = Net::default();
-            let mut rule_n_rhs = Net::default();
-
-            let redex = instance_n.active_pairs.pop_front();
-
-            let matches = matching_nets(rules, instance, redex.0, redex.1);
-        });
+             Era >< Era",
+                "Era >< Era => ()",
+            ),
+        ]
+            .iter()
+            .map(
+                |(name, src, expected_rule)| (
+                    name,
+                    ast::parser().parse(*src).unwrap(),
+                    ast::parser().parse(*expected_rule).unwrap(),
+                ),
+            )
+            .for_each(|(name, e, expected_rule)| {
+                let (rules, instance) = e.to_application().unwrap();
+                let rule_nets = rules.into_iter().map(|rule| {
+                    let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
+                    net_lhs.push_net(rule.lhs.lhs.clone(), rule.lhs.rhs.clone());
+                    for member in rule.rhs {
+                        net_rhs.push_net(member.lhs, member.rhs);
+                    }
+                    (net_lhs, net_rhs)
+                }).collect::<Vec<_>>();
+                let mut instance_n = Net::default();
+                instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
+                let mut rule_n_lhs = Net::default();
+                let mut rule_n_rhs = Net::default();
+                let redex = instance_n.active_pairs.pop_front();
+                let matches = matching_nets(rules, instance, redex.0, redex.1);
+            });
     }
 
     #[test]
@@ -536,41 +474,43 @@ mod test {
         [
             ("identity", "x >< y => x ~ y
              x >< y"),
-            ("addition", "Add[x, y] >< Z => x ~ y
+            (
+                "addition",
+                "Add[x, y] >< Z => x ~ y
              S[x] >< Add[y, z] => Add[y, S[z]] ~ x
-             Add[Z, y] >< Z"),
-            ("combinators", "Constr[a, b] >< Dup[c, d] => Dup[a, b] ~ c, Dup[d, e] ~ f, Constr[g, d] ~ h, Constr[i, j] ~ a
+             Add[Z, y] >< Z",
+            ),
+            (
+                "combinators",
+                "Constr[a, b] >< Dup[c, d] => Dup[a, b] ~ c, Dup[d, e] ~ f, Constr[g, d] ~ h, Constr[i, j] ~ a
              Era >< Constr[a, b] => Era ~ a, Era ~ b
              Era >< Dup[a, b] => Era ~ a, Era ~ b
              Constr[a, b] >< Constr[c, d] => a ~ b, c ~ d
              Dup[a, b] >< Dup[c, d] => a ~ c, b ~ d
              Era >< Era => ()
-             Era >< Era"),
-        ].iter().map(|(name, src)| (name, ast::parser().parse(*src).unwrap())).for_each(|(name, e)| {
-            let (rules, instance) = e.to_application().unwrap();
-
-            let mut instance_n = Net::default();
-            instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
-
-            assert_eq!(
-                instance_n.to_string(),
-                instance.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "),
-                "{}: {} != {}",
-                name,
-                instance_n.to_string(),
-                instance.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
-            );
-
-            rules.into_iter()
-                .for_each(|rule| {
+             Era >< Era",
+            ),
+        ]
+            .iter()
+            .map(|(name, src)| (name, ast::parser().parse(*src).unwrap()))
+            .for_each(|(name, e)| {
+                let (rules, instance) = e.to_application().unwrap();
+                let mut instance_n = Net::default();
+                instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
+                assert_eq!(
+                    instance_n.to_string(),
+                    instance.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", "),
+                    "{}: {} != {}",
+                    name,
+                    instance_n.to_string(),
+                    instance.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+                );
+                rules.into_iter().for_each(|rule| {
                     let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
-
                     net_lhs.push_net(rule.lhs.lhs.clone(), rule.lhs.rhs.clone());
-
                     for member in rule.rhs {
                         net_rhs.push_net(member.lhs, member.rhs);
                     }
-
                     assert_eq!(
                         net_lhs.to_string(),
                         rule.lhs.to_string(),
@@ -580,7 +520,7 @@ mod test {
                         rule.lhs.to_string()
                     );
                 });
-        });
+            });
     }
 
     #[test]
@@ -591,13 +531,11 @@ mod test {
                  x >< y",
             )
             .unwrap();
-
         let res = reduce_expr_to_end_or_infinity(e)
             .into_iter()
             .map(|reduction| reduction.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-
         assert_eq!(res, "x >< y");
     }
 }

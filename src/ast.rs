@@ -183,24 +183,19 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 inactive_vars: inactive_vars.unwrap_or_default(),
             });
         let var = text::ident().map(ActivePairMember::Var);
-
         choice((agent, var))
     });
-
     let rule_active_pair = active_pair_member
         .clone()
         .then_ignore(just("><").padded())
         .then(active_pair_member.clone())
         .map(|(lhs, rhs)| RuleActivePair { lhs, rhs });
-
     let instance_active_pair = active_pair_member
         .clone()
         .then_ignore(just("~").padded())
         .then(active_pair_member)
         .map(|(lhs, rhs)| InstanceActivePair { lhs, rhs });
-
     let unit = just("()");
-
     let rule = rule_active_pair
         .clone()
         .then_ignore(just("=>").padded())
@@ -209,14 +204,12 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
             instance_active_pair.separated_by(just(',').padded()),
         )))
         .map(|(lhs, rhs)| Rule { lhs, rhs });
-
     let book = rule.separated_by(just("\n").repeated().padded());
     let application = book
         .clone()
         .then_ignore(just("\n").repeated().padded())
         .then(rule_active_pair.separated_by(just(',').padded()))
         .map(|(rules, instance)| Expr::Application { rules, instance });
-
     choice((
         book.map(|rules| Expr::Book { rules }).then_ignore(end()),
         application.then_ignore(end()),
@@ -231,7 +224,6 @@ mod test {
     fn test_parse_book() {
         let to_parse = "Add[x, y] >< Z => x ~ y\nAdd[x, y] >< S[a] => x ~ S[b], a ~ Add[b, y]";
         let expr: Expr = parser().parse(to_parse).unwrap();
-
         assert_eq!(
             expr,
             Expr::Book {
@@ -243,17 +235,17 @@ mod test {
                                 inactive_vars: vec![
                                     ActivePairMember::Var("x".into()),
                                     ActivePairMember::Var("y".into())
-                                ]
+                                ],
                             },
                             rhs: ActivePairMember::Agent {
                                 name: "Z".into(),
-                                inactive_vars: Vec::new()
+                                inactive_vars: Vec::new(),
                             },
                         },
                         rhs: vec![InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
-                            rhs: ActivePairMember::Var("y".into())
-                        }]
+                            rhs: ActivePairMember::Var("y".into()),
+                        }],
                     },
                     Rule {
                         lhs: RuleActivePair {
@@ -262,11 +254,11 @@ mod test {
                                 inactive_vars: vec![
                                     ActivePairMember::Var("x".into()),
                                     ActivePairMember::Var("y".into())
-                                ]
+                                ],
                             },
                             rhs: ActivePairMember::Agent {
                                 name: "S".into(),
-                                inactive_vars: vec![ActivePairMember::Var("a".into())]
+                                inactive_vars: vec![ActivePairMember::Var("a".into())],
                             },
                         },
                         rhs: vec![
@@ -274,8 +266,8 @@ mod test {
                                 lhs: ActivePairMember::Var("x".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "S".into(),
-                                    inactive_vars: vec![ActivePairMember::Var("b".into())]
-                                }
+                                    inactive_vars: vec![ActivePairMember::Var("b".into())],
+                                },
                             },
                             InstanceActivePair {
                                 lhs: ActivePairMember::Var("a".into()),
@@ -284,10 +276,10 @@ mod test {
                                     inactive_vars: vec![
                                         ActivePairMember::Var("b".into()),
                                         ActivePairMember::Var("y".into())
-                                    ]
-                                }
+                                    ],
+                                },
                             }
-                        ]
+                        ],
                     }
                 ]
             }
@@ -297,9 +289,9 @@ mod test {
 
     #[test]
     fn test_parse_application() {
-        let to_parse = "Add[x, y] >< Z => x ~ y\nAdd[x, y] >< S[a] => x ~ S[b], a ~ Add[b, y]\nAdd[x, y] >< Add[z, a]";
+        let to_parse =
+            "Add[x, y] >< Z => x ~ y\nAdd[x, y] >< S[a] => x ~ S[b], a ~ Add[b, y]\nAdd[x, y] >< Add[z, a]";
         let expr: Expr = parser().parse(to_parse).unwrap();
-
         assert_eq!(
             expr,
             Expr::Application {
@@ -311,17 +303,17 @@ mod test {
                                 inactive_vars: vec![
                                     ActivePairMember::Var("x".into()),
                                     ActivePairMember::Var("y".into())
-                                ]
+                                ],
                             },
                             rhs: ActivePairMember::Agent {
                                 name: "Z".into(),
-                                inactive_vars: Vec::new()
+                                inactive_vars: Vec::new(),
                             },
                         },
                         rhs: vec![InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
-                            rhs: ActivePairMember::Var("y".into())
-                        }]
+                            rhs: ActivePairMember::Var("y".into()),
+                        }],
                     },
                     Rule {
                         lhs: RuleActivePair {
@@ -330,11 +322,11 @@ mod test {
                                 inactive_vars: vec![
                                     ActivePairMember::Var("x".into()),
                                     ActivePairMember::Var("y".into())
-                                ]
+                                ],
                             },
                             rhs: ActivePairMember::Agent {
                                 name: "S".into(),
-                                inactive_vars: vec![ActivePairMember::Var("a".into())]
+                                inactive_vars: vec![ActivePairMember::Var("a".into())],
                             },
                         },
                         rhs: vec![
@@ -342,8 +334,8 @@ mod test {
                                 lhs: ActivePairMember::Var("x".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "S".into(),
-                                    inactive_vars: vec![ActivePairMember::Var("b".into())]
-                                }
+                                    inactive_vars: vec![ActivePairMember::Var("b".into())],
+                                },
                             },
                             InstanceActivePair {
                                 lhs: ActivePairMember::Var("a".into()),
@@ -352,10 +344,10 @@ mod test {
                                     inactive_vars: vec![
                                         ActivePairMember::Var("b".into()),
                                         ActivePairMember::Var("y".into())
-                                    ]
-                                }
+                                    ],
+                                },
                             }
-                        ]
+                        ],
                     }
                 ],
                 instance: vec![RuleActivePair {
@@ -364,16 +356,16 @@ mod test {
                         inactive_vars: vec![
                             ActivePairMember::Var("x".into()),
                             ActivePairMember::Var("y".into())
-                        ]
+                        ],
                     },
                     rhs: ActivePairMember::Agent {
                         name: "Add".into(),
                         inactive_vars: vec![
                             ActivePairMember::Var("z".into()),
                             ActivePairMember::Var("a".into())
-                        ]
+                        ],
                     },
-                }]
+                }],
             }
         );
         assert_eq!(&expr.to_string(), to_parse);
