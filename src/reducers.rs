@@ -49,8 +49,7 @@ pub fn reduce_to_end_or_infinity(
             .active_pairs
             .iter()
             .filter(|(a, b)| matches!((a, b), (PairElem::Agent(_), PairElem::Agent(_))))
-            .count()
-            > 0
+            .count() > 0
         {
             to_reduce.push(new);
         } else {
@@ -63,7 +62,10 @@ pub fn reduce_to_end_or_infinity(
         .flatten()
         .collect::<Vec<_>>()
 }
-pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Vec<RuleActivePair>> {
+pub fn reduce_once(
+    rules: Vec<Rule>,
+    instance: Vec<RuleActivePair>,
+) -> Option<Vec<RuleActivePair>> {
     let nets = rules
         .into_iter()
         .map(|rule| {
@@ -83,7 +85,8 @@ pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Ve
         );
         n
     };
-    reduce_net(nets.as_slice(), instance_net).map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
+    reduce_net(nets.as_slice(), instance_net)
+        .map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
 }
 fn matching_nets<'a>(
     rules_nets: &'a [(Net, Net)],
@@ -95,12 +98,15 @@ fn matching_nets<'a>(
         .iter()
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
-            let pair_a: HashSet<&str> =
-                HashSet::from_iter(vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)]);
-            let pair_b = HashSet::from_iter(vec![
-                instance.get_name_for(&redex_lhs),
-                instance.get_name_for(&redex_rhs),
-            ]);
+            let pair_a: HashSet<&str> = HashSet::from_iter(
+                vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)],
+            );
+            let pair_b = HashSet::from_iter(
+                vec![
+                    instance.get_name_for(& redex_lhs), instance.get_name_for(&
+                    redex_rhs),
+                ],
+            );
             if pair_a == pair_b || pair_a.is_subset(&pair_b) {
                 return Some((lhs, rhs));
             }
@@ -110,14 +116,17 @@ fn matching_nets<'a>(
 }
 fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     tracing::debug!(
-        "reducing net {} with next active pairs {:?}",
-        instance,
-        instance.active_pairs
+        "reducing net {} with next active pairs {:?}", instance, instance.active_pairs
     );
     let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
     tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
-    let (matching_rule, matching_replacement_ref) =
-        matching_nets(rules_nets, &instance, redex_lhs, redex_rhs).get(0)?;
+    let (matching_rule, matching_replacement_ref) = matching_nets(
+            rules_nets,
+            &instance,
+            redex_lhs,
+            redex_rhs,
+        )
+        .get(0)?;
     let mut matching_replacement = matching_replacement_ref.clone();
     tracing::debug!("matching rule candidate: {}", matching_rule);
     tracing::debug!("matching replacement candidate: {}", matching_replacement);
@@ -138,13 +147,8 @@ impl fmt::Display for Net {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let pairs: Vec<RuleActivePair> = self.clone().into();
         write!(
-            f,
-            "{}",
-            pairs
-                .iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
+            f, "{}", pairs.iter().map(| p | p.to_string()).collect::< Vec < _ >> ()
+            .join(", ")
         )
     }
 }
@@ -214,30 +218,31 @@ impl Net {
             })
             .unwrap_or_default();
         if let Some(loc) = rhs_loc {
-            to_insert.extend(
-                rhs.get_inactive_vars()
-                    .unwrap_or_default()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, member)| (loc, 1 + i, member))
-                    .collect::<VecDeque<_>>(),
-            );
+            to_insert
+                .extend(
+                    rhs
+                        .get_inactive_vars()
+                        .unwrap_or_default()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, member)| (loc, 1 + i, member))
+                        .collect::<VecDeque<_>>(),
+                );
         }
-        while let Some((conn_agent_idx, conn_port, expr_insert)) = to_insert.pop_front() {
+        while let Some((conn_agent_idx, conn_port, expr_insert)) = to_insert.pop_front()
+        {
             match expr_insert {
-                ActivePairMember::Agent {
-                    name,
-                    inactive_vars,
-                } => {
+                ActivePairMember::Agent { name, inactive_vars } => {
                     let id = self.push_ast_agent(name.clone(), inactive_vars.len() + 1);
                     self.connect(id, 0, conn_agent_idx, conn_port);
-                    to_insert.extend(
-                        inactive_vars
-                            .iter()
-                            .enumerate()
-                            .map(|(i, member)| (id, 1 + i, member))
-                            .collect::<VecDeque<_>>(),
-                    );
+                    to_insert
+                        .extend(
+                            inactive_vars
+                                .iter()
+                                .enumerate()
+                                .map(|(i, member)| (id, 1 + i, member))
+                                .collect::<VecDeque<_>>(),
+                        );
                 }
                 ActivePairMember::Var(v) => {
                     self.push_var(conn_agent_idx, conn_port, v.clone());
@@ -262,18 +267,20 @@ impl Net {
                     inactive_vars: inactive_vars_rhs,
                 },
             ) => {
-                let idx_agent_a = self.push_ast_agent(name_lhs, inactive_vars_lhs.len() + 1);
-                let idx_agent_b = self.push_ast_agent(name_rhs, inactive_vars_rhs.len() + 1);
+                let idx_agent_a = self
+                    .push_ast_agent(name_lhs, inactive_vars_lhs.len() + 1);
+                let idx_agent_b = self
+                    .push_ast_agent(name_rhs, inactive_vars_rhs.len() + 1);
                 self.connect(idx_agent_a, 0, idx_agent_b, 0);
                 self.active_pairs
-                    .push_front((PairElem::Agent(idx_agent_a), PairElem::Agent(idx_agent_b)));
+                    .push_front((
+                        PairElem::Agent(idx_agent_a),
+                        PairElem::Agent(idx_agent_b),
+                    ));
                 (Some(idx_agent_a), Some(idx_agent_b))
             }
             (
-                ActivePairMember::Agent {
-                    name,
-                    inactive_vars,
-                },
+                ActivePairMember::Agent { name, inactive_vars },
                 ActivePairMember::Var(v),
             ) => {
                 let idx_agent_a = self.push_ast_agent(name, inactive_vars.len() + 1);
@@ -284,10 +291,7 @@ impl Net {
             }
             (
                 ActivePairMember::Var(v),
-                ActivePairMember::Agent {
-                    name,
-                    inactive_vars,
-                },
+                ActivePairMember::Agent { name, inactive_vars },
             ) => {
                 let idx_agent_a = self.push_ast_agent(name, inactive_vars.len() + 1);
                 let name_idx = self.push_var(idx_agent_a, 0, v);
@@ -316,22 +320,37 @@ impl Net {
     }
     #[tracing::instrument]
     fn push_agent(&mut self, id: AgentId, arity: usize) -> usize {
-        self.agents.push(Box::new(Agent {
-            id,
-            ports: vec![None; arity],
-        }));
+        self.agents
+            .push(
+                Box::new(Agent {
+                    id,
+                    ports: vec![None; arity],
+                }),
+            );
         self.agents.len() - 1
     }
     #[tracing::instrument]
     pub fn connect(&mut self, idx_a: usize, port_a: usize, idx_b: usize, port_b: usize) {
-        self.agents[idx_a].ports[port_a] = Some(PortElem::Agent(Box::new(Port {
-            agent: idx_b,
-            port_num: port_b,
-        })));
-        self.agents[idx_b].ports[port_b] = Some(PortElem::Agent(Box::new(Port {
-            agent: idx_a,
-            port_num: port_a,
-        })));
+        self
+            .agents[idx_a]
+            .ports[port_a] = Some(
+            PortElem::Agent(
+                Box::new(Port {
+                    agent: idx_b,
+                    port_num: port_b,
+                }),
+            ),
+        );
+        self
+            .agents[idx_b]
+            .ports[port_b] = Some(
+            PortElem::Agent(
+                Box::new(Port {
+                    agent: idx_a,
+                    port_num: port_a,
+                }),
+            ),
+        );
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -448,10 +467,8 @@ mod test {
     #[test]
     fn test_simple_identity_reduction() {
         let e: Expr = ast::parser()
-            .parse(
-                "x >< y => x ~ y
-                 x >< y",
-            )
+            .parse("x >< y => x ~ y
+                 x >< y")
             .unwrap();
         let res = reduce_expr_to_end_or_infinity(e)
             .into_iter()
