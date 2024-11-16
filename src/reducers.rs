@@ -110,18 +110,13 @@ pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Ve
     reduce_net(nets.as_slice(), instance_net).map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
 }
 
-fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
-    tracing::debug!(
-        "reducing net {} with next active pairs {:?}",
-        instance,
-        instance.active_pairs
-    );
-
-    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
-
-    tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
-
-    let (matching_rule, matching_replacement_ref) = rules_nets
+fn matching_nets<'a>(
+    rules_nets: &'a [(Net, Net)],
+    instance: &'a Net,
+    redex_lhs: PairElem,
+    redex_rhs: PairElem,
+) -> Vec<(&'a Net, &'a Net)> {
+    rules_nets
         .iter()
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
@@ -139,7 +134,22 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
             None
         })
-        .next()?;
+        .collect::<Vec<_>>()
+}
+
+fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
+    tracing::debug!(
+        "reducing net {} with next active pairs {:?}",
+        instance,
+        instance.active_pairs
+    );
+
+    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_front()?;
+
+    tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
+
+    let (matching_rule, matching_replacement_ref) =
+        matching_nets(rules_nets, &instance, redex_lhs, redex_rhs).get(0)?;
     let mut matching_replacement = matching_replacement_ref.clone();
 
     tracing::debug!("matching rule candidate: {}", matching_rule);
@@ -490,6 +500,36 @@ pub struct Port {
 mod test {
     use super::{super::ast, *};
     use chumsky::Parser;
+
+    #[test]
+    fn test_match_rule() {
+        [
+            ("identity", "x >< y => x ~ y
+             x >< y", "x >< y => x ~ y"),
+            ("addition", "Add[x, y] >< Z => x ~ y
+             S[x] >< Add[y, z] => Add[y, S[z]] ~ x
+             Add[Z, y] >< Z", "Add[x, y] >< Z => x ~ y"),
+            ("combinators", "Constr[a, b] >< Dup[c, d] => Dup[a, b] ~ c, Dup[d, e] ~ f, Constr[g, d] ~ h, Constr[i, j] ~ a
+             Era >< Constr[a, b] => Era ~ a, Era ~ b
+             Era >< Dup[a, b] => Era ~ a, Era ~ b
+             Constr[a, b] >< Constr[c, d] => a ~ b, c ~ d
+             Dup[a, b] >< Dup[c, d] => a ~ c, b ~ d
+             Era >< Era => ()
+             Era >< Era", "Era >< Era => ()"),
+        ].iter().map(|(name, src, expected_rule)| (name, ast::parser().parse(*src).unwrap(), ast::parser().parse(*expected_rule).unwrap())).for_each(|(name, e, expected_rule)| {
+            let (rules, instance) = e.to_application().unwrap();
+
+            let mut instance_n = Net::default();
+            instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
+
+            let mut rule_n_lhs = Net::default();
+            let mut rule_n_rhs = Net::default();
+
+            let redex = instance_n.active_pairs.pop_front();
+
+            let matches = matching_nets(rules, instance, redex.0, redex.1);
+        });
+    }
 
     #[test]
     fn test_expr_to_net() {

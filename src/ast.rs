@@ -22,6 +22,12 @@ impl Expr {
             _ => None,
         }
     }
+
+    pub fn to_book(self) -> Vec<Rule> {
+        match self {
+            Self::Application { rules, .. } | Self::Book { rules } => rules,
+        }
+    }
 }
 
 impl fmt::Display for Expr {
