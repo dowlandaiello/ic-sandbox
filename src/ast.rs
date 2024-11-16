@@ -4,70 +4,6 @@ use std::fmt;
 
 pub type VarName = String;
 
-#[derive(Clone)]
-pub struct FreeVarId(pub String);
-
-impl Default for FreeVarId {
-    fn default() -> Self {
-        Self("A".to_owned())
-    }
-}
-
-impl AsRef<str> for FreeVarId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl FreeVarId {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn prefix(&self, prefix: impl AsRef<str>) -> Self {
-        let mut cpy = self.clone();
-        cpy.0.push_str(prefix.as_ref());
-
-        cpy
-    }
-
-    pub fn prefixed(prefix: impl Into<String>) -> Self {
-        let mut cts = prefix.into();
-        cts.push('A');
-
-        Self(cts)
-    }
-
-    pub fn next(&self) -> Self {
-        Self({
-            let mut cts = self.0.clone();
-            cts.push('A');
-
-            cts
-        })
-    }
-
-    pub fn succ(&self) -> Self {
-        let mut cpy = self.clone();
-
-        let head = if let Some(h) = self.0.chars().last() {
-            h
-        } else {
-            return Self::new();
-        };
-
-        if head < 'Z' {
-            cpy.0.pop();
-
-            cpy.0.push(char::from_u32(head as u32 + 1).unwrap_or('A'));
-        } else {
-            cpy.0.push('A');
-        }
-
-        cpy
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub enum Expr {
     Application {
@@ -257,16 +193,21 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         .then(active_pair_member)
         .map(|(lhs, rhs)| InstanceActivePair { lhs, rhs });
 
+    let unit = just("()");
+
     let rule = rule_active_pair
         .clone()
         .then_ignore(just("=>").padded())
-        .then(instance_active_pair.separated_by(just(',').padded()))
+        .then(choice((
+            unit.padded().map(|_| Vec::new()),
+            instance_active_pair.separated_by(just(',').padded()),
+        )))
         .map(|(lhs, rhs)| Rule { lhs, rhs });
 
-    let book = rule.separated_by(just("\n").repeated());
+    let book = rule.separated_by(just("\n").repeated().padded());
     let application = book
         .clone()
-        .then_ignore(just("\n").repeated())
+        .then_ignore(just("\n").repeated().padded())
         .then(rule_active_pair.separated_by(just(',').padded()))
         .map(|(rules, instance)| Expr::Application { rules, instance });
 
