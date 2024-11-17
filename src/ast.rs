@@ -16,6 +16,13 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn to_instance(&self) -> Option<Vec<RuleActivePair>> {
+        match self {
+            Self::Application { instance, .. } => Some(instance.clone()),
+            _ => None,
+        }
+    }
+
     pub fn to_application(self) -> Option<(Vec<Rule>, Vec<RuleActivePair>)> {
         match self {
             Self::Application { rules, instance } => Some((rules, instance)),
