@@ -41,17 +41,23 @@ fn main() {
             });
         }
         Some(("eval", arg_matches)) => {
-            transform_input_to_output(arg_matches, |e: Expr| match e.clone().to_application() {
-                Some((rules, instance)) => {
-                    reducers::reduce_to_end_or_infinity(rules.clone(), instance)
+            transform_input_to_output(arg_matches, |e: Expr| {
+                match e
+                    .clone()
+                    .to_application()
+                    .and_then(|(rules, instance)| reducers::build_application_net(rules, instance))
+                {
+                    Some((rules, instance)) => reducers::reduce_to_end_or_infinity(rules, instance)
                         .into_iter()
                         .map(|reduction| reduction.to_string())
                         .collect::<Vec<_>>()
                         .join(", ")
                         .as_bytes()
-                        .to_vec()
+                        .to_vec(),
+                    _ => {
+                        panic!("cannot be reduced");
+                    }
                 }
-                _ => e.to_string().as_bytes().to_vec(),
             });
         }
         Some(("dev", _)) => {
@@ -76,29 +82,105 @@ fn main() {
                 // Try parsing input as an expr
                 let in_expr = assert_parse_ok(input.trim());
 
-                match in_expr.clone().to_application() {
-                    Some((rules, instance)) => loop {
-                        print!("reduce|exit > ");
-                        io::stdout().flush().unwrap();
+                loop {
+                    print!("print_net|debug_net|print_ast|debug_ast|reduce|exit > ");
 
-                        let mut cmd = String::new();
+                    io::stdout().flush().unwrap();
 
-                        if io::stdin().read_line(&mut cmd).unwrap() == 0
-                            || !cmd.starts_with("reduce")
-                        {
+                    let mut cmd = String::new();
+
+                    if io::stdin().read_line(&mut cmd).unwrap() == 0 {
+                        return;
+                    }
+
+                    match cmd.trim() {
+                        "print_net" => match in_expr.clone() {
+                            Expr::Application { rules, instance } => {
+                                let (rule_nets, instance_net) = if let Some(r) =
+                                    reducers::build_application_net(rules, instance)
+                                {
+                                    r
+                                } else {
+                                    eprintln!("cannot be debugged");
+
+                                    return;
+                                };
+
+                                println!(
+                                    "{}\n{}",
+                                    rule_nets
+                                        .into_iter()
+                                        .map(|s| format!("{} => {}", s.0, s.1))
+                                        .collect::<Vec<_>>()
+                                        .join("\n"),
+                                    instance_net
+                                );
+                            }
+                            Expr::Book { rules } => {
+                                let book_nets = reducers::build_book_net(rules);
+
+                                println!(
+                                    "{}",
+                                    book_nets
+                                        .into_iter()
+                                        .map(|s| format!("{} => {}", s.0, s.1))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                );
+                            }
+                        },
+                        "debug_net" => match in_expr.clone() {
+                            Expr::Application { rules, instance } => {
+                                let (rule_nets, instance_net) = if let Some(r) =
+                                    reducers::build_application_net(rules, instance)
+                                {
+                                    r
+                                } else {
+                                    eprintln!("cannot be debugged");
+
+                                    return;
+                                };
+
+                                println!("{:?}\n{:?}", rule_nets, instance_net);
+                            }
+                            Expr::Book { rules } => {
+                                let book_nets = reducers::build_book_net(rules);
+
+                                println!("{:?}", book_nets);
+                            }
+                        },
+                        "print_ast" => {
+                            println!("{}", in_expr);
+                        }
+                        "debug_ast" => {
+                            println!("{:?}", in_expr);
+                        }
+                        "reduce" => match in_expr.clone().to_application() {
+                            Some((ast_rules, ast_instance)) => {
+                                match reducers::build_application_net(
+                                    ast_rules.clone(),
+                                    ast_instance,
+                                ) {
+                                    Some((rules, instance)) => {
+                                        println!(
+                                            "{}",
+                                            Expr::Application {
+                                                rules: ast_rules.clone(),
+                                                instance: reducers::reduce_once(rules, instance)
+                                                    .expect("no reduction occurred")
+                                            }
+                                        );
+                                    }
+                                    None => eprintln!("cannot be reduced"),
+                                }
+                            }
+                            _ => eprintln!("cannot be reduced"),
+                        },
+                        "exit" => {
                             return;
                         }
-
-                        println!(
-                            "{}",
-                            Expr::Application {
-                                rules: rules.clone(),
-                                instance: reducers::reduce_once(rules.clone(), instance.clone())
-                                    .expect("no reduction occurred")
-                            }
-                        );
-                    },
-                    _ => println!("{}", in_expr),
+                        _ => {}
+                    }
                 }
             }
         }

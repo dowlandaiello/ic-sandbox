@@ -6,20 +6,8 @@ use std::{
 
 pub type AgentId = usize;
 
-pub fn reduce_expr_to_end_or_infinity(e: Expr) -> Vec<RuleActivePair> {
-    match e.to_application() {
-        Some((rules, instance)) => reduce_to_end_or_infinity(rules.clone(), instance),
-        _ => Vec::new(),
-    }
-}
-
-/// Reduces an expression to completion in the context of some rule.
-pub fn reduce_to_end_or_infinity(
-    rules: Vec<Rule>,
-    instance: Vec<RuleActivePair>,
-) -> Vec<RuleActivePair> {
-    // Gather all nets representing rules
-    let nets = rules
+pub fn build_book_net(rules: Vec<Rule>) -> Vec<(Net, Net)> {
+    rules
         .into_iter()
         .map(|rule| {
             let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
@@ -32,19 +20,46 @@ pub fn reduce_to_end_or_infinity(
 
             (net_lhs, net_rhs)
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
 
-    // Attempt reduction with all rules
-    let mut to_reduce = instance
-        .iter()
-        .map(|instance| {
-            let mut n = Net::default();
-            n.push_net(instance.lhs.clone(), instance.rhs.clone());
+pub fn build_instance_net(instance: Vec<RuleActivePair>) -> Option<Net> {
+    let mut n = Net::default();
 
-            n
-        })
-        .collect::<Vec<_>>();
+    n.push_net(
+        instance.iter().next()?.lhs.clone(),
+        instance.iter().next()?.rhs.clone(),
+    );
+
+    Some(n)
+}
+
+pub fn build_application_net(
+    rules: Vec<Rule>,
+    instance: Vec<RuleActivePair>,
+) -> Option<(Vec<(Net, Net)>, Net)> {
+    // Gather all nets representing rules
+    let nets = build_book_net(rules);
+
+    let n = build_instance_net(instance)?;
+
+    Some((nets, n))
+}
+
+pub fn reduce_expr_to_end_or_infinity(e: Expr) -> Vec<RuleActivePair> {
+    match e
+        .to_application()
+        .and_then(|(rules, instance)| build_application_net(rules, instance))
+    {
+        Some((rules, instance)) => reduce_to_end_or_infinity(rules, instance),
+        _ => Vec::new(),
+    }
+}
+
+/// Reduces an expression to completion in the context of some rule.
+pub fn reduce_to_end_or_infinity(nets: Vec<(Net, Net)>, instance_net: Net) -> Vec<RuleActivePair> {
     let mut results = Vec::new();
+    let mut to_reduce = vec![instance_net];
 
     while let Some(curr_redex) = to_reduce.pop() {
         let new = if let Some(result) = reduce_net(nets.as_slice(), curr_redex.clone()) {
@@ -79,34 +94,7 @@ pub fn reduce_to_end_or_infinity(
         .collect::<Vec<_>>()
 }
 
-pub fn reduce_once(rules: Vec<Rule>, instance: Vec<RuleActivePair>) -> Option<Vec<RuleActivePair>> {
-    // Gather all nets representing rules
-    let nets = rules
-        .into_iter()
-        .map(|rule| {
-            let (mut net_lhs, mut net_rhs) = (Net::default(), Net::default());
-
-            net_lhs.push_net(rule.lhs.lhs, rule.lhs.rhs);
-
-            for member in rule.rhs {
-                net_rhs.push_net(member.lhs, member.rhs);
-            }
-
-            (net_lhs, net_rhs)
-        })
-        .collect::<Vec<_>>();
-
-    // Attempt reduction with all rules
-    let instance_net = {
-        let mut n = Net::default();
-        n.push_net(
-            instance.iter().next()?.lhs.clone(),
-            instance.iter().next()?.rhs.clone(),
-        );
-
-        n
-    };
-
+pub fn reduce_once(nets: Vec<(Net, Net)>, instance_net: Net) -> Option<Vec<RuleActivePair>> {
     reduce_net(nets.as_slice(), instance_net).map(|n| <Net as Into<Vec<RuleActivePair>>>::into(n))
 }
 
@@ -149,51 +137,56 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
 
     let (matching_rule, matching_replacement_ref) =
-        matching_nets(rules_nets, &instance, redex_lhs, redex_rhs).get(0)?;
+        matching_nets(rules_nets, &instance, redex_lhs.clone(), redex_rhs.clone()).remove(0);
     let mut matching_replacement = matching_replacement_ref.clone();
 
     tracing::debug!("matching rule candidate: {}", matching_rule);
     tracing::debug!("matching replacement candidate: {}", matching_replacement);
 
-    /*
-        // Replace vars in rhs with nets in instance matching vars
-        let to_replace = matching_replacement
+    // Replace vars and unwritten ports in rhs with nets in instance matching vars
+    let to_replace = matching_replacement
         .agents
         .iter()
         .enumerate()
         .map(|(i, agent)| {
-        agent
-        .ports
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| p.is_none())
-        .map(|(j, _)| (i, j))
-        .collect::<Vec<_>>()
-    })
+            agent
+                .ports
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.as_ref().map(|p| p.is_var()).unwrap_or(true))
+                .map(|(j, _)| (i, j))
+                .collect::<Vec<_>>()
+        })
         .flatten()
         .collect::<Vec<_>>();
 
-        let replacements = redex_agent_a
-        .map(|agent| agent.ports.clone())
-        .unwrap_or_default()
-        .iter()
-        .skip(1)
-        .chain(
-        redex_agent_b
-        .map(|agent| agent.ports.clone())
-        .unwrap_or_default()
-        .iter()
-        .skip(1),
-    )
-        .map(|port| port.clone().map(|p| instance.agents[p.agent].clone()))
+    let replacements = [redex_lhs.clone(), redex_rhs.clone()]
+        .into_iter()
+        .map(|redex| match redex {
+            PairElem::Agent(a) => instance.agents[a]
+                .ports
+                .iter()
+                .enumerate()
+                .skip(1)
+                .filter(|(_, port)| port.as_ref().map(|p| p.is_var()).unwrap_or(true))
+                .map(|(agent, port)| (agent, a, port))
+                .collect::<Vec<_>>(),
+            PairElem::Var(v) => {
+                // Find the port and id of the agent to which this is connected
+                unimplemented!()
+            }
+        })
+        .flatten()
         .collect::<Vec<_>>();
 
-        tracing::debug!(
+    tracing::debug!(
         "replacing (agents, ports) {:?} with {:?} in net {:?}",
         to_replace,
         replacements,
         matching_replacement
     );
+
+    /*
 
         // Work clockwise to replace ports
         for ((agent_id_replace, port_num_replace), replacement) in
@@ -224,7 +217,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
          */
 
-    Some(matching_replacement)
+    None
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -490,6 +483,16 @@ pub enum PortElem {
     Var(usize),
 }
 
+impl PortElem {
+    pub fn is_var(&self) -> bool {
+        matches!(self, PortElem::Var(_))
+    }
+
+    pub fn is_agent(&self) -> bool {
+        matches!(self, PortElem::Agent(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Port {
     pub port_num: usize,
@@ -516,18 +519,29 @@ mod test {
              Dup[a, b] >< Dup[c, d] => a ~ c, b ~ d
              Era >< Era => ()
              Era >< Era", "Era >< Era => ()"),
-        ].iter().map(|(name, src, expected_rule)| (name, ast::parser().parse(*src).unwrap(), ast::parser().parse(*expected_rule).unwrap())).for_each(|(name, e, expected_rule)| {
+        ]
+        .iter()
+        .map(|(name, src, expected_rule)| (name, ast::parser().parse(*src).unwrap(), ast::parser().parse(*expected_rule).unwrap()))
+        .for_each(|(name, e, expected_rule)| {
             let (rules, instance) = e.to_application().unwrap();
+	    let (rule_nets, mut instance_n) = build_application_net(rules, instance).unwrap();
 
-            let mut instance_n = Net::default();
-            instance_n.push_net(instance[0].lhs.clone(), instance[0].rhs.clone());
+            let rule = expected_rule.to_book();
 
             let mut rule_n_lhs = Net::default();
             let mut rule_n_rhs = Net::default();
 
-            let redex = instance_n.active_pairs.pop_front();
+            rule_n_lhs.push_net(rule[0].lhs.lhs.clone(), rule[0].lhs.rhs.clone());
 
-            let matches = matching_nets(rules, instance, redex.0, redex.1);
+            for member in rule[0].rhs.clone() {
+                rule_n_rhs.push_net(member.lhs, member.rhs);
+            }
+
+            let redex = instance_n.active_pairs.pop_front().unwrap();
+
+            let matches = matching_nets(rule_nets.as_slice(), &instance_n, redex.0, redex.1);
+
+	    assert_eq!((matches[0].0.to_string(), matches[0].1.to_string()), (rule_n_lhs.to_string(), rule_n_rhs.to_string()), "{}: {:?} != {:?}", name, (matches[0].0.to_string(), matches[0].1.to_string()), (rule_n_lhs.to_string(), rule_n_rhs.to_string()));
         });
     }
 
