@@ -2,6 +2,18 @@
 
 Low-level intermediary representation "language" for general interaction calculus-based languages. Supports general interaction net rule programs, including but not limited to interaction combinators. Includes a single-threaded reducer, `icc` for prototyping and proving purposes.
 
+## Example: Addition Net
+
+Represented here is a set of interaction net rules and an active pair which represent addition.
+
+```
+Add[x, y] >< Z => x ~ y
+S[x] >< Add[y, z] => Add[y, S[z]] ~ x
+Add[Z, y] >< Z
+```
+
+This representation is borrowed from a paper "[Compilation of Interaction Nets](https://core.ac.uk/download/pdf/82756233.pdf)," by Hassan et al.
+
 ## Components
 
 | Name | Crate / Binary Name | Description | Source Root |
