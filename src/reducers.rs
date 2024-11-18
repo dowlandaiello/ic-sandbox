@@ -77,7 +77,7 @@ pub fn reduce_to_end_or_infinity(nets: Vec<(Net, Net)>, instance_net: Net) -> Ve
         if new
             .active_pairs
             .iter()
-            .filter(|(a, b)| matches!((a, b), (PairElem::Agent(_), PairElem::Agent(_))))
+            .filter(|(a, b)| matches!((a, b), (&PairElem::Agent(_), &PairElem::Agent(_))))
             .count()
             > 0
         {
@@ -239,36 +239,15 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 .ports
                 .iter()
                 .enumerate()
-                .skip(1)
                 .filter_map(|(_, port_elem)| port_elem.clone())
                 .collect::<Vec<_>>(),
-            PairElem::Var(u) => vec![PortElem::Var(u)],
+            p @ PairElem::Var(_) => vec![p],
         })
         .flatten()
-        .collect::<Vec<_>>();
+        .collect::<BTreeSet<_>>();
 
-    // Base case: inserting x ~ y
-    replacements.extend(
-        [redex_lhs, redex_rhs]
-            .iter()
-            .enumerate()
-            .filter_map(|(i, redex)| {
-                if let [ReplacementTarget::WholeVar { .. }] = to_replace[i..(i + 1)] {
-                    tracing::debug!("replacing identity expression redex member");
-
-                    Some(match redex {
-                        PairElem::Agent(_) => PortElem::Agent(Box::new(Port {
-                            port_num: 0,
-                            agent: i,
-                        })),
-                        PairElem::Var(u) => PortElem::Var(*u),
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>(),
-    );
+    replacements.insert(redex_lhs);
+    replacements.insert(redex_rhs);
 
     tracing::debug!(
         "replacing (agents, ports) {:?} with {:?} in net {:?}",
@@ -289,17 +268,17 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             ReplacementTarget::AgentPort { agent_idx, port } => {
                 // Insert the actual agent
                 let id = match replacement_elem {
-                    PortElem::Agent(p) => {
+                    PairElem::Agent(p) => {
                         let idx = matching_replacement.push_ast_agent(
-                            instance.names[p.agent].clone(),
-                            instance.agents[p.agent].ports.len(),
+                            instance.names[p].clone(),
+                            instance.agents[p].ports.len(),
                         );
 
                         replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
 
                         idx
                     }
-                    PortElem::Var(v) => {
+                    PairElem::Var(v) => {
                         let idx = matching_replacement.push_var(
                             agent_idx,
                             port,
@@ -318,11 +297,11 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             ReplacementTarget::WholeVar { var_idx } => {
                 // We will always have to push a new agent
                 match replacement_elem {
-                    PortElem::Agent(p) => {
+                    PairElem::Agent(p) => {
                         // Connect any connected nodes, if they exist (look for connections to this var idx)
                         let idx = matching_replacement.push_ast_agent(
-                            instance.names[p.agent].clone(),
-                            instance.agents[p.agent].ports.len(),
+                            instance.names[p].clone(),
+                            instance.agents[p].ports.len(),
                         );
 
                         replaced.insert(PairElem::Var(var_idx), PairElem::Agent(idx));
@@ -339,11 +318,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                     .filter(|(_, p)| {
                                         p.as_ref().map(|p| p.is_var()).unwrap_or_default()
                                             && p.as_ref()
-                                                .and_then(|p| {
-                                                    p.as_var().map(|replace_var_idx| {
-                                                        replace_var_idx == var_idx
-                                                    })
-                                                })
+                                                .map(|p| p.get_idx() == var_idx)
                                                 .unwrap_or_default()
                                     })
                                     .map(|(p_idx, _)| (i, p_idx))
@@ -356,7 +331,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                 matching_replacement.connect(idx, 0, agent_idx, var_port_idx)
                             });
                     }
-                    PortElem::Var(v) => {
+                    PairElem::Var(v) => {
                         // Map indexes of connected nodes onto new indexes
                         // to enable active pair replacement
 
@@ -400,6 +375,14 @@ pub enum PairElem {
 }
 
 impl PairElem {
+    pub fn ordered(a: Self, b: Self) -> (Self, Self) {
+        if a <= b {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
+
     pub fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
     }
@@ -469,14 +452,14 @@ impl Net {
                 .skip(1)
                 .filter_map(|p| p.clone())
                 .map(|maybe_p| match maybe_p {
-                    PortElem::Var(v) => ActivePairMember::Var(self.names[v].clone()),
-                    PortElem::Agent(port) => self.agent_to_pair_member(port.agent),
+                    PairElem::Var(v) => ActivePairMember::Var(self.names[v].clone()),
+                    PairElem::Agent(port) => self.agent_to_pair_member(port),
                 })
                 .collect::<Vec<_>>(),
         }
     }
 
-    pub fn get_port(&self, node_a_idx: usize, port_idx: usize) -> &Option<PortElem> {
+    pub fn get_port(&self, node_a_idx: usize, port_idx: usize) -> &Option<PairElem> {
         &self.agents[node_a_idx].ports[port_idx]
     }
 
@@ -568,8 +551,10 @@ impl Net {
 
                 self.connect(idx_agent_a, 0, idx_agent_b, 0);
 
-                self.active_pairs
-                    .insert((PairElem::Agent(idx_agent_a), PairElem::Agent(idx_agent_b)));
+                self.active_pairs.insert(PairElem::ordered(
+                    PairElem::Agent(idx_agent_a),
+                    PairElem::Agent(idx_agent_b),
+                ));
 
                 (Some(idx_agent_a), Some(idx_agent_b))
             }
@@ -584,8 +569,10 @@ impl Net {
 
                 let name_idx = self.push_var(idx_agent_a, 0, v);
 
-                self.active_pairs
-                    .insert((PairElem::Agent(idx_agent_a), PairElem::Var(name_idx)));
+                self.active_pairs.insert(PairElem::ordered(
+                    PairElem::Agent(idx_agent_a),
+                    PairElem::Var(name_idx),
+                ));
 
                 (Some(idx_agent_a), None)
             }
@@ -600,8 +587,10 @@ impl Net {
 
                 let name_idx = self.push_var(idx_agent_a, 0, v);
 
-                self.active_pairs
-                    .insert((PairElem::Agent(idx_agent_a), PairElem::Var(name_idx)));
+                self.active_pairs.insert(PairElem::ordered(
+                    PairElem::Agent(idx_agent_a),
+                    PairElem::Var(name_idx),
+                ));
 
                 (None, Some(idx_agent_a))
             }
@@ -609,8 +598,10 @@ impl Net {
                 let name_idx_1 = self.push_name(v1);
                 let name_idx_2 = self.push_name(v2);
 
-                self.active_pairs
-                    .insert((PairElem::Var(name_idx_1), PairElem::Var(name_idx_2)));
+                self.active_pairs.insert(PairElem::ordered(
+                    PairElem::Var(name_idx_1),
+                    PairElem::Var(name_idx_2),
+                ));
 
                 (Some(name_idx_1), Some(name_idx_2))
             }
@@ -626,7 +617,7 @@ impl Net {
 
     pub fn push_var(&mut self, node_idx: usize, port_idx: usize, name: String) -> usize {
         let name_idx = self.push_name(name);
-        self.agents[node_idx].ports[port_idx] = Some(PortElem::Var(name_idx));
+        self.agents[node_idx].ports[port_idx] = Some(PairElem::Var(name_idx));
 
         name_idx
     }
@@ -645,50 +636,15 @@ impl Net {
 
     #[tracing::instrument]
     pub fn connect(&mut self, idx_a: usize, port_a: usize, idx_b: usize, port_b: usize) {
-        self.agents[idx_a].ports[port_a] = Some(PortElem::Agent(Box::new(Port {
-            agent: idx_b,
-            port_num: port_b,
-        })));
-        self.agents[idx_b].ports[port_b] = Some(PortElem::Agent(Box::new(Port {
-            agent: idx_a,
-            port_num: port_a,
-        })));
+        self.agents[idx_a].ports[port_a] = Some(PairElem::Agent(idx_b));
+        self.agents[idx_b].ports[port_b] = Some(PairElem::Agent(idx_a));
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Agent {
     pub id: AgentId,
-    pub ports: Vec<Option<PortElem>>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum PortElem {
-    Agent(Box<Port>),
-    Var(usize),
-}
-
-impl PortElem {
-    pub fn as_var(&self) -> Option<usize> {
-        match self {
-            Self::Var(u) => Some(*u),
-            _ => None,
-        }
-    }
-
-    pub fn is_var(&self) -> bool {
-        matches!(self, Self::Var(_))
-    }
-
-    pub fn is_agent(&self) -> bool {
-        matches!(self, Self::Agent(_))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Port {
-    pub port_num: usize,
-    pub agent: AgentId,
+    pub ports: Vec<Option<PairElem>>,
 }
 
 #[cfg(test)]
@@ -731,8 +687,8 @@ mod test {
             let eval = reduce_net(rule_nets.as_slice(), instance_n).unwrap();
 
             assert_eq!(
-                eval.to_string(),
                 expected_instance_net.to_string(),
+                eval.to_string(),
                 "{}: {} != {}",
                 name,
                 expected_instance_net,
