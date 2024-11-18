@@ -21,6 +21,10 @@ This representation is borrowed from a paper "[Compilation of Interaction Nets](
 | INetLang Parser / AST | inetlib | AST representing programs and expressions written in interaction calculus.<br>Comes with a parser written with Chumsky. | `src/lib.rs` |
 | INetLang Interpreter | icc | Interpreter and REPL for reducing interaction calculus programs given a rule set.<br>Includes a dev repl with expression and net debugging capabilities. | `src/main.rs` |
 
+### Why Single-Threaded Reducer
+
+The inclusion of a single-threaded reducer may seem questionable considering the highly parallel nature of interaction nets. However, this reducer is meant for prototyping and debugging purposes. Furthermore, it may find utility in single-threaded environments where access to system resources and interfaces is minimal (e.g., WebAssembly).
+
 ## Current Limitations
 
 This project is still very bleeding edge, and needs to be refactored significantly. Test coverage needs to be improved, and more examples need to be tried.
