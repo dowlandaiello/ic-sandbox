@@ -157,39 +157,40 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     enum ReplacementTarget {
         AgentPort { agent_idx: usize, port: usize },
         WholeVar { var_idx: usize },
+        WholeAgent { agent_idx: usize },
     }
 
     let to_replace = matching_replacement
-        .agents
+        .active_pairs
         .iter()
-        .enumerate()
-        .map(|(i, agent)| {
-            agent
-                .ports
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.as_ref().map(|p| p.is_var()).unwrap_or(true))
-                .map(|(j, _)| ReplacementTarget::AgentPort {
-                    agent_idx: i,
-                    port: j,
+        .map(|(a, b)| {
+            [a.clone(), b.clone()]
+                .into_iter()
+                .map(|agent| match agent {
+                    PairElem::Agent(a) => ReplacementTarget::WholeAgent { agent_idx: a },
+                    PairElem::Var(v) => ReplacementTarget::WholeVar { var_idx: v },
                 })
-                .collect::<Vec<_>>()
+                .chain(
+                    [a.clone(), b.clone()]
+                        .into_iter()
+                        .map(|redex| match redex {
+                            PairElem::Agent(a) => matching_replacement.agents[a]
+                                .ports
+                                .iter()
+                                .skip(1)
+                                .enumerate()
+                                .filter(|(_, port_elem)| port_elem.is_some())
+                                .map(|(i, _)| ReplacementTarget::AgentPort {
+                                    agent_idx: a,
+                                    port: i,
+                                })
+                                .collect::<Vec<_>>(),
+                            PairElem::Var(_) => vec![],
+                        })
+                        .flatten(),
+                )
         })
         .flatten()
-        // Find orphaned vars to replace
-        .chain(
-            matching_replacement
-                .active_pairs
-                .iter()
-                .map(|(a, b)| {
-                    [a, b].into_iter().filter(|elem| elem.is_var()).map(|elem| {
-                        ReplacementTarget::WholeVar {
-                            var_idx: elem.get_idx(),
-                        }
-                    })
-                })
-                .flatten(),
-        )
         .collect::<Vec<_>>();
 
     // Map of each replacement target to which node it is connected to
@@ -211,7 +212,8 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 })
                 .map(|matching_pair_elem| (PairElem::Var(*var_idx), matching_pair_elem.clone()))
                 .next(),
-            ReplacementTarget::AgentPort { agent_idx, .. } => matching_replacement
+            ReplacementTarget::AgentPort { agent_idx, .. }
+            | ReplacementTarget::WholeAgent { agent_idx } => matching_replacement
                 .active_pairs
                 .iter()
                 .filter_map(|(a, b)| {
@@ -271,18 +273,51 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         })
         .collect::<BTreeSet<_>>();
 
+    // Work clockwise to replace ports
+    fn fmt_replacement_target(net: &Net, target: &ReplacementTarget) -> String {
+        match target {
+            ReplacementTarget::WholeAgent { agent_idx } => {
+                net.names[net.agents[*agent_idx].id].clone()
+            }
+            ReplacementTarget::WholeVar { var_idx } => net.names[*var_idx].clone(),
+            ReplacementTarget::AgentPort { agent_idx, port } => format!(
+                "{}[{} @ {}, ..]",
+                net.names[net.agents[*agent_idx].id],
+                net.agents[*agent_idx].ports[*port]
+                    .as_ref()
+                    .map(|port_elem| match port_elem {
+                        PairElem::Agent(agent_idx) => fmt_replacement_target(
+                            net,
+                            &ReplacementTarget::WholeAgent {
+                                agent_idx: *agent_idx
+                            }
+                        ),
+                        PairElem::Var(var_idx) => fmt_replacement_target(
+                            net,
+                            &ReplacementTarget::WholeVar { var_idx: *var_idx }
+                        ),
+                    })
+                    .unwrap_or("None".to_owned()),
+                port
+            ),
+        }
+    }
+
     tracing::debug!(
         "replacing (agents, ports) {:?} with {:?} in net {:?}",
-        to_replace,
+        to_replace
+            .iter()
+            .map(|target| fmt_replacement_target(&matching_replacement, &target))
+            .collect::<Vec<String>>()
+            .join(", "),
         replacements,
         matching_replacement
     );
 
-    // Work clockwise to replace ports
     for (replacement_target, replacement_elem) in to_replace.into_iter().zip(replacements) {
         tracing::debug!(
-            "replacing {:?} with {:?}",
-            replacement_target,
+            "replacing {} with {:?}",
+            fmt_replacement_target(&matching_replacement, &replacement_target),
             replacement_elem
         );
 
@@ -362,6 +397,52 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                         replaced.insert(PairElem::Var(var_idx), PairElem::Var(idx));
                     }
                 };
+            }
+            ReplacementTarget::WholeAgent { agent_idx } => {
+                match replacement_elem {
+                    PairElem::Agent(p) => {
+                        // Connect any connected nodes, if they exist (look for connections to this var idx)
+                        let idx = matching_replacement.push_ast_agent(
+                            instance.names[p].clone(),
+                            instance.agents[p].ports.len(),
+                        );
+
+                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
+
+                        matching_replacement
+                            .agents
+                            .iter()
+                            .enumerate()
+                            .map(|(i, agent)| {
+                                agent
+                                    .ports
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, p)| {
+                                        p.as_ref().map(|p| p.is_agent()).unwrap_or_default()
+                                            && p.as_ref()
+                                                .map(|p| p.get_idx() == agent_idx)
+                                                .unwrap_or_default()
+                                    })
+                                    .map(|(p_idx, _)| (i, p_idx))
+                                    .collect::<Vec<_>>()
+                            })
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .for_each(|(agent_idx, var_port_idx)| {
+                                matching_replacement.connect(idx, 0, agent_idx, var_port_idx)
+                            });
+                    }
+                    PairElem::Var(v) => {
+                        // Map indexes of connected nodes onto new indexes
+                        // to enable active pair replacement
+
+                        let idx = matching_replacement.push_name(instance.names[v].clone());
+
+                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Var(idx));
+                    }
+                }
             }
         }
     }
@@ -696,6 +777,13 @@ mod test {
                  S[x] >< Add[y, z] => Add[y, S[z]] ~ x
                  Add[Z, y] >< Z",
                 "Z >< y",
+            ),
+            (
+                "addition_complex",
+                "Add[x, y] >< Z => x ~ y
+                 S[x] >< Add[y, z] => Add[y, S[z]] ~ x
+                 S[Z] >< Add[y, Z]",
+                "S[Z] >< y",
             ),
         ]
         .iter()
