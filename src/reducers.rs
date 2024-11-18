@@ -231,23 +231,45 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     // Mapping from old indexes to new indexes
     let mut replaced: BTreeMap<PairElem, PairElem> = BTreeMap::default();
 
-    // By definition only agents can have bound replacement var candidates
-    let mut replacements = [redex_lhs.clone(), redex_rhs.clone()]
-        .into_iter()
-        .map(|redex| match redex {
-            PairElem::Agent(a) => instance.agents[a]
-                .ports
-                .iter()
-                .enumerate()
-                .filter_map(|(_, port_elem)| port_elem.clone())
-                .collect::<Vec<_>>(),
-            p @ PairElem::Var(_) => vec![p],
-        })
-        .flatten()
-        .collect::<BTreeSet<_>>();
+    // Replacement candidates are clockwise terminal elements--as in they have
+    // no "children"--as in they only have one connection
+    // nodes cannot be fully disjoint
+    // - This handles x ~ y identity case
+    //   - Neither x nor y have aux ports
+    // - This handles A ~ x 1/2 identity case
+    //   - Neither A, nor x have aux ports
+    // - This handles the general case A[x, y] ~ B[z]
+    //   - Neither x, y, or z have aux ports
+    // Replacement candidates without aux ports can be identified in the rhs
+    // net by iterating over candidates, where candidates is defined
+    // as the set of variables and agents in the net
+    // and checking if they have no aux ports, or are a variable
+    // all variables are necessarily candidates
+    let replacement_candidates = [redex_lhs.clone(), redex_rhs.clone()].into_iter().chain(
+        [redex_lhs.clone(), redex_rhs.clone()]
+            .into_iter()
+            .map(|redex| match redex {
+                PairElem::Agent(a) => instance.agents[a]
+                    .ports
+                    .iter()
+                    .skip(1)
+                    .enumerate()
+                    .filter_map(|(_, port_elem)| port_elem.clone())
+                    .collect::<Vec<_>>(),
+                PairElem::Var(_) => vec![],
+            })
+            .flatten(),
+    );
 
-    replacements.insert(redex_lhs);
-    replacements.insert(redex_rhs);
+    // Candidates must be replaced if:
+    // - They are a variable
+    // - They have no aux ports
+    let replacements = replacement_candidates
+        .filter(|pair_elem| match pair_elem {
+            PairElem::Agent(idx) => instance.agents[*idx].ports.len() == 1,
+            PairElem::Var(_) => true,
+        })
+        .collect::<BTreeSet<_>>();
 
     tracing::debug!(
         "replacing (agents, ports) {:?} with {:?} in net {:?}",
@@ -667,6 +689,13 @@ mod test {
                 "x >< y => x ~ y
                  x >< B",
                 "x >< B",
+            ),
+            (
+                "addition",
+                "Add[x, y] >< Z => x ~ y
+                 S[x] >< Add[y, z] => Add[y, S[z]] ~ x
+                 Add[Z, y] >< Z",
+                "Z >< y",
             ),
         ]
         .iter()
