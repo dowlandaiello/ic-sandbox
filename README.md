@@ -24,3 +24,10 @@ This representation is borrowed from a paper "[Compilation of Interaction Nets](
 ## Current Limitations
 
 This project is still very bleeding edge, and needs to be refactored significantly. Test coverage needs to be improved, and more examples need to be tried.
+
+## `icc` Usage
+
+`icc` comes with three commands:
+- `compile` - produces a bincode representation of a parsed AST from an input file
+- `eval` - reduces an input file containing a ruleset and expr, printing the resulting expr to stdout
+- `dev` - REPL with debugging and step-by-step reduction capabilities
