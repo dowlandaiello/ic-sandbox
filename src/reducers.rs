@@ -180,6 +180,70 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         }
     }
 
+    // Pushes a new AST agent, pushing and connecting all agents which are connected to it, as well
+    fn push_agent_recursively(original: &Net, original_idx: usize, n: &mut Net) -> usize {
+        let idx = n.push_ast_agent(
+            original.names[original.agents[original_idx].id].clone(),
+            original.agents[original_idx].ports.len(),
+        );
+
+        let mut to_insert = VecDeque::from_iter(
+            original.agents[original_idx]
+                .ports
+                .iter()
+                .skip(1)
+                .enumerate()
+                .filter_map(|(a, x)| x.as_ref().map(|x| (original_idx, a, x))),
+        );
+
+        // TODO: Might have to do something with replacements in here?
+        while let Some((agent_connect_idx, port, insertion_elem)) = to_insert.pop_front() {
+            match insertion_elem {
+                PairElem::Agent(a) => {
+                    tracing::debug!(
+                        "recursively inserting agent {} in port {} of agent {}",
+                        original.names[original.agents[*a].id],
+                        port,
+                        n.names[n.agents[agent_connect_idx].id],
+                    );
+
+                    let idx = n.push_ast_agent(
+                        original.names[original.agents[*a].id].clone(),
+                        original.agents[*a].ports.len(),
+                    );
+
+                    n.connect(agent_connect_idx, port, idx, 0);
+
+                    to_insert.extend(
+                        original.agents[*a]
+                            .ports
+                            .iter()
+                            .enumerate()
+                            .skip(1)
+                            .filter_map(|(i, x)| x.as_ref().map(|x| (*a, i, x)))
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                PairElem::Var(v) => {
+                    tracing::debug!(
+                        "inserting var {} in port {} of agent {}",
+                        original.names[*v],
+                        port,
+                        n.names[n.agents[agent_connect_idx].id],
+                    );
+
+                    let name = original.names[*v].clone();
+
+                    let idx = n.push_var(agent_connect_idx, port, name);
+
+                    n.connect(agent_connect_idx, port, idx, 0);
+                }
+            }
+        }
+
+        idx
+    }
+
     tracing::debug!(
         "reducing net {} with next active pairs {}",
         instance,
@@ -297,14 +361,19 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         )
         .chain(iter::once(redex_rhs.clone()));
 
+    let redexes = BTreeSet::from_iter([redex_lhs.clone(), redex_rhs.clone()]);
+
     // Candidates must be replaced if:
     // - They are a variable
-    // - They have no aux ports
+    // - They are connected to a redex
     let mut replacements_unordered = replacement_candidates
         .enumerate()
-        .filter(|(_, pair_elem)| match pair_elem {
-            PairElem::Agent(idx) => instance.agents[*idx].ports.len() == 1,
-            PairElem::Var(_) => true,
+        .filter(|(_, elem)| {
+            !redexes.contains(&elem)
+                || match elem {
+                    PairElem::Var(_) => true,
+                    PairElem::Agent(a) => instance.agents[*a].ports.len() == 1,
+                }
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -348,10 +417,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 // Insert the actual agent
                 let id = match replacement_elem {
                     PairElem::Agent(p) => {
-                        let idx = matching_replacement.push_ast_agent(
-                            instance.names[instance.agents[p].id].clone(),
-                            instance.agents[p].ports.len(),
-                        );
+                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
 
                         replaced.insert(
                             matching_replacement.agents[agent_idx].ports[port]
@@ -410,10 +476,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 match replacement_elem {
                     PairElem::Agent(p) => {
                         // Connect any connected nodes, if they exist (look for connections to this var idx)
-                        let idx = matching_replacement.push_ast_agent(
-                            instance.names[instance.agents[p].id].clone(),
-                            instance.agents[p].ports.len(),
-                        );
+                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
 
                         replaced.insert(PairElem::Var(var_idx), PairElem::Agent(idx));
 
@@ -468,10 +531,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 match replacement_elem {
                     PairElem::Agent(p) => {
                         // Connect any connected nodes, if they exist (look for connections to this var idx)
-                        let idx = matching_replacement.push_ast_agent(
-                            instance.names[instance.agents[p].id].clone(),
-                            instance.agents[p].ports.len(),
-                        );
+                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
 
                         replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
 
