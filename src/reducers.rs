@@ -1,7 +1,7 @@
 use super::ast::{ActivePairMember, Expr, Rule, RuleActivePair, VarName};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
-    fmt,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt, iter,
 };
 
 pub type AgentId = usize;
@@ -51,24 +51,26 @@ pub fn reduce_expr_to_end_or_infinity(e: Expr) -> Vec<RuleActivePair> {
         .to_application()
         .and_then(|(rules, instance)| build_application_net(rules, instance))
     {
-        Some((rules, instance)) => reduce_to_end_or_infinity(rules, instance),
+        Some((rules, instance)) => reduce_to_end_or_infinity(&rules, instance),
         _ => Vec::new(),
     }
 }
 
 /// Reduces an expression to completion in the context of some rule.
-pub fn reduce_to_end_or_infinity(nets: Vec<(Net, Net)>, instance_net: Net) -> Vec<RuleActivePair> {
+pub fn reduce_to_end_or_infinity(nets: &[(Net, Net)], instance_net: Net) -> Vec<RuleActivePair> {
     let mut results = Vec::new();
     let mut to_reduce = vec![instance_net];
 
     while let Some(curr_redex) = to_reduce.pop() {
-        let new = if let Some(result) = reduce_net(nets.as_slice(), curr_redex.clone()) {
+        let new = if let Some(result) = reduce_net(nets, curr_redex.clone()) {
             result
         } else {
             break;
         };
 
         if new == curr_redex {
+            tracing::trace!("reached end of reduction: same expr");
+
             results.push(new);
 
             break;
@@ -83,6 +85,8 @@ pub fn reduce_to_end_or_infinity(nets: Vec<(Net, Net)>, instance_net: Net) -> Ve
         {
             to_reduce.push(new);
         } else {
+            tracing::trace!("reached end of reduction: no active pairs");
+
             results.push(new);
         }
     }
@@ -109,9 +113,9 @@ fn matching_nets<'a>(
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
 
-            let pair_a: HashSet<&str> =
-                HashSet::from_iter(vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)]);
-            let pair_b = HashSet::from_iter(vec![
+            let pair_a: BTreeSet<&str> =
+                BTreeSet::from_iter(vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)]);
+            let pair_b = BTreeSet::from_iter(vec![
                 instance.get_name_for(&redex_lhs),
                 instance.get_name_for(&redex_rhs),
             ]);
@@ -130,148 +134,21 @@ fn matching_nets<'a>(
         .collect::<Vec<_>>()
 }
 
+// Replace vars and unwritten ports in rhs with nets in instance matching vars
+#[derive(Debug)]
+enum ReplacementTarget {
+    AgentPort { agent_idx: usize, port: usize },
+    WholeVar { var_idx: usize },
+    WholeAgent { agent_idx: usize },
+}
+
 fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
-    tracing::debug!(
-        "reducing net {} with next active pairs {:?}",
-        instance,
-        instance.active_pairs
-    );
-
-    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_first()?;
-
-    tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
-
-    let (matching_rule, matching_replacement_ref) =
-        matching_nets(rules_nets, &instance, redex_lhs.clone(), redex_rhs.clone()).remove(0);
-    let mut matching_replacement = matching_replacement_ref.clone();
-
-    tracing::debug!("matching rule candidate: {}", matching_rule);
-    tracing::debug!(
-        "matching replacement candidate: {} with active pairs {:?}",
-        matching_replacement,
-        matching_replacement.active_pairs
-    );
-
-    // Replace vars and unwritten ports in rhs with nets in instance matching vars
-    #[derive(Debug)]
-    enum ReplacementTarget {
-        AgentPort { agent_idx: usize, port: usize },
-        WholeVar { var_idx: usize },
-        WholeAgent { agent_idx: usize },
+    fn fmt_pair_elem(net: &Net, pair_elem: &PairElem) -> String {
+        match pair_elem {
+            PairElem::Var(v) => net.names[*v].clone(),
+            PairElem::Agent(idx) => net.names[net.agents[*idx].id].clone(),
+        }
     }
-
-    let to_replace = matching_replacement
-        .active_pairs
-        .iter()
-        .map(|(a, b)| {
-            [a.clone(), b.clone()]
-                .into_iter()
-                .map(|agent| match agent {
-                    PairElem::Agent(a) => ReplacementTarget::WholeAgent { agent_idx: a },
-                    PairElem::Var(v) => ReplacementTarget::WholeVar { var_idx: v },
-                })
-                .chain(
-                    [a.clone(), b.clone()]
-                        .into_iter()
-                        .map(|redex| match redex {
-                            PairElem::Agent(a) => matching_replacement.agents[a]
-                                .ports
-                                .iter()
-                                .skip(1)
-                                .enumerate()
-                                .filter(|(_, port_elem)| port_elem.is_some())
-                                .map(|(i, _)| ReplacementTarget::AgentPort {
-                                    agent_idx: a,
-                                    port: i,
-                                })
-                                .collect::<Vec<_>>(),
-                            PairElem::Var(_) => vec![],
-                        })
-                        .flatten(),
-                )
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-
-    // Map of each replacement target to which node it is connected to
-    let to_replace_conns = to_replace
-        .iter()
-        .filter_map(|target| match target {
-            // We are connected to whichever active pair has us in it
-            ReplacementTarget::WholeVar { var_idx } => matching_replacement
-                .active_pairs
-                .iter()
-                .filter_map(|(a, b)| {
-                    if a.is_var() && a.get_idx() == *var_idx {
-                        Some(b)
-                    } else if b.is_var() && b.get_idx() == *var_idx {
-                        Some(a)
-                    } else {
-                        None
-                    }
-                })
-                .map(|matching_pair_elem| (PairElem::Var(*var_idx), matching_pair_elem.clone()))
-                .next(),
-            ReplacementTarget::AgentPort { agent_idx, .. }
-            | ReplacementTarget::WholeAgent { agent_idx } => matching_replacement
-                .active_pairs
-                .iter()
-                .filter_map(|(a, b)| {
-                    if a.is_agent() && a.get_idx() == *agent_idx {
-                        Some(b)
-                    } else if b.is_agent() && b.get_idx() == *agent_idx {
-                        Some(a)
-                    } else {
-                        None
-                    }
-                })
-                .map(|matching_pair_elem| (PairElem::Agent(*agent_idx), matching_pair_elem.clone()))
-                .next(),
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    // Mapping from old indexes to new indexes
-    let mut replaced: BTreeMap<PairElem, PairElem> = BTreeMap::default();
-
-    // Replacement candidates are clockwise terminal elements--as in they have
-    // no "children"--as in they only have one connection
-    // nodes cannot be fully disjoint
-    // - This handles x ~ y identity case
-    //   - Neither x nor y have aux ports
-    // - This handles A ~ x 1/2 identity case
-    //   - Neither A, nor x have aux ports
-    // - This handles the general case A[x, y] ~ B[z]
-    //   - Neither x, y, or z have aux ports
-    // Replacement candidates without aux ports can be identified in the rhs
-    // net by iterating over candidates, where candidates is defined
-    // as the set of variables and agents in the net
-    // and checking if they have no aux ports, or are a variable
-    // all variables are necessarily candidates
-    let replacement_candidates = [redex_lhs.clone(), redex_rhs.clone()].into_iter().chain(
-        [redex_lhs.clone(), redex_rhs.clone()]
-            .into_iter()
-            .map(|redex| match redex {
-                PairElem::Agent(a) => instance.agents[a]
-                    .ports
-                    .iter()
-                    .skip(1)
-                    .enumerate()
-                    .filter_map(|(_, port_elem)| port_elem.clone())
-                    .collect::<Vec<_>>(),
-                PairElem::Var(_) => vec![],
-            })
-            .flatten(),
-    );
-
-    // Candidates must be replaced if:
-    // - They are a variable
-    // - They have no aux ports
-    let replacements = replacement_candidates
-        .filter(|pair_elem| match pair_elem {
-            PairElem::Agent(idx) => instance.agents[*idx].ports.len() == 1,
-            PairElem::Var(_) => true,
-        })
-        .collect::<BTreeSet<_>>();
 
     // Work clockwise to replace ports
     fn fmt_replacement_target(net: &Net, target: &ReplacementTarget) -> String {
@@ -304,20 +181,165 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     }
 
     tracing::debug!(
-        "replacing (agents, ports) {:?} with {:?} in net {:?}",
+        "reducing net {} with next active pairs {}",
+        instance,
+        instance
+            .active_pairs
+            .iter()
+            .map(|(a, b)| format!(
+                "{} >< {}",
+                fmt_pair_elem(&instance, &a),
+                fmt_pair_elem(&instance, &b)
+            ))
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
+    let (redex_lhs, redex_rhs) = instance.active_pairs.pop_first()?;
+
+    tracing::debug!("reducing active pair {:?} ~ {:?}", redex_lhs, redex_rhs);
+
+    let (matching_rule, matching_replacement_ref) =
+        matching_nets(rules_nets, &instance, redex_lhs.clone(), redex_rhs.clone()).remove(0);
+    let mut matching_replacement = matching_replacement_ref.clone();
+
+    tracing::debug!("matching rule candidate: {}", matching_rule);
+    tracing::debug!(
+        "matching replacement candidate: {} with active pairs {}",
+        matching_replacement,
+        matching_replacement
+            .active_pairs
+            .iter()
+            .map(|(a, b)| format!(
+                "{} >< {}",
+                fmt_pair_elem(&matching_replacement, &a),
+                fmt_pair_elem(&matching_replacement, &b)
+            ))
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
+    // Replacement candidates are just all variables
+    // variables are either:
+    // - Whole variables (as in not connected)
+    // - Attached variables
+    let to_replace = matching_replacement
+        .active_pairs
+        .iter()
+        .map(|(a, b)| {
+            [a.clone(), b.clone()]
+                .into_iter()
+                .filter_map(|redex| match redex {
+                    PairElem::Var(v) => Some(ReplacementTarget::WholeVar { var_idx: v }),
+                    _ => None,
+                })
+                .chain(
+                    matching_replacement
+                        .agents
+                        .iter()
+                        .enumerate()
+                        .map(|(a, agent)| {
+                            agent
+                                .ports
+                                .iter()
+                                .enumerate()
+                                .skip(1)
+                                .filter(|(_, port_elem)| {
+                                    port_elem.as_ref().map(|p| p.is_var()).unwrap_or_default()
+                                })
+                                .map(|(i, _)| ReplacementTarget::AgentPort {
+                                    agent_idx: a,
+                                    port: i,
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .flatten(),
+                )
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+
+    // Map of each replacement target to which node it is connected to
+    let to_replace_conns = matching_replacement.active_pairs.clone();
+
+    // Mapping from old indexes to new indexes
+    let mut replaced: BTreeMap<PairElem, PairElem> = BTreeMap::default();
+
+    // Replacement candidates are clockwise terminal elements--as in they have
+    // no "children"--as in they only have one connection
+    // nodes cannot be fully disjoint
+    // - This handles x ~ y identity case
+    //   - Neither x nor y have aux ports
+    // - This handles A ~ x 1/2 identity case
+    //   - Neither A, nor x have aux ports
+    // - This handles the general case A[x, y] ~ B[z]
+    //   - Neither x, y, or z have aux ports
+    // Replacement candidates without aux ports can be identified in the rhs
+    // net by iterating over candidates, where candidates is defined
+    // as the set of variables and agents in the net
+    // and checking if they have no aux ports, or are a variable
+    // all variables are necessarily candidates
+    let replacement_candidates = iter::once(redex_lhs.clone())
+        .chain(
+            [redex_lhs.clone(), redex_rhs.clone()]
+                .into_iter()
+                .map(|redex| match redex {
+                    PairElem::Agent(a) => instance.agents[a]
+                        .ports
+                        .iter()
+                        .skip(1)
+                        .enumerate()
+                        .filter_map(|(_, port_elem)| port_elem.clone())
+                        .collect::<Vec<_>>(),
+                    PairElem::Var(_) => vec![],
+                })
+                .flatten(),
+        )
+        .chain(iter::once(redex_rhs.clone()));
+
+    // Candidates must be replaced if:
+    // - They are a variable
+    // - They have no aux ports
+    let mut replacements_unordered = replacement_candidates
+        .enumerate()
+        .filter(|(_, pair_elem)| match pair_elem {
+            PairElem::Agent(idx) => instance.agents[*idx].ports.len() == 1,
+            PairElem::Var(_) => true,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    replacements_unordered.sort_by_key(|(i, _)| *i);
+
+    let replacements = replacements_unordered
+        .into_iter()
+        .map(|(_, x)| x)
+        .collect::<Vec<_>>();
+
+    tracing::debug!(
+        "replacing (agents, ports) {} with {} in net {}",
         to_replace
             .iter()
             .map(|target| fmt_replacement_target(&matching_replacement, &target))
             .collect::<Vec<String>>()
             .join(", "),
-        replacements,
+        replacements
+            .iter()
+            .map(|target| fmt_pair_elem(&instance, &target))
+            .collect::<Vec<String>>()
+            .join(", "),
         matching_replacement
     );
 
     for (replacement_target, replacement_elem) in to_replace.into_iter().zip(replacements) {
         tracing::debug!(
-            "replacing {} with {:?}",
+            "replacing {} with {}",
             fmt_replacement_target(&matching_replacement, &replacement_target),
+            fmt_pair_elem(&instance, &replacement_elem)
+        );
+        tracing::trace!(
+            "replacing {:?} with {:?}",
+            replacement_target,
             replacement_elem
         );
 
@@ -327,11 +349,27 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 let id = match replacement_elem {
                     PairElem::Agent(p) => {
                         let idx = matching_replacement.push_ast_agent(
-                            instance.names[p].clone(),
+                            instance.names[instance.agents[p].id].clone(),
                             instance.agents[p].ports.len(),
                         );
 
-                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
+                        replaced.insert(
+                            matching_replacement.agents[agent_idx].ports[port]
+                                .as_ref()?
+                                .clone(),
+                            PairElem::Agent(idx),
+                        );
+
+                        tracing::debug!(
+                            "made replacement AgentPort {} -> Agent {}",
+                            fmt_pair_elem(
+                                &matching_replacement,
+                                &matching_replacement.agents[agent_idx].ports[port]
+                                    .as_ref()?
+                                    .clone()
+                            ),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
+                        );
 
                         idx
                     }
@@ -342,7 +380,23 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                             instance.names[v].clone(),
                         );
 
-                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Var(idx));
+                        replaced.insert(
+                            matching_replacement.agents[agent_idx].ports[port]
+                                .as_ref()?
+                                .clone(),
+                            PairElem::Var(idx),
+                        );
+
+                        tracing::debug!(
+                            "made replacement AgentPort {} -> Var {}",
+                            fmt_pair_elem(
+                                &matching_replacement,
+                                &matching_replacement.agents[agent_idx].ports[port]
+                                    .as_ref()?
+                                    .clone()
+                            ),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
+                        );
 
                         idx
                     }
@@ -357,11 +411,17 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                     PairElem::Agent(p) => {
                         // Connect any connected nodes, if they exist (look for connections to this var idx)
                         let idx = matching_replacement.push_ast_agent(
-                            instance.names[p].clone(),
+                            instance.names[instance.agents[p].id].clone(),
                             instance.agents[p].ports.len(),
                         );
 
                         replaced.insert(PairElem::Var(var_idx), PairElem::Agent(idx));
+
+                        tracing::debug!(
+                            "made replacement WholeVar {} -> Agent {}",
+                            fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
+                        );
 
                         matching_replacement
                             .agents
@@ -395,6 +455,12 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                         let idx = matching_replacement.push_name(instance.names[v].clone());
 
                         replaced.insert(PairElem::Var(var_idx), PairElem::Var(idx));
+
+                        tracing::debug!(
+                            "made replacement WholeVar {} -> Var {}",
+                            fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
+                        );
                     }
                 };
             }
@@ -403,11 +469,17 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                     PairElem::Agent(p) => {
                         // Connect any connected nodes, if they exist (look for connections to this var idx)
                         let idx = matching_replacement.push_ast_agent(
-                            instance.names[p].clone(),
+                            instance.names[instance.agents[p].id].clone(),
                             instance.agents[p].ports.len(),
                         );
 
                         replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
+
+                        tracing::debug!(
+                            "made replacement WholeAgent {} -> Agent {}",
+                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(agent_idx)),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
+                        );
 
                         matching_replacement
                             .agents
@@ -441,25 +513,64 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                         let idx = matching_replacement.push_name(instance.names[v].clone());
 
                         replaced.insert(PairElem::Agent(agent_idx), PairElem::Var(idx));
+
+                        tracing::debug!(
+                            "made replacement WholeAgent {} -> Var {}",
+                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(agent_idx)),
+                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
+                        );
                     }
                 }
             }
         }
     }
 
-    // Map existing connections to new indices
+    tracing::debug!(
+        "reduction resulted in replacements: {}",
+        replaced
+            .iter()
+            .map(|(original, replaced)| format!(
+                "{} -> {}",
+                fmt_pair_elem(&matching_replacement, &original),
+                fmt_pair_elem(&matching_replacement, &replaced)
+            ))
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
+    tracing::debug!(
+        "looking for active pairs {}",
+        to_replace_conns
+            .iter()
+            .map(|(redex_lhs, redex_rhs)| format!(
+                "{} >< {}",
+                fmt_pair_elem(&matching_replacement, &redex_lhs),
+                fmt_pair_elem(&matching_replacement, &redex_rhs)
+            ))
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
     matching_replacement.active_pairs = to_replace_conns
         .into_iter()
         .map(|(target, connected_node)| {
-            let mut conn_members = [replaced[&target].clone(), replaced[&connected_node].clone()];
-            conn_members.sort();
-
-            conn_members.into()
+            [
+                replaced.get(&target).cloned().unwrap_or(target),
+                replaced
+                    .get(&connected_node)
+                    .cloned()
+                    .unwrap_or(connected_node),
+            ]
+            .into()
         })
         .collect::<BTreeSet<_>>()
         .into();
 
-    tracing::debug!("reduction resulted in {:?}", matching_replacement);
+    tracing::debug!(
+        "reduction resulted in {} {:?}",
+        matching_replacement,
+        matching_replacement
+    );
 
     Some(matching_replacement)
 }
@@ -478,14 +589,6 @@ pub enum PairElem {
 }
 
 impl PairElem {
-    pub fn ordered(a: Self, b: Self) -> (Self, Self) {
-        if a <= b {
-            (a, b)
-        } else {
-            (b, a)
-        }
-    }
-
     pub fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
     }
@@ -654,10 +757,8 @@ impl Net {
 
                 self.connect(idx_agent_a, 0, idx_agent_b, 0);
 
-                self.active_pairs.insert(PairElem::ordered(
-                    PairElem::Agent(idx_agent_a),
-                    PairElem::Agent(idx_agent_b),
-                ));
+                self.active_pairs
+                    .insert((PairElem::Agent(idx_agent_a), PairElem::Agent(idx_agent_b)));
 
                 (Some(idx_agent_a), Some(idx_agent_b))
             }
@@ -672,10 +773,8 @@ impl Net {
 
                 let name_idx = self.push_var(idx_agent_a, 0, v);
 
-                self.active_pairs.insert(PairElem::ordered(
-                    PairElem::Agent(idx_agent_a),
-                    PairElem::Var(name_idx),
-                ));
+                self.active_pairs
+                    .insert((PairElem::Agent(idx_agent_a), PairElem::Var(name_idx)));
 
                 (Some(idx_agent_a), None)
             }
@@ -690,10 +789,8 @@ impl Net {
 
                 let name_idx = self.push_var(idx_agent_a, 0, v);
 
-                self.active_pairs.insert(PairElem::ordered(
-                    PairElem::Agent(idx_agent_a),
-                    PairElem::Var(name_idx),
-                ));
+                self.active_pairs
+                    .insert((PairElem::Var(name_idx), PairElem::Agent(idx_agent_a)));
 
                 (None, Some(idx_agent_a))
             }
@@ -701,10 +798,8 @@ impl Net {
                 let name_idx_1 = self.push_name(v1);
                 let name_idx_2 = self.push_name(v2);
 
-                self.active_pairs.insert(PairElem::ordered(
-                    PairElem::Var(name_idx_1),
-                    PairElem::Var(name_idx_2),
-                ));
+                self.active_pairs
+                    .insert((PairElem::Var(name_idx_1), PairElem::Var(name_idx_2)));
 
                 (Some(name_idx_1), Some(name_idx_2))
             }
@@ -801,7 +896,7 @@ mod test {
             let expected_instance_net =
                 build_instance_net(expected_eval.to_instance().unwrap()).unwrap();
 
-            let eval = reduce_net(rule_nets.as_slice(), instance_n).unwrap();
+            let eval = &reduce_to_end_or_infinity(rule_nets.as_slice(), instance_n)[0];
 
             assert_eq!(
                 expected_instance_net.to_string(),
@@ -862,6 +957,8 @@ mod test {
         [
             ("identity", "x >< y => x ~ y
              x >< y"),
+	    ("identity_2", "x >< y => x ~ y
+             x >< B"),
             ("addition", "Add[x, y] >< Z => x ~ y
              S[x] >< Add[y, z] => Add[y, S[z]] ~ x
              Add[Z, y] >< Z"),

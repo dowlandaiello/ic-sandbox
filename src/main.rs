@@ -47,13 +47,15 @@ fn main() {
                     .to_application()
                     .and_then(|(rules, instance)| reducers::build_application_net(rules, instance))
                 {
-                    Some((rules, instance)) => reducers::reduce_to_end_or_infinity(rules, instance)
-                        .into_iter()
-                        .map(|reduction| reduction.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                        .as_bytes()
-                        .to_vec(),
+                    Some((rules, instance)) => {
+                        reducers::reduce_to_end_or_infinity(&rules, instance)
+                            .into_iter()
+                            .map(|reduction| reduction.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                            .as_bytes()
+                            .to_vec()
+                    }
                     _ => {
                         panic!("cannot be reduced");
                     }
