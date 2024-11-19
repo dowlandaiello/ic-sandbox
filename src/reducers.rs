@@ -180,8 +180,15 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         }
     }
 
+    // TODO: Consider building an entirely new net instead of doing it in place
+
     // Pushes a new AST agent, pushing and connecting all agents which are connected to it, as well
     fn push_agent_recursively(original: &Net, original_idx: usize, n: &mut Net) -> usize {
+        tracing::debug!(
+            "inserting agent {}",
+            original.names[original.agents[original_idx].id]
+        );
+
         let idx = n.push_ast_agent(
             original.names[original.agents[original_idx].id].clone(),
             original.agents[original_idx].ports.len(),
@@ -386,7 +393,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         .collect::<Vec<_>>();
 
     tracing::debug!(
-        "replacing (agents, ports) {} with {} in net {}",
+        "replacing (agents, ports) {} with {} in net {} {:?}",
         to_replace
             .iter()
             .map(|target| fmt_replacement_target(&matching_replacement, &target))
@@ -397,6 +404,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             .map(|target| fmt_pair_elem(&instance, &target))
             .collect::<Vec<String>>()
             .join(", "),
+        matching_replacement,
         matching_replacement
     );
 
