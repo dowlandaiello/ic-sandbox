@@ -261,7 +261,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
                     let name = original.names[*v].clone();
 
-                    let idx = n.push_var(agent_connect_idx, name);
+                    let idx = n.push_name(name);
 
                     replaced.insert(PairElem::Var(*v), PairElem::Var(idx));
                 }
@@ -369,7 +369,25 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         .collect::<Vec<_>>();
 
     // Map of each replacement target to which node it is connected to
-    let to_replace_conns = matching_replacement.active_pairs.clone();
+    let to_replace_conns = matching_replacement
+        .active_pairs
+        .iter()
+        .cloned()
+        .chain(
+            matching_replacement
+                .agents
+                .iter()
+                .enumerate()
+                .map(|(i, agent)| {
+                    agent
+                        .ports
+                        .iter()
+                        .map(|conn| (PairElem::Agent(i), conn.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .flatten(),
+        )
+        .collect::<BTreeSet<(PairElem, PairElem)>>();
 
     // Mapping from old indexes to new indexes
     let mut replaced: BTreeMap<PairElem, PairElem> = BTreeMap::default();
@@ -511,8 +529,8 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                     )
                                 );
 
-                                matching_replacement_buffer
-                                    .connect(replaced[&PairElem::Agent(agent_idx)].get_idx(), idx);
+                                /*matching_replacement_buffer
+                                .connect(replaced[&PairElem::Agent(agent_idx)].get_idx(), idx);*/
 
                                 tracing::debug!(
                                     "made replacement AgentPort {} -> Agent {}: {:?}",
@@ -532,10 +550,8 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                             PairElem::Var(v) => {
                                 tracing::trace!("pushing AgentPort -> Var");
 
-                                let idx = matching_replacement_buffer.push_var(
-                                    replaced[&PairElem::Agent(agent_idx)].get_idx(),
-                                    instance.names[v].clone(),
-                                );
+                                let idx = matching_replacement_buffer
+                                    .push_name(instance.names[v].clone());
 
                                 replaced.insert(
                                     matching_replacement.agents[agent_idx].ports[port].clone(),
@@ -586,36 +602,6 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                     ),
                                     matching_replacement_buffer
                                 );
-
-                                /*matching_replacement
-                                .agents
-                                .iter()
-                                .enumerate()
-                                .map(|(i, agent)| {
-                                    agent
-                                        .ports
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, p)| {
-                                            p.as_ref().map(|p| p.is_var()).unwrap_or_default()
-                                                && p.as_ref()
-                                                    .map(|p| p.get_idx() == var_idx)
-                                                    .unwrap_or_default()
-                                        })
-                                        .map(|(p_idx, _)| (i, p_idx))
-                                        .collect::<Vec<_>>()
-                                })
-                                .flatten()
-                                .collect::<Vec<_>>()
-                                .into_iter()
-                                .for_each(|(agent_idx, var_port_idx)| {
-                                    matching_replacement_buffer.connect(
-                                        replacements[&PairElem::Var(idx)].get_idx(),
-                                        0,
-                                        agent_idx,
-                                        var_port_idx,
-                                    )
-                                });*/
                             }
                             PairElem::Var(v) => {
                                 tracing::trace!("pushing WholeVar -> Var");
@@ -667,36 +653,6 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                     ),
                                     matching_replacement_buffer
                                 );
-
-                                /*matching_replacement
-                                .agents
-                                .iter()
-                                .enumerate()
-                                .map(|(i, agent)| {
-                                    agent
-                                        .ports
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, p)| {
-                                            p.as_ref().map(|p| p.is_agent()).unwrap_or_default()
-                                                && p.as_ref()
-                                                    .map(|p| p.get_idx() == agent_idx)
-                                                    .unwrap_or_default()
-                                        })
-                                        .map(|(p_idx, _)| (i, p_idx))
-                                        .collect::<Vec<_>>()
-                                })
-                                .flatten()
-                                .collect::<Vec<_>>()
-                                .into_iter()
-                                .for_each(|(agent_idx, var_port_idx)| {
-                                    matching_replacement_buffer.connect(
-                                        idx,
-                                        0,
-                                        agent_idx,
-                                        var_port_idx,
-                                    )
-                                });*/
                             }
                             PairElem::Var(v) => {
                                 tracing::trace!("pushing WholeAgent -> Var");
@@ -757,43 +713,43 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             .join(", ")
     );
 
-    to_replace_conns
-        .into_iter()
-        .for_each(|(active_pair_elem_a, active_pair_elem_b)| {
-            let replaced = [active_pair_elem_a, active_pair_elem_b]
-                .iter()
-                .map(|elem| replaced[elem].clone())
-                .collect::<Vec<_>>();
+    // TODO: Suspect the order we are pushing ports in is wrong
+    // TODO: Are replacements right?
 
-            match replaced[..] {
-                [PairElem::Agent(a), PairElem::Agent(b)] => {
-                    matching_replacement_buffer.connect(a, b);
-                    matching_replacement_buffer
-                        .active_pairs
-                        .insert((PairElem::Agent(a), PairElem::Agent(b)));
-                }
-                [PairElem::Agent(a), PairElem::Var(b)] => {
-                    matching_replacement_buffer
-                        .push_var(a, matching_replacement_buffer.names[b].clone());
-                    matching_replacement_buffer
-                        .active_pairs
-                        .insert((PairElem::Agent(a), PairElem::Var(b)));
-                }
-                [PairElem::Var(a), PairElem::Agent(b)] => {
-                    matching_replacement_buffer
-                        .push_var(b, matching_replacement_buffer.names[a].clone());
-                    matching_replacement_buffer
-                        .active_pairs
-                        .insert((PairElem::Var(a), PairElem::Agent(b)));
-                }
-                [PairElem::Var(a), PairElem::Var(b)] => {
-                    matching_replacement_buffer
-                        .active_pairs
-                        .insert((PairElem::Var(a), PairElem::Var(b)));
-                }
-                _ => {}
+    for (active_pair_elem_a, active_pair_elem_b) in to_replace_conns.into_iter() {
+        let replaced = (
+            replaced[&active_pair_elem_a].clone(),
+            replaced[&active_pair_elem_b].clone(),
+        );
+
+        match replaced {
+            (PairElem::Agent(a), PairElem::Agent(b)) => {
+                matching_replacement_buffer.connect(a, b);
+                matching_replacement_buffer
+                    .active_pairs
+                    .insert((PairElem::Agent(a), PairElem::Agent(b)));
             }
-        });
+            (PairElem::Agent(a), PairElem::Var(b)) => {
+                matching_replacement_buffer
+                    .push_var(a, matching_replacement_buffer.names[b].clone());
+                matching_replacement_buffer
+                    .active_pairs
+                    .insert((PairElem::Agent(a), PairElem::Var(b)));
+            }
+            (PairElem::Var(a), PairElem::Agent(b)) => {
+                matching_replacement_buffer
+                    .push_var(b, matching_replacement_buffer.names[a].clone());
+                matching_replacement_buffer
+                    .active_pairs
+                    .insert((PairElem::Var(a), PairElem::Agent(b)));
+            }
+            (PairElem::Var(a), PairElem::Var(b)) => {
+                matching_replacement_buffer
+                    .active_pairs
+                    .insert((PairElem::Var(a), PairElem::Var(b)));
+            }
+        }
+    }
 
     tracing::debug!(
         "reduction resulted in {} {:?}",
