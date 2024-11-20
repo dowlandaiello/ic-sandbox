@@ -142,6 +142,12 @@ enum ReplacementTarget {
     WholeAgent { agent_idx: usize },
 }
 
+#[derive(Debug)]
+enum ReplacementOp {
+    Replace(ReplacementTarget),
+    Copy(ReplacementTarget),
+}
+
 fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     fn fmt_pair_elem(net: &Net, pair_elem: &PairElem) -> String {
         match pair_elem {
@@ -150,7 +156,6 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         }
     }
 
-    // Work clockwise to replace ports
     fn fmt_replacement_target(net: &Net, target: &ReplacementTarget) -> String {
         match target {
             ReplacementTarget::WholeAgent { agent_idx } => {
@@ -177,6 +182,13 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                     .unwrap_or("None".to_owned()),
                 port
             ),
+        }
+    }
+
+    fn fmt_replacement_op(net: &Net, op: &ReplacementOp) -> String {
+        match op {
+            ReplacementOp::Copy(c) => format!("Copy({})", fmt_replacement_target(net, c)),
+            ReplacementOp::Replace(r) => format!("Replace({})", fmt_replacement_target(net, r)),
         }
     }
 
@@ -272,7 +284,8 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
     let (matching_rule, matching_replacement_ref) =
         matching_nets(rules_nets, &instance, redex_lhs.clone(), redex_rhs.clone()).remove(0);
-    let mut matching_replacement = matching_replacement_ref.clone();
+    let matching_replacement = matching_replacement_ref.clone();
+    let mut matching_replacement_buffer = Net::default();
 
     tracing::debug!("matching rule candidate: {}", matching_rule);
     tracing::debug!(
@@ -300,9 +313,13 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         .map(|(a, b)| {
             [a.clone(), b.clone()]
                 .into_iter()
-                .filter_map(|redex| match redex {
-                    PairElem::Var(v) => Some(ReplacementTarget::WholeVar { var_idx: v }),
-                    _ => None,
+                .map(|redex| match redex {
+                    PairElem::Var(v) => {
+                        ReplacementOp::Replace(ReplacementTarget::WholeVar { var_idx: v })
+                    }
+                    PairElem::Agent(a) => {
+                        ReplacementOp::Copy(ReplacementTarget::WholeAgent { agent_idx: a })
+                    }
                 })
                 .chain(
                     matching_replacement
@@ -315,12 +332,12 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                 .iter()
                                 .enumerate()
                                 .skip(1)
-                                .filter(|(_, port_elem)| {
-                                    port_elem.as_ref().map(|p| p.is_var()).unwrap_or_default()
-                                })
-                                .map(|(i, _)| ReplacementTarget::AgentPort {
-                                    agent_idx: a,
-                                    port: i,
+                                .filter_map(|(i, port_elem)| port_elem.as_ref().map(|x| (i, x)))
+                                .map(|(i, _)| {
+                                    ReplacementOp::Replace(ReplacementTarget::AgentPort {
+                                        agent_idx: a,
+                                        port: i,
+                                    })
                                 })
                                 .collect::<Vec<_>>()
                         })
@@ -387,7 +404,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         .collect::<Vec<_>>();
     replacements_unordered.sort_by_key(|(i, _)| *i);
 
-    let replacements = replacements_unordered
+    let mut replacements = replacements_unordered
         .into_iter()
         .map(|(_, x)| x)
         .collect::<Vec<_>>();
@@ -396,7 +413,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         "replacing (agents, ports) {} with {} in net {} {:?}",
         to_replace
             .iter()
-            .map(|target| fmt_replacement_target(&matching_replacement, &target))
+            .map(|target| fmt_replacement_op(&matching_replacement, &target))
             .collect::<Vec<String>>()
             .join(", "),
         replacements
@@ -408,185 +425,247 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         matching_replacement
     );
 
-    for (replacement_target, replacement_elem) in to_replace.into_iter().zip(replacements) {
+    // Algorithm for auxiliary insertion of replaced nodes:
+    // - We can already insert replaced ndoes and all their children
+    // - How do we insert parent nodes?
+    // - Just insert parent nodes as normally, and look for replacement
+    // nodes for insertoin candidates
+
+    for replacement_op in to_replace {
         tracing::debug!(
-            "replacing {} with {}",
-            fmt_replacement_target(&matching_replacement, &replacement_target),
-            fmt_pair_elem(&instance, &replacement_elem)
-        );
-        tracing::trace!(
-            "replacing {:?} with {:?}",
-            replacement_target,
-            replacement_elem
+            "visiting {}",
+            fmt_replacement_op(&matching_replacement, &replacement_op),
         );
 
-        match replacement_target {
-            ReplacementTarget::AgentPort { agent_idx, port } => {
-                // Insert the actual agent
-                let id = match replacement_elem {
-                    PairElem::Agent(p) => {
-                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
+        match replacement_op {
+            ReplacementOp::Copy(replacement_target) => match replacement_target {
+                ReplacementTarget::WholeVar { var_idx } => {
+                    matching_replacement_buffer
+                        .push_name(matching_replacement.names[var_idx].clone());
+                }
+                ReplacementTarget::WholeAgent { agent_idx } => {
+                    matching_replacement_buffer.push_ast_agent(
+                        matching_replacement.names[matching_replacement.agents[agent_idx].id]
+                            .clone(),
+                        matching_replacement.agents[agent_idx].ports.len(),
+                    );
+                }
+                ReplacementTarget::AgentPort { .. } => {}
+            },
+            ReplacementOp::Replace(replacement_target) => {
+                let replacement_elem = replacements.remove(0);
 
-                        replaced.insert(
-                            matching_replacement.agents[agent_idx].ports[port]
-                                .as_ref()?
-                                .clone(),
-                            PairElem::Agent(idx),
-                        );
+                match replacement_target {
+                    ReplacementTarget::AgentPort { agent_idx, port } => {
+                        // Insert the actual agent
+                        let id = match replacement_elem {
+                            PairElem::Agent(p) => {
+                                let idx = push_agent_recursively(
+                                    &instance,
+                                    p,
+                                    &mut matching_replacement_buffer,
+                                );
 
-                        tracing::debug!(
-                            "made replacement AgentPort {} -> Agent {}",
-                            fmt_pair_elem(
-                                &matching_replacement,
-                                &matching_replacement.agents[agent_idx].ports[port]
-                                    .as_ref()?
-                                    .clone()
-                            ),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
-                        );
+                                replaced.insert(
+                                    matching_replacement.agents[agent_idx].ports[port]
+                                        .as_ref()?
+                                        .clone(),
+                                    PairElem::Agent(idx),
+                                );
 
-                        idx
+                                tracing::debug!(
+                                    "made replacement AgentPort {} -> Agent {}",
+                                    fmt_pair_elem(
+                                        &matching_replacement,
+                                        &matching_replacement.agents[agent_idx].ports[port]
+                                            .as_ref()?
+                                            .clone()
+                                    ),
+                                    fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
+                                );
+
+                                idx
+                            }
+                            PairElem::Var(v) => {
+                                let idx = matching_replacement_buffer.push_var(
+                                    agent_idx,
+                                    port,
+                                    instance.names[v].clone(),
+                                );
+
+                                replaced.insert(
+                                    matching_replacement.agents[agent_idx].ports[port]
+                                        .as_ref()?
+                                        .clone(),
+                                    PairElem::Var(idx),
+                                );
+
+                                tracing::debug!(
+                                    "made replacement AgentPort {} -> Var {}",
+                                    fmt_pair_elem(
+                                        &matching_replacement,
+                                        &matching_replacement.agents[agent_idx].ports[port]
+                                            .as_ref()?
+                                            .clone()
+                                    ),
+                                    fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
+                                );
+
+                                idx
+                            }
+                        };
+
+                        // Connect all connected agents
+                        matching_replacement_buffer.connect(agent_idx, port, id, 0);
                     }
-                    PairElem::Var(v) => {
-                        let idx = matching_replacement.push_var(
-                            agent_idx,
-                            port,
-                            instance.names[v].clone(),
-                        );
+                    ReplacementTarget::WholeVar { var_idx } => {
+                        // We will always have to push a new agent
+                        match replacement_elem {
+                            PairElem::Agent(p) => {
+                                // Connect any connected nodes, if they exist (look for connections to this var idx)
+                                let idx = push_agent_recursively(
+                                    &instance,
+                                    p,
+                                    &mut matching_replacement_buffer,
+                                );
 
-                        replaced.insert(
-                            matching_replacement.agents[agent_idx].ports[port]
-                                .as_ref()?
-                                .clone(),
-                            PairElem::Var(idx),
-                        );
+                                replaced.insert(PairElem::Var(var_idx), PairElem::Agent(idx));
 
-                        tracing::debug!(
-                            "made replacement AgentPort {} -> Var {}",
-                            fmt_pair_elem(
-                                &matching_replacement,
-                                &matching_replacement.agents[agent_idx].ports[port]
-                                    .as_ref()?
-                                    .clone()
-                            ),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
-                        );
+                                tracing::debug!(
+                                    "made replacement WholeVar {} -> Agent {}",
+                                    fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
+                                    fmt_pair_elem(
+                                        &matching_replacement_buffer,
+                                        &PairElem::Agent(idx)
+                                    )
+                                );
 
-                        idx
-                    }
-                };
-
-                // Connect all connected agents
-                matching_replacement.connect(agent_idx, port, id, 0);
-            }
-            ReplacementTarget::WholeVar { var_idx } => {
-                // We will always have to push a new agent
-                match replacement_elem {
-                    PairElem::Agent(p) => {
-                        // Connect any connected nodes, if they exist (look for connections to this var idx)
-                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
-
-                        replaced.insert(PairElem::Var(var_idx), PairElem::Agent(idx));
-
-                        tracing::debug!(
-                            "made replacement WholeVar {} -> Agent {}",
-                            fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
-                        );
-
-                        matching_replacement
-                            .agents
-                            .iter()
-                            .enumerate()
-                            .map(|(i, agent)| {
-                                agent
-                                    .ports
+                                matching_replacement
+                                    .agents
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, p)| {
-                                        p.as_ref().map(|p| p.is_var()).unwrap_or_default()
-                                            && p.as_ref()
-                                                .map(|p| p.get_idx() == var_idx)
-                                                .unwrap_or_default()
+                                    .map(|(i, agent)| {
+                                        agent
+                                            .ports
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, p)| {
+                                                p.as_ref().map(|p| p.is_var()).unwrap_or_default()
+                                                    && p.as_ref()
+                                                        .map(|p| p.get_idx() == var_idx)
+                                                        .unwrap_or_default()
+                                            })
+                                            .map(|(p_idx, _)| (i, p_idx))
+                                            .collect::<Vec<_>>()
                                     })
-                                    .map(|(p_idx, _)| (i, p_idx))
+                                    .flatten()
                                     .collect::<Vec<_>>()
-                            })
-                            .flatten()
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .for_each(|(agent_idx, var_port_idx)| {
-                                matching_replacement.connect(idx, 0, agent_idx, var_port_idx)
-                            });
+                                    .into_iter()
+                                    .for_each(|(agent_idx, var_port_idx)| {
+                                        matching_replacement_buffer.connect(
+                                            idx,
+                                            0,
+                                            agent_idx,
+                                            var_port_idx,
+                                        )
+                                    });
+                            }
+                            PairElem::Var(v) => {
+                                // Map indexes of connected nodes onto new indexes
+                                // to enable active pair replacement
+
+                                let idx = matching_replacement_buffer
+                                    .push_name(instance.names[v].clone());
+
+                                replaced.insert(PairElem::Var(var_idx), PairElem::Var(idx));
+
+                                tracing::debug!(
+                                    "made replacement WholeVar {} -> Var {}",
+                                    fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
+                                    fmt_pair_elem(
+                                        &matching_replacement_buffer,
+                                        &PairElem::Var(idx)
+                                    )
+                                );
+                            }
+                        };
                     }
-                    PairElem::Var(v) => {
-                        // Map indexes of connected nodes onto new indexes
-                        // to enable active pair replacement
+                    ReplacementTarget::WholeAgent { agent_idx } => {
+                        match replacement_elem {
+                            PairElem::Agent(p) => {
+                                // Connect any connected nodes, if they exist (look for connections to this var idx)
+                                let idx = push_agent_recursively(
+                                    &instance,
+                                    p,
+                                    &mut matching_replacement_buffer,
+                                );
 
-                        let idx = matching_replacement.push_name(instance.names[v].clone());
+                                replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
 
-                        replaced.insert(PairElem::Var(var_idx), PairElem::Var(idx));
+                                tracing::debug!(
+                                    "made replacement WholeAgent {} -> Agent {}",
+                                    fmt_pair_elem(
+                                        &matching_replacement,
+                                        &PairElem::Agent(agent_idx)
+                                    ),
+                                    fmt_pair_elem(
+                                        &matching_replacement_buffer,
+                                        &PairElem::Agent(idx)
+                                    )
+                                );
 
-                        tracing::debug!(
-                            "made replacement WholeVar {} -> Var {}",
-                            fmt_pair_elem(&matching_replacement, &PairElem::Var(var_idx),),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
-                        );
-                    }
-                };
-            }
-            ReplacementTarget::WholeAgent { agent_idx } => {
-                match replacement_elem {
-                    PairElem::Agent(p) => {
-                        // Connect any connected nodes, if they exist (look for connections to this var idx)
-                        let idx = push_agent_recursively(&instance, p, &mut matching_replacement);
-
-                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Agent(idx));
-
-                        tracing::debug!(
-                            "made replacement WholeAgent {} -> Agent {}",
-                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(agent_idx)),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(idx))
-                        );
-
-                        matching_replacement
-                            .agents
-                            .iter()
-                            .enumerate()
-                            .map(|(i, agent)| {
-                                agent
-                                    .ports
+                                matching_replacement
+                                    .agents
                                     .iter()
                                     .enumerate()
-                                    .filter(|(_, p)| {
-                                        p.as_ref().map(|p| p.is_agent()).unwrap_or_default()
-                                            && p.as_ref()
-                                                .map(|p| p.get_idx() == agent_idx)
-                                                .unwrap_or_default()
+                                    .map(|(i, agent)| {
+                                        agent
+                                            .ports
+                                            .iter()
+                                            .enumerate()
+                                            .filter(|(_, p)| {
+                                                p.as_ref().map(|p| p.is_agent()).unwrap_or_default()
+                                                    && p.as_ref()
+                                                        .map(|p| p.get_idx() == agent_idx)
+                                                        .unwrap_or_default()
+                                            })
+                                            .map(|(p_idx, _)| (i, p_idx))
+                                            .collect::<Vec<_>>()
                                     })
-                                    .map(|(p_idx, _)| (i, p_idx))
+                                    .flatten()
                                     .collect::<Vec<_>>()
-                            })
-                            .flatten()
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .for_each(|(agent_idx, var_port_idx)| {
-                                matching_replacement.connect(idx, 0, agent_idx, var_port_idx)
-                            });
-                    }
-                    PairElem::Var(v) => {
-                        // Map indexes of connected nodes onto new indexes
-                        // to enable active pair replacement
+                                    .into_iter()
+                                    .for_each(|(agent_idx, var_port_idx)| {
+                                        matching_replacement_buffer.connect(
+                                            idx,
+                                            0,
+                                            agent_idx,
+                                            var_port_idx,
+                                        )
+                                    });
+                            }
+                            PairElem::Var(v) => {
+                                // Map indexes of connected nodes onto new indexes
+                                // to enable active pair replacement
 
-                        let idx = matching_replacement.push_name(instance.names[v].clone());
+                                let idx = matching_replacement_buffer
+                                    .push_name(instance.names[v].clone());
 
-                        replaced.insert(PairElem::Agent(agent_idx), PairElem::Var(idx));
+                                replaced.insert(PairElem::Agent(agent_idx), PairElem::Var(idx));
 
-                        tracing::debug!(
-                            "made replacement WholeAgent {} -> Var {}",
-                            fmt_pair_elem(&matching_replacement, &PairElem::Agent(agent_idx)),
-                            fmt_pair_elem(&matching_replacement, &PairElem::Var(idx))
-                        );
+                                tracing::debug!(
+                                    "made replacement WholeAgent {} -> Var {}",
+                                    fmt_pair_elem(
+                                        &matching_replacement,
+                                        &PairElem::Agent(agent_idx)
+                                    ),
+                                    fmt_pair_elem(
+                                        &matching_replacement_buffer,
+                                        &PairElem::Var(idx)
+                                    )
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -600,7 +679,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             .map(|(original, replaced)| format!(
                 "{} -> {}",
                 fmt_pair_elem(&matching_replacement, &original),
-                fmt_pair_elem(&matching_replacement, &replaced)
+                fmt_pair_elem(&matching_replacement_buffer, &replaced)
             ))
             .collect::<Vec<String>>()
             .join(", ")
@@ -619,7 +698,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             .join(", ")
     );
 
-    matching_replacement.active_pairs = to_replace_conns
+    matching_replacement_buffer.active_pairs = to_replace_conns
         .into_iter()
         .map(|(target, connected_node)| {
             [
@@ -636,11 +715,11 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
     tracing::debug!(
         "reduction resulted in {} {:?}",
-        matching_replacement,
-        matching_replacement
+        matching_replacement_buffer,
+        matching_replacement_buffer
     );
 
-    Some(matching_replacement)
+    Some(matching_replacement_buffer)
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
