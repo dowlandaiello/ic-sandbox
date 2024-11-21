@@ -1052,8 +1052,13 @@ impl Net {
 
     #[tracing::instrument]
     pub fn connect(&mut self, idx_a: usize, idx_b: usize) {
-        self.agents[idx_a].ports.push(PairElem::Agent(idx_b));
-        self.agents[idx_b].ports.push(PairElem::Agent(idx_a));
+        if !self.agents[idx_a].ports.contains(&PairElem::Agent(idx_b)) {
+            self.agents[idx_a].ports.push(PairElem::Agent(idx_b));
+        }
+
+        if !self.agents[idx_b].ports.contains(&PairElem::Agent(idx_a)) {
+            self.agents[idx_b].ports.push(PairElem::Agent(idx_a));
+        }
     }
 }
 
@@ -1082,7 +1087,7 @@ mod test {
                 "identity_2",
                 "x >< y => x ~ y
                  x >< B",
-                "x >< B",
+                "B >< x",
             ),
             (
                 "addition",
