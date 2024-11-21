@@ -1,3 +1,3 @@
 Add[x, y] >< Z => x ~ y
 S[x] >< Add[y, z] => Add[y, S[z]] ~ x
-Add[S[S[Z]], y] >< Z
+Add[S[S[S[Z]]], y] >< Z

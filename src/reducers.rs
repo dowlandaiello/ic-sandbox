@@ -1135,6 +1135,13 @@ mod test {
                  S[Z] >< Add[y, Z]",
                 "y >< S[Z]",
             ),
+            (
+                "addition_complex",
+                "Add[x, y] >< Z => x ~ y
+                 S[x] >< Add[y, z] => Add[y, S[z]] ~ x
+                 S[Z] >< Add[y, S[Z]]",
+                "y >< S[S[Z]]",
+            ),
         ]
         .iter()
         .map(|(name, src, expected_evaluation)| {

@@ -1,6 +1,8 @@
-use chumsky::{prelude::*, text, Error};
+use chumsky::{prelude::*, text, Error, Parser};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+const COMMENT_STR: &str = "--";
 
 pub type VarName = String;
 
@@ -163,6 +165,8 @@ impl fmt::Display for ActivePairMember {
 }
 
 pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
+    let comment = just(COMMENT_STR).then_ignore(just("\n").not().repeated());
+
     let active_pair_member = recursive(|input| {
         let agent = text::ident()
             .try_map(|s: String, span: <Simple<char> as Error<char>>::Span| {
@@ -217,11 +221,12 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         )))
         .map(|(lhs, rhs)| Rule { lhs, rhs });
 
-    let book = rule.separated_by(just("\n").repeated().padded());
+    let book = rule.separated_by(comment.repeated().padded().separated_by(just("\n")));
     let application = book
         .clone()
-        .then_ignore(just("\n").repeated().padded())
+        .then_ignore(comment.repeated().padded().separated_by(just("\n")))
         .then(rule_active_pair.separated_by(just(',').padded()))
+        .then_ignore(comment.repeated().padded().separated_by(just("\n")))
         .map(|(rules, instance)| Expr::Application { rules, instance });
 
     choice((

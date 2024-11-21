@@ -35,3 +35,15 @@ This project is still very bleeding edge, and needs to be refactored significant
 - `compile` - produces a bincode representation of a parsed AST from an input file
 - `eval` - reduces an input file containing a ruleset and expr, printing the resulting expr to stdout
 - `dev` - REPL with debugging and step-by-step reduction capabilities
+
+## Todo
+
+- [ ] Comments
+- [ ] #include system
+- [ ] Fix some small bug with ordering of active pairs replacement args
+- [ ] Standard library:
+  - [ ] Combinators: era, dup, constr
+  - [ ] Math functions: pred, addition, subtraction
+- [ ] ABI: how do we convert from other formats to INets?
+  - [ ] UTF-8 representation for strings
+- [ ] I/O?
