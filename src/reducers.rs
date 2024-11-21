@@ -253,7 +253,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                             .iter()
                             .enumerate()
                             .skip(1)
-                            .map(|(i, x)| (*a, i, x))
+                            .map(|(i, x)| (idx, i, x))
                             .collect::<Vec<_>>(),
                     );
                 }
