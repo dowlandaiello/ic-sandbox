@@ -191,8 +191,9 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
     // TODO: Consider building an entirely new net instead of doing it in place
 
-    // Pushes a new AST agent, pushing and connecting all agents which are connected to it, as well
+    // Pushes a new AST agent
     fn push_elem_recursively(
+        to_insert_conns: &mut BTreeSet<(PairElem, PairElem)>,
         replaced: &mut BTreeMap<PairElem, PairElem>,
         original: &Net,
         original_elem: &PairElem,
@@ -205,15 +206,18 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                     original.names[original.agents[*original_idx].id]
                 );
 
+                let idx =
+                    n.push_ast_agent(original.names[original.agents[*original_idx].id].clone());
+
                 (
-                    n.push_ast_agent(original.names[original.agents[*original_idx].id].clone()),
+                    idx,
                     VecDeque::from_iter(
                         original.agents[*original_idx]
                             .ports
                             .iter()
                             .skip(1)
                             .enumerate()
-                            .map(|(a, x)| (*original_idx, a, x)),
+                            .map(|(a, x)| (idx, a, x)),
                     ),
                 )
             }
@@ -228,6 +232,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         while let Some((agent_connect_idx, port, insertion_elem)) = to_insert.pop_front() {
             match insertion_elem {
                 PairElem::Agent(a) => {
+                    tracing::trace!("{:?} {:?} {:?}", agent_connect_idx, n.agents, n.names,);
                     tracing::debug!(
                         "recursively inserting agent {} in port {} of agent {}",
                         original.names[original.agents[*a].id],
@@ -239,7 +244,8 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
                     replaced.insert(PairElem::Agent(*a), PairElem::Agent(idx));
 
-                    n.connect(agent_connect_idx, idx);
+                    to_insert_conns
+                        .insert((PairElem::Agent(agent_connect_idx), PairElem::Agent(idx)));
 
                     to_insert.extend(
                         original.agents[*a]
@@ -264,6 +270,9 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                     let idx = n.push_name(name);
 
                     replaced.insert(PairElem::Var(*v), PairElem::Var(idx));
+
+                    to_insert_conns
+                        .insert((PairElem::Agent(agent_connect_idx), PairElem::Var(idx)));
                 }
             }
         }
@@ -388,6 +397,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                 .flatten(),
         )
         .collect::<BTreeSet<(PairElem, PairElem)>>();
+    let mut to_insert_conns: BTreeSet<(PairElem, PairElem)> = Default::default();
 
     // Mapping from old indexes to new indexes
     let mut replaced: BTreeMap<PairElem, PairElem> = BTreeMap::default();
@@ -506,6 +516,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                 tracing::trace!("pushing AgentPort -> Agent");
 
                                 let idx = push_elem_recursively(
+                                    &mut to_insert_conns,
                                     &mut replaced,
                                     &instance,
                                     &p,
@@ -585,6 +596,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
                                 // Connect any connected nodes, if they exist (look for connections to this var idx)
                                 let idx = push_elem_recursively(
+                                    &mut to_insert_conns,
                                     &mut replaced,
                                     &instance,
                                     &p,
@@ -633,6 +645,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
                                 // Connect any connected nodes, if they exist (look for connections to this var idx)
                                 let idx = push_elem_recursively(
+                                    &mut to_insert_conns,
                                     &mut replaced,
                                     &instance,
                                     &p,
@@ -700,21 +713,9 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     );
 
     tracing::debug!("reduction resulted in replacements: {:?}", replaced);
-    tracing::debug!(
-        "reduction resulted in replacements: {}",
-        replaced
-            .iter()
-            .map(|(original, replaced)| format!(
-                "{} -> {}",
-                fmt_pair_elem(&matching_replacement, &original),
-                fmt_pair_elem(&matching_replacement_buffer, &replaced)
-            ))
-            .collect::<Vec<String>>()
-            .join(", ")
-    );
 
-    // TODO: Suspect the order we are pushing ports in is wrong
-    // TODO: Are replacements right?
+    tracing::debug!("need to wire: {:?}", to_insert_conns);
+
     for (active_pair_elem_a, active_pair_elem_b) in to_replace_conns.into_iter() {
         let replaced = (
             replaced[&active_pair_elem_a].clone(),
@@ -755,6 +756,37 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         };
     }
 
+    for (pair_elem_a, pair_elem_b) in to_insert_conns.into_iter() {
+        tracing::debug!(
+            "visiting inserted pair: {} ~ {}",
+            fmt_pair_elem(&matching_replacement_buffer, &pair_elem_a),
+            fmt_pair_elem(&matching_replacement_buffer, &pair_elem_b),
+        );
+
+        match (pair_elem_a, pair_elem_b) {
+            (PairElem::Agent(a), PairElem::Agent(b)) => {
+                matching_replacement_buffer.connect(a, b);
+            }
+            (PairElem::Agent(a), PairElem::Var(b)) => {
+                matching_replacement_buffer
+                    .push_var(a, matching_replacement_buffer.names[b].clone());
+            }
+            (PairElem::Var(a), PairElem::Agent(b)) => {
+                matching_replacement_buffer
+                    .push_var(b, matching_replacement_buffer.names[a].clone());
+            }
+            (PairElem::Var(_), PairElem::Var(_)) => {}
+        };
+    }
+
+    fn order_pair(active_pair: (PairElem, PairElem)) -> (PairElem, PairElem) {
+        if active_pair.0 < active_pair.1 {
+            active_pair
+        } else {
+            (active_pair.1, active_pair.0)
+        }
+    }
+
     // Connect all agents that have shared ports
     matching_replacement_buffer.active_pairs.extend(
         matching_replacement_buffer
@@ -764,9 +796,9 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
             .filter_map(|(i, agent)| match &agent.ports[0] {
                 PairElem::Agent(agent_idx) => {
                     (matching_replacement_buffer.agents[*agent_idx].ports[0] == PairElem::Agent(i))
-                        .then(|| (PairElem::Agent(i), PairElem::Agent(*agent_idx)))
+                        .then(|| order_pair((PairElem::Agent(i), PairElem::Agent(*agent_idx))))
                 }
-                v @ PairElem::Var(_) => Some((PairElem::Agent(i), v.clone())),
+                v @ PairElem::Var(_) => Some(order_pair((PairElem::Agent(i), v.clone()))),
             }),
     );
 
@@ -1087,21 +1119,21 @@ mod test {
                 "identity_2",
                 "x >< y => x ~ y
                  x >< B",
-                "B >< x",
+                "x >< B",
             ),
             (
                 "addition",
                 "Add[x, y] >< Z => x ~ y
                  S[x] >< Add[y, z] => Add[y, S[z]] ~ x
                  Add[Z, y] >< Z",
-                "Z >< y",
+                "y >< Z",
             ),
             (
                 "addition_complex",
                 "Add[x, y] >< Z => x ~ y
                  S[x] >< Add[y, z] => Add[y, S[z]] ~ x
                  S[Z] >< Add[y, Z]",
-                "S[Z] >< y",
+                "y >< S[Z]",
             ),
         ]
         .iter()
