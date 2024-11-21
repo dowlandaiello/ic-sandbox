@@ -715,41 +715,60 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
     // TODO: Suspect the order we are pushing ports in is wrong
     // TODO: Are replacements right?
-
     for (active_pair_elem_a, active_pair_elem_b) in to_replace_conns.into_iter() {
         let replaced = (
             replaced[&active_pair_elem_a].clone(),
             replaced[&active_pair_elem_b].clone(),
         );
 
+        tracing::debug!(
+            "visiting replaced active pair: {} >< {} -> {} >< {}",
+            fmt_pair_elem(&matching_replacement, &active_pair_elem_a),
+            fmt_pair_elem(&matching_replacement, &active_pair_elem_b),
+            fmt_pair_elem(&matching_replacement_buffer, &replaced.0),
+            fmt_pair_elem(&matching_replacement_buffer, &replaced.1)
+        );
+
         match replaced {
             (PairElem::Agent(a), PairElem::Agent(b)) => {
                 matching_replacement_buffer.connect(a, b);
-                matching_replacement_buffer
-                    .active_pairs
-                    .insert((PairElem::Agent(a), PairElem::Agent(b)));
             }
             (PairElem::Agent(a), PairElem::Var(b)) => {
                 matching_replacement_buffer
                     .push_var(a, matching_replacement_buffer.names[b].clone());
-                matching_replacement_buffer
-                    .active_pairs
-                    .insert((PairElem::Agent(a), PairElem::Var(b)));
             }
             (PairElem::Var(a), PairElem::Agent(b)) => {
                 matching_replacement_buffer
                     .push_var(b, matching_replacement_buffer.names[a].clone());
-                matching_replacement_buffer
-                    .active_pairs
-                    .insert((PairElem::Var(a), PairElem::Agent(b)));
             }
             (PairElem::Var(a), PairElem::Var(b)) => {
+                tracing::debug!(
+                    "found active pair: {} >< {}",
+                    fmt_pair_elem(&matching_replacement_buffer, &PairElem::Var(a)),
+                    fmt_pair_elem(&matching_replacement_buffer, &PairElem::Var(b))
+                );
+
                 matching_replacement_buffer
                     .active_pairs
                     .insert((PairElem::Var(a), PairElem::Var(b)));
             }
-        }
+        };
     }
+
+    // Connect all agents that have shared ports
+    matching_replacement_buffer.active_pairs.extend(
+        matching_replacement_buffer
+            .agents
+            .iter()
+            .enumerate()
+            .filter_map(|(i, agent)| match &agent.ports[0] {
+                PairElem::Agent(agent_idx) => {
+                    (matching_replacement_buffer.agents[*agent_idx].ports[0] == PairElem::Agent(i))
+                        .then(|| (PairElem::Agent(i), PairElem::Agent(*agent_idx)))
+                }
+                v @ PairElem::Var(_) => Some((PairElem::Agent(i), v.clone())),
+            }),
+    );
 
     tracing::debug!(
         "reduction resulted in {} {:?}",
@@ -813,11 +832,11 @@ impl From<Net> for Vec<RuleActivePair> {
             .map(|(redex_lhs, redex_rhs)| RuleActivePair {
                 lhs: match redex_lhs {
                     PairElem::Var(v) => ActivePairMember::Var(n.names[*v].clone()),
-                    PairElem::Agent(a) => n.agent_to_pair_member(*a),
+                    PairElem::Agent(a) => n.agent_to_pair_member(*a, Default::default()),
                 },
                 rhs: match redex_rhs {
                     PairElem::Var(v) => ActivePairMember::Var(n.names[*v].clone()),
-                    PairElem::Agent(a) => n.agent_to_pair_member(*a),
+                    PairElem::Agent(a) => n.agent_to_pair_member(*a, Default::default()),
                 },
             })
             .collect::<Vec<_>>()
@@ -832,7 +851,11 @@ impl Net {
         }
     }
 
-    pub fn agent_to_pair_member(&self, agent_idx: usize) -> ActivePairMember {
+    pub fn agent_to_pair_member(
+        &self,
+        agent_idx: usize,
+        mut visited: BTreeSet<usize>,
+    ) -> ActivePairMember {
         let a = &self.agents[agent_idx];
 
         ActivePairMember::Agent {
@@ -841,9 +864,20 @@ impl Net {
                 .ports
                 .iter()
                 .skip(1)
+                .filter(|p| match p {
+                    PairElem::Var(_) => true,
+                    PairElem::Agent(p) => {
+                        let v = !visited.contains(&p);
+                        visited.insert(*p);
+
+                        v
+                    }
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
                 .map(|maybe_p| match maybe_p {
                     PairElem::Var(v) => ActivePairMember::Var(self.names[*v].clone()),
-                    PairElem::Agent(port) => self.agent_to_pair_member(*port),
+                    PairElem::Agent(port) => self.agent_to_pair_member(*port, visited.clone()),
                 })
                 .collect::<Vec<_>>(),
         }
