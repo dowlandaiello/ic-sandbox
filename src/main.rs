@@ -83,7 +83,7 @@ fn main() {
                 }
 
                 // Try parsing input as an expr
-                let in_expr = assert_parse_ok(".".into(), input.trim());
+                let in_expr = assert_parse_ok("".into(), ".".into(), input.trim());
 
                 loop {
                     print!("print_net|debug_net|print_ast|debug_ast|reduce|exit > ");
@@ -210,6 +210,7 @@ fn transform_input_to_output(args: &ArgMatches, transformer: impl Fn(Expr) -> Ve
     let input_path = PathBuf::from(input_fname);
 
     let parsed: Expr = assert_parse_ok(
+        input_path.clone(),
         input_path
             .ancestors()
             .nth(1)
@@ -252,26 +253,33 @@ fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-fn assert_parse_ok(working_dir: PathBuf, input: &str) -> Expr {
-    let errs = match ast::parser().parse(preprocessor::parser(working_dir, input)) {
+fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Expr {
+    let input = preprocessor::parser(working_dir, input);
+
+    let errs = match ast::parser().parse(input.as_str()) {
         Ok(v) => {
             return v;
         }
         Err(e) => e,
     };
 
+    let fname = fpath
+        .file_name()
+        .and_then(|fname| fname.to_str())
+        .unwrap_or("");
+
     for err in errs {
-        Report::build(ReportKind::Error, ((), err.span()))
+        Report::build(ReportKind::Error, (fname, err.span()))
             .with_message(err.to_string())
             .with_label(
-                Label::new(((), err.span()))
+                Label::new((fname, err.span()))
                     .with_message(err)
                     .with_color(Color::Red),
             )
             .finish()
-            .eprint(Source::from(&input))
+            .eprint((fname, Source::from(input.as_str())))
             .unwrap();
     }
 
-    unreachable!()
+    panic!()
 }

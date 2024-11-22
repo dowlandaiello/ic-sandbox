@@ -10,7 +10,7 @@ pub type VarName = String;
 pub enum Expr {
     Application {
         rules: Vec<Rule>,
-        instance: Vec<RuleActivePair>,
+        instance: Vec<Instance>,
     },
     Book {
         rules: Vec<Rule>,
@@ -18,14 +18,14 @@ pub enum Expr {
 }
 
 impl Expr {
-    pub fn to_instance(&self) -> Option<Vec<RuleActivePair>> {
+    pub fn to_instance(&self) -> Option<&[Instance]> {
         match self {
-            Self::Application { instance, .. } => Some(instance.clone()),
+            Self::Application { instance, .. } => Some(instance.as_slice()),
             _ => None,
         }
     }
 
-    pub fn to_application(self) -> Option<(Vec<Rule>, Vec<RuleActivePair>)> {
+    pub fn to_application(self) -> Option<(Vec<Rule>, Vec<Instance>)> {
         match self {
             Self::Application { rules, instance } => Some((rules, instance)),
             _ => None,
@@ -73,10 +73,41 @@ impl fmt::Display for Expr {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub enum Instance {
+    PairMember(ActivePairMember),
+    ActivePair(InstanceActivePair),
+}
+
+impl Instance {
+    pub fn as_active_pair(&self) -> Option<&InstanceActivePair> {
+        match self {
+            Self::ActivePair(p) => Some(p),
+            Self::PairMember(_) => None,
+        }
+    }
+
+    pub fn as_pair_member(&self) -> Option<&ActivePairMember> {
+        match self {
+            Self::ActivePair(_) => None,
+            Self::PairMember(m) => Some(m),
+        }
+    }
+}
+
+impl fmt::Display for Instance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PairMember(m) => write!(f, "{}", m),
+            Self::ActivePair(p) => write!(f, "{}", p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     pub lhs: RuleActivePair,
-    pub rhs: Vec<InstanceActivePair>,
+    pub rhs: Vec<Instance>,
 }
 
 impl fmt::Display for Rule {
@@ -110,6 +141,14 @@ impl fmt::Display for RuleActivePair {
 pub struct InstanceActivePair {
     pub lhs: ActivePairMember,
     pub rhs: ActivePairMember,
+}
+
+impl From<RuleActivePair> for InstanceActivePair {
+    fn from(r: RuleActivePair) -> Self {
+        let RuleActivePair { lhs, rhs } = r;
+
+        Self { lhs, rhs }
+    }
 }
 
 impl fmt::Display for InstanceActivePair {
@@ -207,7 +246,7 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     let instance_active_pair = active_pair_member
         .clone()
         .then_ignore(just("~").padded())
-        .then(active_pair_member)
+        .then(active_pair_member.clone())
         .map(|(lhs, rhs)| InstanceActivePair { lhs, rhs });
 
     let unit = just("()");
@@ -217,7 +256,13 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         .then_ignore(just("=>").padded())
         .then(choice((
             unit.padded().map(|_| Vec::new()),
-            instance_active_pair.separated_by(just(',').padded()),
+            instance_active_pair
+                .clone()
+                .map(|pair| Instance::ActivePair(pair))
+                .or(active_pair_member
+                    .clone()
+                    .map(|member| Instance::PairMember(member)))
+                .separated_by(just(',').padded()),
         )))
         .map(|(lhs, rhs)| Rule { lhs, rhs });
 
@@ -225,7 +270,12 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     let application = book
         .clone()
         .then_ignore(comment.repeated().padded().separated_by(just("\n")))
-        .then(rule_active_pair.separated_by(just(',').padded()))
+        .then(
+            instance_active_pair
+                .map(|pair| Instance::ActivePair(pair.into()))
+                .or(active_pair_member.map(|member| Instance::PairMember(member)))
+                .separated_by(just(',').padded()),
+        )
         .then_ignore(comment.repeated().padded().separated_by(just("\n")))
         .map(|(rules, instance)| Expr::Application { rules, instance });
 
@@ -262,10 +312,10 @@ mod test {
                                 inactive_vars: Vec::new()
                             },
                         },
-                        rhs: vec![InstanceActivePair {
+                        rhs: vec![Instance::ActivePair(InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
                             rhs: ActivePairMember::Var("y".into())
-                        }]
+                        })]
                     },
                     Rule {
                         lhs: RuleActivePair {
@@ -282,14 +332,14 @@ mod test {
                             },
                         },
                         rhs: vec![
-                            InstanceActivePair {
+                            Instance::ActivePair(InstanceActivePair {
                                 lhs: ActivePairMember::Var("x".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "S".into(),
                                     inactive_vars: vec![ActivePairMember::Var("b".into())]
                                 }
-                            },
-                            InstanceActivePair {
+                            }),
+                            Instance::ActivePair(InstanceActivePair {
                                 lhs: ActivePairMember::Var("a".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "Add".into(),
@@ -298,7 +348,7 @@ mod test {
                                         ActivePairMember::Var("y".into())
                                     ]
                                 }
-                            }
+                            })
                         ]
                     }
                 ]
@@ -309,7 +359,7 @@ mod test {
 
     #[test]
     fn test_parse_application() {
-        let to_parse = "Add[x, y] >< Z => x ~ y\nAdd[x, y] >< S[a] => x ~ S[b], a ~ Add[b, y]\nAdd[x, y] >< Add[z, a]";
+        let to_parse = "Add[x, y] >< Z => x ~ y\nAdd[x, y] >< S[a] => x ~ S[b], a ~ Add[b, y]\nAdd[x, y] ~ Add[z, a]";
         let expr: Expr = parser().parse(to_parse).unwrap();
 
         assert_eq!(
@@ -330,10 +380,10 @@ mod test {
                                 inactive_vars: Vec::new()
                             },
                         },
-                        rhs: vec![InstanceActivePair {
+                        rhs: vec![Instance::ActivePair(InstanceActivePair {
                             lhs: ActivePairMember::Var("x".into()),
                             rhs: ActivePairMember::Var("y".into())
-                        }]
+                        })]
                     },
                     Rule {
                         lhs: RuleActivePair {
@@ -350,14 +400,14 @@ mod test {
                             },
                         },
                         rhs: vec![
-                            InstanceActivePair {
+                            Instance::ActivePair(InstanceActivePair {
                                 lhs: ActivePairMember::Var("x".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "S".into(),
                                     inactive_vars: vec![ActivePairMember::Var("b".into())]
                                 }
-                            },
-                            InstanceActivePair {
+                            }),
+                            Instance::ActivePair(InstanceActivePair {
                                 lhs: ActivePairMember::Var("a".into()),
                                 rhs: ActivePairMember::Agent {
                                     name: "Add".into(),
@@ -366,11 +416,11 @@ mod test {
                                         ActivePairMember::Var("y".into())
                                     ]
                                 }
-                            }
+                            })
                         ]
                     }
                 ],
-                instance: vec![RuleActivePair {
+                instance: vec![Instance::ActivePair(InstanceActivePair {
                     lhs: ActivePairMember::Agent {
                         name: "Add".into(),
                         inactive_vars: vec![
@@ -385,7 +435,7 @@ mod test {
                             ActivePairMember::Var("a".into())
                         ]
                     },
-                }]
+                })]
             }
         );
         assert_eq!(&expr.to_string(), to_parse);
