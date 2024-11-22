@@ -2,12 +2,13 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::Parser;
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
 use inetlib::{
-    ast::{parser, Expr},
-    reducers,
+    ast::{self, Expr},
+    preprocessor, reducers,
 };
 use std::{
     fs::OpenOptions,
     io::{self, Read, Write},
+    path::PathBuf,
 };
 
 fn main() {
@@ -82,7 +83,7 @@ fn main() {
                 }
 
                 // Try parsing input as an expr
-                let in_expr = assert_parse_ok(input.trim());
+                let in_expr = assert_parse_ok(".".into(), input.trim());
 
                 loop {
                     print!("print_net|debug_net|print_ast|debug_ast|reduce|exit > ");
@@ -179,7 +180,7 @@ fn main() {
                             _ => eprintln!("cannot be reduced"),
                         },
                         "exit" => {
-                            return;
+                            break;
                         }
                         _ => {}
                     }
@@ -206,7 +207,16 @@ fn transform_input_to_output(args: &ArgMatches, transformer: impl Fn(Expr) -> Ve
         .read_to_string(&mut input)
         .expect("failed to read input file");
 
-    let parsed: Expr = assert_parse_ok(input.trim());
+    let input_path = PathBuf::from(input_fname);
+
+    let parsed: Expr = assert_parse_ok(
+        input_path
+            .ancestors()
+            .nth(1)
+            .expect("failed to get working dir for file")
+            .to_path_buf(),
+        input.trim(),
+    );
     let out = transformer(parsed);
 
     match out_fname.as_str() {
@@ -242,8 +252,8 @@ fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-fn assert_parse_ok(input: &str) -> Expr {
-    let errs = match parser().parse(input) {
+fn assert_parse_ok(working_dir: PathBuf, input: &str) -> Expr {
+    let errs = match ast::parser().parse(preprocessor::parser(working_dir, input)) {
         Ok(v) => {
             return v;
         }
