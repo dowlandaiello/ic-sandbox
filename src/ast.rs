@@ -175,8 +175,6 @@ impl ActivePairMember {
         let mut to_check = VecDeque::from_iter([(self, other)]);
 
         while let Some((self_elem, other_elem)) = to_check.pop_front() {
-            tracing::debug!("{:?} {:?}", self_elem, other_elem);
-
             match other_elem {
                 Self::Var(_) => {
                     return true;
