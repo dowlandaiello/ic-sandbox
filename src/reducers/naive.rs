@@ -450,17 +450,17 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
     // all variables are necessarily candidates
     let replacement_candidates = iter::once(redex_lhs.clone())
         .chain(
-            [redex_lhs.clone(), redex_rhs.clone()]
-                .into_iter()
-                .map(|redex| match redex {
-                    PairElem::Agent(a) => instance.agents[a]
+            instance
+                .agents
+                .iter()
+                .map(|agent| {
+                    agent
                         .ports
                         .iter()
                         .skip(1)
                         .enumerate()
                         .map(|(_, port_elem)| port_elem.clone())
-                        .collect::<Vec<_>>(),
-                    PairElem::Var(_) => vec![],
+                        .collect::<Vec<_>>()
                 })
                 .flatten(),
         )

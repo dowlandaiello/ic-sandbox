@@ -1,8 +1,7 @@
+use super::COMMENT_STR;
 use chumsky::{prelude::*, text, Error, Parser};
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, fmt};
-
-const COMMENT_STR: &str = "--";
 
 pub type VarName = String;
 

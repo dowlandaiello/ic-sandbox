@@ -1,4 +1,4 @@
-# inetlang
+# DEVM
 
 Low-level intermediary representation "language" for general interaction calculus-based languages. Supports general interaction net rule programs, including but not limited to interaction combinators. Includes a single-threaded reducer, `icc` for prototyping and proving purposes.
 
@@ -38,10 +38,4 @@ This project is still very bleeding edge, and needs to be refactored significant
 
 ## Todo
 
-- [ ] Fix some small bug with ordering of active pairs replacement args
-- [ ] Standard library:
-  - [ ] Combinators: era, dup, constr
-  - [ ] Math functions: pred, addition, subtraction
-- [ ] ABI: how do we convert from other formats to INets?
-  - [ ] UTF-8 representation for strings
-- [ ] I/O?
+- [ ] Syntax rework to implement original lafont paper spec
