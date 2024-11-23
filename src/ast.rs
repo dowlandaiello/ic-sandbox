@@ -1,6 +1,6 @@
 use chumsky::{prelude::*, text, Error, Parser};
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{collections::VecDeque, fmt};
 
 const COMMENT_STR: &str = "--";
 
@@ -157,7 +157,7 @@ impl fmt::Display for InstanceActivePair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Eq, Hash, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ActivePairMember {
     Var(VarName),
     Agent {
@@ -167,6 +167,48 @@ pub enum ActivePairMember {
 }
 
 impl ActivePairMember {
+    pub fn is_var(&self) -> bool {
+        matches!(self, Self::Var(_))
+    }
+
+    pub fn is_subset(&self, other: &Self) -> bool {
+        let mut to_check = VecDeque::from_iter([(self, other)]);
+
+        while let Some((self_elem, other_elem)) = to_check.pop_front() {
+            tracing::debug!("{:?} {:?}", self_elem, other_elem);
+
+            match other_elem {
+                Self::Var(_) => {
+                    return true;
+                }
+                Self::Agent {
+                    name,
+                    inactive_vars,
+                } => match self_elem {
+                    Self::Var(_) => {
+                        return false;
+                    }
+                    Self::Agent {
+                        name: name_2,
+                        inactive_vars: inactive_vars2,
+                    } => {
+                        if name != name_2 {
+                            return false;
+                        }
+
+                        if inactive_vars.len() != inactive_vars2.len() {
+                            return false;
+                        }
+
+                        to_check.extend(inactive_vars2.iter().zip(inactive_vars));
+                    }
+                },
+            }
+        }
+
+        true
+    }
+
     pub fn get_inactive_vars(&self) -> Option<&[ActivePairMember]> {
         match self {
             Self::Var(_) => None,
@@ -266,7 +308,13 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         )))
         .map(|(lhs, rhs)| Rule { lhs, rhs });
 
-    let book = rule.separated_by(comment.repeated().padded().separated_by(just("\n")));
+    let book = comment
+        .repeated()
+        .padded()
+        .separated_by(just("\n"))
+        .or_not()
+        .ignored()
+        .then(rule.separated_by(comment.repeated().padded().separated_by(just("\n"))));
     let application = book
         .clone()
         .then_ignore(comment.repeated().padded().separated_by(just("\n")))
@@ -277,10 +325,11 @@ pub fn parser() -> impl Parser<char, Expr, Error = Simple<char>> {
                 .separated_by(just(',').padded()),
         )
         .then_ignore(comment.repeated().padded().separated_by(just("\n")))
-        .map(|(rules, instance)| Expr::Application { rules, instance });
+        .map(|((_, rules), instance)| Expr::Application { rules, instance });
 
     choice((
-        book.map(|rules| Expr::Book { rules }).then_ignore(end()),
+        book.map(|(_, rules)| Expr::Book { rules })
+            .then_ignore(end()),
         application.then_ignore(end()),
     ))
 }

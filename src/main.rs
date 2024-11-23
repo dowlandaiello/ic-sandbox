@@ -43,13 +43,11 @@ fn main() {
         }
         Some(("eval", arg_matches)) => {
             transform_input_to_output(arg_matches, |e: Expr| {
-                match e
-                    .clone()
-                    .to_application()
-                    .and_then(|(rules, instance)| reducers::build_application_net(rules, instance))
-                {
+                match e.clone().to_application().and_then(|(rules, instance)| {
+                    reducers::naive::build_application_net(rules, instance)
+                }) {
                     Some((rules, instance)) => {
-                        reducers::reduce_to_end_or_infinity(&rules, instance)
+                        reducers::naive::reduce_to_end_or_infinity(&rules, instance)
                             .into_iter()
                             .map(|reduction| reduction.to_string())
                             .collect::<Vec<_>>()
@@ -100,7 +98,7 @@ fn main() {
                         "print_net" => match in_expr.clone() {
                             Expr::Application { rules, instance } => {
                                 let (rule_nets, instance_net) = if let Some(r) =
-                                    reducers::build_application_net(rules, instance)
+                                    reducers::naive::build_application_net(rules, instance)
                                 {
                                     r
                                 } else {
@@ -120,7 +118,7 @@ fn main() {
                                 );
                             }
                             Expr::Book { rules } => {
-                                let book_nets = reducers::build_book_net(rules);
+                                let book_nets = reducers::naive::build_book_net(rules);
 
                                 println!(
                                     "{}",
@@ -135,7 +133,7 @@ fn main() {
                         "debug_net" => match in_expr.clone() {
                             Expr::Application { rules, instance } => {
                                 let (rule_nets, instance_net) = if let Some(r) =
-                                    reducers::build_application_net(rules, instance)
+                                    reducers::naive::build_application_net(rules, instance)
                                 {
                                     r
                                 } else {
@@ -147,7 +145,7 @@ fn main() {
                                 println!("{:?}\n{:?}", rule_nets, instance_net);
                             }
                             Expr::Book { rules } => {
-                                let book_nets = reducers::build_book_net(rules);
+                                let book_nets = reducers::naive::build_book_net(rules);
 
                                 println!("{:?}", book_nets);
                             }
@@ -160,7 +158,7 @@ fn main() {
                         }
                         "reduce" => match in_expr.clone().to_application() {
                             Some((ast_rules, ast_instance)) => {
-                                match reducers::build_application_net(
+                                match reducers::naive::build_application_net(
                                     ast_rules.clone(),
                                     ast_instance,
                                 ) {
@@ -169,8 +167,10 @@ fn main() {
                                             "{}",
                                             Expr::Application {
                                                 rules: ast_rules.clone(),
-                                                instance: reducers::reduce_once(rules, instance)
-                                                    .expect("no reduction occurred")
+                                                instance: reducers::naive::reduce_once(
+                                                    rules, instance
+                                                )
+                                                .expect("no reduction occurred")
                                             }
                                         );
                                     }

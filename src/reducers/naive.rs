@@ -1,4 +1,4 @@
-use super::ast::{ActivePairMember, Expr, Instance, InstanceActivePair, Rule, VarName};
+use super::super::ast::{ActivePairMember, Expr, Instance, InstanceActivePair, Rule, VarName};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt, iter,
@@ -138,23 +138,30 @@ fn matching_nets<'a>(
         .filter_map(|(lhs, rhs)| {
             let (agent_a, agent_b) = lhs.active_pairs.iter().next()?;
 
-            let pair_a: BTreeSet<&str> =
-                BTreeSet::from_iter(vec![lhs.get_name_for(agent_a), lhs.get_name_for(agent_b)]);
-            let pair_b = BTreeSet::from_iter(vec![
-                instance.get_name_for(&redex_lhs),
-                instance.get_name_for(&redex_rhs),
-            ]);
+            let mut pair_a: Vec<ActivePairMember> = [agent_a, agent_b]
+                .into_iter()
+                .map(|p| lhs.pair_elem_to_pair_member(&p))
+                .collect();
+            let pair_b: Vec<ActivePairMember> = [&redex_lhs, &redex_rhs]
+                .into_iter()
+                .map(|p| instance.pair_elem_to_pair_member(&p))
+                .collect();
 
-            if pair_a == pair_b
-                || pair_a.is_subset(&pair_b)
-                || (agent_a.is_var() && agent_b.is_var())
-                || ((agent_a.is_var() ^ agent_b.is_var())
-                    && pair_b.intersection(&pair_a).count() > 0)
-            {
-                return Some((lhs, rhs));
+            // Check if any rule includes a var allowing further elems
+            for pair_member in pair_b {
+                let matching_member = pair_a.iter().position(|candidate_match_member| {
+                    candidate_match_member.is_var()
+                        || pair_member.is_subset(&candidate_match_member)
+                });
+
+                if let Some(matching_member_pos) = matching_member {
+                    pair_a.remove(matching_member_pos);
+                } else {
+                    return None;
+                }
             }
 
-            None
+            return Some((lhs, rhs));
         })
         .collect::<Vec<_>>()
 }
@@ -376,7 +383,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
                                 .skip(1)
                                 .map(|(i, port_elem)| match port_elem {
                                     PairElem::Agent(a) => {
-                                        if matching_replacement.agents[*a].ports.len() == 1 {
+                                        if agent.ports.len() == 1 {
                                             ReplacementOp::Replace(ReplacementTarget::AgentPort {
                                                 agent_idx: *a,
                                                 port: i,
@@ -484,6 +491,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
         .map(|(_, x)| x)
         .collect::<Vec<_>>();
 
+    tracing::trace!("replacing (agents, ports) {:?}", to_replace);
     tracing::debug!(
         "replacing (agents, ports) {} with {} in net {} {:?}",
         to_replace
@@ -776,7 +784,7 @@ fn reduce_net(rules_nets: &[(Net, Net)], mut instance: Net) -> Option<Net> {
 
                 matching_replacement_buffer
                     .active_pairs
-                    .insert((PairElem::Var(a), PairElem::Var(b)));
+                    .insert(order_pair((PairElem::Var(a), PairElem::Var(b))));
             }
         };
     }
@@ -907,6 +915,13 @@ impl Net {
         match elem {
             PairElem::Var(v) => self.names[*v].as_str(),
             PairElem::Agent(a) => self.names[self.agents[*a].id].as_str(),
+        }
+    }
+
+    pub fn pair_elem_to_pair_member(&self, pair_elem: &PairElem) -> ActivePairMember {
+        match pair_elem {
+            PairElem::Var(v) => ActivePairMember::Var(self.names[*v].clone()),
+            PairElem::Agent(a) => self.agent_to_pair_member(*a, Default::default()),
         }
     }
 
@@ -1092,6 +1107,14 @@ impl Net {
 
     pub fn push_var(&mut self, node_idx: usize, name: String) -> usize {
         let name_idx = self.push_name(name);
+
+        if self.agents[node_idx]
+            .ports
+            .contains(&PairElem::Var(name_idx))
+        {
+            return name_idx;
+        }
+
         self.agents[node_idx].ports.push(PairElem::Var(name_idx));
 
         name_idx
@@ -1129,7 +1152,7 @@ pub struct Agent {
 
 #[cfg(test)]
 mod test {
-    use super::{super::ast, *};
+    use super::{super::super::ast, *};
     use chumsky::Parser;
     use test_log::test;
 
@@ -1215,6 +1238,10 @@ mod test {
              Dup[a, b] >< Dup[c, d] => a ~ c, b ~ d
              Era >< Era => ()
              Era ~ Era", "Era >< Era => ()"),
+            ("fibonnaci", "Fib[y] >< Z => y ~ Z
+             Fib[y] >< S[Z] => y ~ S[Z]
+             Fib[y] >< S[S[x]] => Add[y, Fib[S[x]]] ~ Fib[x]
+             Fib[y] ~ S[S[Z]]", "Fib[y] >< S[S[x]] => Add[y, Fib[S[x]]] ~ Fib[x]"),
         ]
         .iter()
         .map(|(name, src, expected_rule)| (name, ast::parser().parse(*src).unwrap(), ast::parser().parse(*expected_rule).unwrap()))

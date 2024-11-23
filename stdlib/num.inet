@@ -1,0 +1,2 @@
+Pred >< Z => Z
+Pred >< S[x] => x

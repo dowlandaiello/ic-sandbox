@@ -38,8 +38,6 @@ This project is still very bleeding edge, and needs to be refactored significant
 
 ## Todo
 
-- [ ] Comments
-- [ ] #include system
 - [ ] Fix some small bug with ordering of active pairs replacement args
 - [ ] Standard library:
   - [ ] Combinators: era, dup, constr
