@@ -1,5 +1,0 @@
-Era >< Era => ()
-Era >< Z => ()
-
-Dupl[y, z] >< Z => Z >< y, Z >< z
-Dupl[y, z] >< S[x] => Dupl[a, b] >< x, S[a] >< y, S[b] >< z

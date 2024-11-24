@@ -1,7 +1,7 @@
 use super::UNIT_STR;
 use std::fmt;
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
 
 impl fmt::Display for Ident {
@@ -10,7 +10,7 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Type(pub String);
 
 impl fmt::Display for Type {
@@ -76,10 +76,13 @@ impl fmt::Display for Keyword {
     }
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
 pub enum Expr {
     TypeDec(Type),
-    Symbol { ident: Ident, ports: Vec<PortKind> },
+    Symbol {
+        ident: Ident,
+        ports: Vec<PortGrouping>,
+    },
     Net(Net),
 }
 
@@ -113,13 +116,13 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Net {
     pub lhs: Option<Agent>,
     pub rhs: Option<Agent>,
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Agent {
     pub name: Ident,
     pub ports: Vec<Port>,
@@ -140,11 +143,36 @@ impl fmt::Display for Agent {
     }
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+pub enum PortGrouping {
+    Singleton(PortKind),
+    Partition(Vec<PortKind>),
+}
+
+impl fmt::Display for PortGrouping {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Singleton(p) => {
+                write!(f, "{}", p)
+            }
+            Self::Partition(ps) => {
+                write!(
+                    f,
+                    "[{}]",
+                    ps.iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        }
+    }
+}
+
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
 pub enum PortKind {
     Input(Type),
     Output(Type),
-    Partition(Vec<Port>),
 }
 
 impl fmt::Display for PortKind {
@@ -152,19 +180,11 @@ impl fmt::Display for PortKind {
         match self {
             Self::Input(ty) => write!(f, "{}-", ty.0),
             Self::Output(ty) => write!(f, "{}+", ty.0),
-            Self::Partition(p) => write!(
-                f,
-                "[{}]",
-                p.iter()
-                    .map(|p| p.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
         }
     }
 }
 
-#[derive(Eq, Clone, Debug, PartialEq)]
+#[derive(Hash, Eq, Clone, Debug, PartialEq)]
 pub enum Port {
     Agent(Agent),
     Var(Ident),

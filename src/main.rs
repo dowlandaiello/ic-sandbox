@@ -1,9 +1,9 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use chumsky::{Parser, Stream};
+use chumsky::{error::Simple, Parser, Stream};
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
 use inetlib::{
     ast_lafont::Expr,
-    parser_lafont::{self, Span, Spanned},
+    parser_lafont::{self, Spanned},
     preprocessor,
 };
 use std::{
@@ -190,29 +190,33 @@ fn arg_out_file_default(default: OsStr) -> Arg {
 fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Vec<Spanned<Expr>> {
     let input = preprocessor::parser(working_dir, input);
 
-    let errs: Vec<(String, Span)> = match parser_lafont::lexer().parse(input.as_str()) {
-        Ok(res) => match parser_lafont::parser().parse::<_, _>(Stream::from_iter(
-            0..input.len(),
-            res.into_iter()
-                .flatten()
-                .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
-        )) {
-            Ok(v) => {
-                return v;
-            }
-            Err(e) => e
-                .into_iter()
-                .map(|e| {
-                    let span = e.span().clone();
-
-                    (e.map(|s| s.0).to_string(), span)
+    let errs: Vec<Simple<String>> = match parser_lafont::lexer()
+        .parse(input.as_str())
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| Simple::<String>::custom(e.span(), format!("{}", e)))
+                .collect::<Vec<_>>()
+        })
+        .and_then(|res| {
+            parser_lafont::parser()
+                .parse::<_, _>(Stream::from_iter(
+                    0..input.len(),
+                    res.into_iter()
+                        .flatten()
+                        .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+                ))
+                .map_err(|e| {
+                    e.into_iter()
+                        .map(|e| {
+                            Simple::custom(e.span(), format!("{}", e.map(|spanned| spanned.0)))
+                        })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<Vec<_>>(),
-        },
-        Err(e) => e
-            .into_iter()
-            .map(|e| (e.to_string(), e.span()))
-            .collect::<Vec<_>>(),
+        }) {
+        Ok(v) => {
+            return v;
+        }
+        Err(e) => e,
     };
 
     let fname = fpath
@@ -220,12 +224,12 @@ fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Vec<Spa
         .and_then(|fname| fname.to_str())
         .unwrap_or("");
 
-    for (err, span) in errs {
-        Report::build(ReportKind::Error, (fname, span.clone()))
-            .with_message(err.clone())
+    for err in errs {
+        Report::build(ReportKind::Error, (fname, err.span().clone()))
+            .with_message(err.to_string().clone())
             .with_label(
-                Label::new((fname, span))
-                    .with_message(err)
+                Label::new((fname, err.span()))
+                    .with_message(err.to_string())
                     .with_color(Color::Red),
             )
             .finish()

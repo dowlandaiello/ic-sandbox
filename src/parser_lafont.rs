@@ -1,5 +1,5 @@
 use super::{
-    ast_lafont::{Agent, Expr, Ident, Keyword, Net, Port, PortKind, Token, Type},
+    ast_lafont::{Agent, Expr, Ident, Keyword, Net, Port, PortGrouping, PortKind, Token, Type},
     COMMENT_STR,
 };
 use chumsky::{
@@ -108,10 +108,21 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
                 let ident_a = ident.clone();
                 let ident_b = ident.clone();
 
-                span_just(Token::MinusInput)
+                let port_kind = span_just(Token::MinusInput)
                     .map(move |_| PortKind::Input(Type(ident_a.clone().0)))
                     .or(span_just(Token::PlusOutput)
-                        .map(move |_| PortKind::Output(Type(ident_b.clone().0))))
+                        .map(move |_| PortKind::Output(Type(ident_b.clone().0))));
+
+                let port_grouping = span_just(Token::NonDiscPartStart)
+                    .ignored()
+                    .then(port_kind.clone().separated_by(span_just(Token::Comma)))
+                    .then_ignore(span_just(Token::NonDiscPartEnd))
+                    .map(|(_, ps)| PortGrouping::Partition(ps));
+
+                port_kind
+                    .map(|p| PortGrouping::Singleton(p))
+                    .or(port_grouping)
+                    .separated_by(span_just(Token::Comma))
             })
             .separated_by(span_just(Token::Comma)),
         )
@@ -119,7 +130,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
             Spanned(
                 Expr::Symbol {
                     ident: symbol.clone().0,
-                    ports,
+                    ports: ports.into_iter().flatten().collect(),
                 },
                 symbol.clone().1,
             )
