@@ -73,28 +73,30 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simple<Spanned<Token>>> {
-    let span_just = move |val: Token| {
-        filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
-            **tok == val
-        })
+macro_rules! span_just {
+    ($name:pat) => {
+        select! {
+            Spanned($name, s) => s
+        }
     };
+}
 
-    let type_declarations = span_just(Token::Keyword(Keyword::Type))
+pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simple<Spanned<Token>>> {
+    let type_declarations = span_just!(Token::Keyword(Keyword::Type))
         .ignored()
         .then(
             select! {
                 Spanned(Token::Ident(s), span) => Spanned(Expr::TypeDec(Type(s)), span)
             }
-            .separated_by(span_just(Token::Comma)),
+            .separated_by(span_just!(Token::Comma)),
         )
         .map(|(_, elems)| elems);
-    let symbol_dec = span_just(Token::Keyword(Keyword::Symbol))
+    let symbol_dec = span_just!(Token::Keyword(Keyword::Symbol))
         .ignored()
         .then(select! {
             Spanned(Token::Ident(s), span) => Spanned(Ident(s), span)
         })
-        .then_ignore(span_just(Token::Colon))
+        .then_ignore(span_just!(Token::Colon))
         .then(
             select! {
                 Spanned(Token::Ident(s), span) => Spanned(s, span)
@@ -103,23 +105,23 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
                 let ident_a = ident.clone();
                 let ident_b = ident.clone();
 
-                let port_kind = span_just(Token::MinusInput)
+                let port_kind = span_just!(Token::MinusInput)
                     .map(move |_| PortKind::Input(Type(ident_a.clone().0)))
-                    .or(span_just(Token::PlusOutput)
+                    .or(span_just!(Token::PlusOutput)
                         .map(move |_| PortKind::Output(Type(ident_b.clone().0))));
 
-                let port_grouping = span_just(Token::NonDiscPartStart)
+                let port_grouping = span_just!(Token::NonDiscPartStart)
                     .ignored()
-                    .then(port_kind.clone().separated_by(span_just(Token::Comma)))
-                    .then_ignore(span_just(Token::NonDiscPartEnd))
+                    .then(port_kind.clone().separated_by(span_just!(Token::Comma)))
+                    .then_ignore(span_just!(Token::NonDiscPartEnd))
                     .map(|(_, ps)| PortGrouping::Partition(ps));
 
                 port_kind
                     .map(|p| PortGrouping::Singleton(p))
                     .or(port_grouping)
-                    .separated_by(span_just(Token::Comma))
+                    .separated_by(span_just!(Token::Comma))
             })
-            .separated_by(span_just(Token::Comma)),
+            .separated_by(span_just!(Token::Comma)),
         )
         .map(|((_, symbol), ports)| {
             Spanned(
@@ -134,17 +136,17 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
         select! {
             Spanned(Token::Ident(s), span) => Spanned(Ident(s), span)
         }
-        .then_ignore(span_just(Token::LeftParen))
+        .then_ignore(span_just!(Token::LeftParen))
         .then(
             choice((
                 expr.map(|agent: Spanned<Agent>| Spanned(Port::Agent(agent.0), agent.1)),
                 select! {Spanned(Token::Ident(s), span) => Spanned(s, span)}
                     .map(|var_ident| Spanned(Port::Var(Ident(var_ident.0)), var_ident.1)),
             ))
-            .separated_by(span_just(Token::Comma))
+            .separated_by(span_just!(Token::Comma))
             .or_not(),
         )
-        .then_ignore(span_just(Token::RightParen))
+        .then_ignore(span_just!(Token::RightParen))
         .map(|(name, ports)| {
             Spanned(
                 Agent {
@@ -162,17 +164,17 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
     let net = agent
         .clone()
         .map(|s| Spanned(Some(s.0), s.1))
-        .or(span_just(Token::LeftParen)
-            .then_ignore(span_just(Token::RightParen))
-            .map(|s| Spanned(None, s.1)))
+        .or(span_just!(Token::LeftParen)
+            .then_ignore(span_just!(Token::RightParen))
+            .map(|s| Spanned(None, s)))
         .clone()
-        .then_ignore(span_just(Token::ActivePair))
+        .then_ignore(span_just!(Token::ActivePair))
         .then(
             agent
                 .map(|s| Spanned(Some(s.0), s.1))
-                .or(span_just(Token::LeftParen)
-                    .then_ignore(span_just(Token::RightParen))
-                    .map(|s| Spanned(None, s.1))),
+                .or(span_just!(Token::LeftParen)
+                    .then_ignore(span_just!(Token::RightParen))
+                    .map(|s| Spanned(None, s))),
         )
         .map(
             |(lhs, rhs): (Spanned<Option<Agent>>, Spanned<Option<Agent>>)| {
@@ -192,6 +194,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
         net.map(|x| vec![x]),
     ))
     .repeated()
+    .then_ignore(end())
     .flatten()
 }
 
@@ -213,16 +216,15 @@ symbol xyz: atom+
 symbol xyz: atom+"];
 
         for case in cases {
-            assert!(parser()
-                .parse(
-                    lexer()
-                        .parse(case)
-                        .unwrap()
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>()
-                )
-                .is_err());
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed);
+
+            assert!(parsed.is_err());
         }
     }
 
