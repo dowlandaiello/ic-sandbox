@@ -36,10 +36,10 @@ impl TypedProgram {
     }
 }
 
-pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec<Simple<Expr>>) {
+pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec<Simple<char>>) {
     statements.into_iter().fold(
         (Default::default(), Default::default()),
-        |mut acc: (TypedProgram, Vec<Simple<Expr>>), x| {
+        |mut acc: (TypedProgram, Vec<Simple<char>>), x| {
             // Guard conflicting identifiers
             // Cannot have the same name, symbol, or rule twice
             match &x {
@@ -69,6 +69,8 @@ pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec
 
                         return acc;
                     }
+
+                    acc.0.push_type(ty.clone());
                 }
             }
 
@@ -113,4 +115,41 @@ pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec
             acc
         },
     )
+}
+
+#[cfg(test)]
+mod test {
+    use super::{super::parser_lafont, *};
+    use chumsky::{stream::Stream, Parser};
+
+    #[test]
+    fn test_duplicate_identifiers() {
+        let program = "type xyz
+type xyz
+type xyz
+
+symbol abc: xyz+
+symbol abc: xyz+
+";
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (_, error_reports) = parse_typed_program(parsed);
+
+        assert_eq!(
+            error_reports,
+            vec![
+                Simple::custom(14..17, "duplicate type: xyz"),
+                Simple::custom(23..26, "duplicate type: xyz")
+            ]
+        );
+    }
 }

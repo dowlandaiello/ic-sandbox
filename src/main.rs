@@ -1,9 +1,12 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use chumsky::{error::Simple, Parser, Stream};
+use chumsky::{
+    error::{Error, Simple},
+    Parser,
+};
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
 use inetlib::{
-    ast_lafont::Expr,
-    parser_lafont::{self, Spanned},
+    heuristics::{self, TypedProgram},
+    parser_lafont::{self},
     preprocessor,
 };
 use std::{
@@ -32,10 +35,10 @@ fn main() {
     let arg_matches = cmd.get_matches();
     match arg_matches.subcommand() {
         Some(("compile", arg_matches)) => {
-            transform_input_to_output(arg_matches, |_e: Vec<Spanned<Expr>>| todo!());
+            transform_input_to_output(arg_matches, |_e| todo!());
         }
         Some(("eval", arg_matches)) => {
-            transform_input_to_output(arg_matches, |_e: Vec<Spanned<Expr>>| todo!());
+            transform_input_to_output(arg_matches, |_e| todo!());
         }
         Some(("dev", _)) => {
             loop {
@@ -57,7 +60,7 @@ fn main() {
                 }
 
                 // Try parsing input as an expr
-                let in_expr = assert_parse_ok("".into(), ".".into(), input.trim());
+                let _ = assert_parse_ok("".into(), ".".into(), input.trim());
 
                 loop {
                     print!("print_net|debug_net|print_ast|debug_ast|reduce|exit > ");
@@ -74,17 +77,10 @@ fn main() {
                         "print_net" => todo!(),
                         "debug_net" => todo!(),
                         "print_ast" => {
-                            println!(
-                                "{}",
-                                in_expr
-                                    .iter()
-                                    .map(|line| line.to_string())
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            );
+                            todo!()
                         }
                         "debug_ast" => {
-                            println!("{:?}", in_expr);
+                            todo!()
                         }
                         "reduce" => { /*match in_expr.clone().to_application() {
                                  Some((ast_rules, ast_instance)) => {
@@ -122,10 +118,7 @@ fn main() {
     };
 }
 
-fn transform_input_to_output(
-    args: &ArgMatches,
-    transformer: impl Fn(Vec<Spanned<Expr>>) -> Vec<u8>,
-) {
+fn transform_input_to_output(args: &ArgMatches, transformer: impl Fn(TypedProgram) -> Vec<u8>) {
     let out_fname = args
         .get_one::<String>("out")
         .expect("missing output file name");
@@ -143,7 +136,7 @@ fn transform_input_to_output(
 
     let input_path = PathBuf::from(input_fname);
 
-    let parsed: Vec<Spanned<Expr>> = assert_parse_ok(
+    let parsed: TypedProgram = assert_parse_ok(
         input_path.clone(),
         input_path
             .ancestors()
@@ -187,30 +180,38 @@ fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Vec<Spanned<Expr>> {
+fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedProgram {
     let input = preprocessor::parser(working_dir, input);
 
-    let errs: Vec<Simple<String>> = match parser_lafont::lexer()
+    let errs: Vec<Simple<char>> = match parser_lafont::lexer()
         .parse(input.as_str())
         .map_err(|e| {
             e.into_iter()
-                .map(|e| Simple::<String>::custom(e.span(), format!("{}", e)))
+                .map(|e| e.with_label("lexing error"))
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
             parser_lafont::parser()
-                .parse::<_, _>(Stream::from_iter(
-                    0..input.len(),
-                    res.into_iter()
-                        .flatten()
-                        .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
-                ))
+                .parse(res.into_iter().flatten().collect::<Vec<_>>())
                 .map_err(|e| {
                     e.into_iter()
                         .map(|e| {
-                            Simple::custom(e.span(), format!("{}", e.map(|spanned| spanned.0)))
+                            e.map(|s| s.0.to_string().chars().next().unwrap())
+                                .with_label("parsing error")
                         })
                         .collect::<Vec<_>>()
+                })
+                .and_then(|res| {
+                    let (output, errors) = heuristics::parse_typed_program(res);
+
+                    if !errors.is_empty() {
+                        Err(errors
+                            .into_iter()
+                            .map(|e| e.with_label("typing error"))
+                            .collect::<Vec<_>>())
+                    } else {
+                        Ok(output)
+                    }
                 })
         }) {
         Ok(v) => {
@@ -229,7 +230,11 @@ fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Vec<Spa
             .with_message(err.to_string().clone())
             .with_label(
                 Label::new((fname, err.span()))
-                    .with_message(err.to_string())
+                    .with_message(if let Some(label) = err.label() {
+                        format!("{}: {}", label, err.to_string())
+                    } else {
+                        err.to_string()
+                    })
                     .with_color(Color::Red),
             )
             .finish()

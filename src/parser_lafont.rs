@@ -29,15 +29,12 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     let keyword = just::<char, _, _>("type")
         .map(|_| Token::Keyword(Keyword::Type))
         .or(just("symbol").map(|_| Token::Keyword(Keyword::Symbol)));
-    let semicolon = just(";").map(|_| Token::Semicolon);
     let colon = just(":").map(|_| Token::Colon);
     let comma = just(",").map(|_| Token::Comma);
     let plus_output = just("+").map(|_| Token::PlusOutput);
     let minus_output = just("-").map(|_| Token::MinusInput);
     let non_disc_part_start = just("{{").map(|_| Token::NonDiscPartStart);
     let non_disc_part_end = just("}}").map(|_| Token::NonDiscPartEnd);
-    let left_square_bracket = just("[").map(|_| Token::LeftSquareBracket);
-    let right_square_bracket = just("]").map(|_| Token::RightSquareBracket);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
@@ -47,15 +44,12 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
 
     let token = choice((
         keyword,
-        semicolon,
         colon,
         comma,
         plus_output,
         minus_output,
         non_disc_part_start,
         non_disc_part_end,
-        left_square_bracket,
-        right_square_bracket,
         left_paren,
         right_paren,
         active_pair,
@@ -76,6 +70,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         )
         .allow_leading()
         .allow_trailing()
+        .then_ignore(end())
 }
 
 pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simple<Spanned<Token>>> {
@@ -205,9 +200,50 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_bad_parse() {
+        let cases = ["# These are duplicate types, the compiler
+# will pick up on this and error out
+type atom
+type atom
+
+bruh
+
+# These are also duplicate symbols
+symbol xyz: atom+
+symbol xyz: atom+"];
+
+        for case in cases {
+            assert!(parser()
+                .parse(
+                    lexer()
+                        .parse(case)
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                )
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn test_bad_lex() {
+        let cases = [
+            ";;;",
+            "type atom
+;;;",
+        ];
+
+        for case in cases {
+            assert!(lexer().parse(case).is_err());
+        }
+    }
+
+    #[test]
     fn test_parser() {
-        let cases = [(
-            "type atom, list
+        let cases = [
+            (
+                "type atom, list
              symbol P: atom+
              symbol O: atom+
              symbol L: atom+
@@ -216,7 +252,7 @@ mod test {
              symbol Append: list-, list-, list+
              Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
              Nil() >< Append(v, v)",
-            "type atom
+                "type atom
 type list
 symbol P: atom+
 symbol O: atom+
@@ -226,7 +262,22 @@ symbol Nil: list+
 symbol Append: list-, list-, list+
 Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
 Nil() >< Append(v, v)",
-        )];
+            ),
+            (
+                "# These are duplicate types, the compiler
+# will pick up on this and error out
+type atom
+type atom
+
+# These are also duplicate symbols
+symbol xyz: atom+
+symbol xyz: atom+",
+                "type atom
+type atom
+symbol xyz: atom+
+symbol xyz: atom+",
+            ),
+        ];
 
         for (case, expected) in cases {
             let lexed = lexer()
@@ -284,7 +335,7 @@ Nil >< Append ( v , v )",
                 lexer()
                     .parse(case)
                     .unwrap()
-                    .iter()
+                    .into_iter()
                     .map(|tok| tok
                         .iter()
                         .map(|t| t.0.to_string())
