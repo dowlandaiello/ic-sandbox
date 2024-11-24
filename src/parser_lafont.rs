@@ -1,5 +1,5 @@
 use super::{
-    ast_lafont::{Agent, Expr, Ident, Keyword, Port, PortKind, Token, Type},
+    ast_lafont::{Agent, Expr, Ident, Keyword, Net, Port, PortKind, Token, Type},
     COMMENT_STR,
 };
 use chumsky::{
@@ -7,14 +7,17 @@ use chumsky::{
     prelude::*,
     text::{self, Character},
 };
-use std::ops::{Deref, Range};
+use std::{
+    fmt,
+    ops::{Deref, Range},
+};
 
 pub type Span = Range<usize>;
 
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub struct Spanned<T>(T, Range<usize>);
+#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct Spanned<T: fmt::Debug>(T, Range<usize>);
 
-impl<T> Deref for Spanned<T> {
+impl<T: fmt::Debug> Deref for Spanned<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -31,7 +34,6 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     let comma = just(",").map(|_| Token::Comma);
     let plus_output = just("+").map(|_| Token::PlusOutput);
     let minus_output = just("-").map(|_| Token::MinusInput);
-    let unit = just("()").map(|_| Token::Unit);
     let non_disc_part_start = just("{{").map(|_| Token::NonDiscPartStart);
     let non_disc_part_end = just("}}").map(|_| Token::NonDiscPartEnd);
     let left_square_bracket = just("[").map(|_| Token::LeftSquareBracket);
@@ -50,7 +52,6 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         comma,
         plus_output,
         minus_output,
-        unit,
         non_disc_part_start,
         non_disc_part_end,
         left_square_bracket,
@@ -86,10 +87,14 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
 
     let type_declarations = span_just(Token::Keyword(Keyword::Type))
         .ignored()
-        .then(select! {
-            Spanned(Token::Ident(s), span) => Spanned(Expr::TypeDec(Type(s)), span)
-        })
-        .map(|(_, x)| x.0);
+        .then(
+            select! {
+                Spanned(Token::Ident(s), span) => Spanned(Expr::TypeDec(Type(s)), span)
+            }
+            .map(|e| e.0)
+            .separated_by(span_just(Token::Comma)),
+        )
+        .map(|(_, elems)| elems);
     let symbol_dec = span_just(Token::Keyword(Keyword::Symbol))
         .ignored()
         .then(select! {
@@ -119,6 +124,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
         select! {
             Spanned(Token::Ident(s), span) => Spanned(Ident(s), span)
         }
+        .then_ignore(span_just(Token::LeftParen))
         .then(
             choice((
                 expr.map(|agent: Spanned<Agent>| Spanned(Port::Agent(agent.0), agent.1)),
@@ -126,25 +132,103 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
                     .map(|var_ident| Spanned(Port::Var(Ident(var_ident.0)), var_ident.1)),
             ))
             .separated_by(span_just(Token::Comma))
-            .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen)),
+            .or_not(),
         )
+        .then_ignore(span_just(Token::RightParen))
         .map(|(name, ports)| {
             Spanned(
                 Agent {
                     name: name.0,
-                    ports: ports.into_iter().map(|p| p.0).collect::<Vec<_>>(),
+                    ports: ports
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|p| p.0)
+                        .collect::<Vec<_>>(),
                 },
                 name.1,
             )
         })
     });
+    let net = agent
+        .clone()
+        .map(|s| Spanned(Some(s.0), s.1))
+        .or(span_just(Token::LeftParen)
+            .then_ignore(span_just(Token::RightParen))
+            .map(|s| Spanned(None, s.1)))
+        .clone()
+        .then_ignore(span_just(Token::ActivePair))
+        .then(
+            agent
+                .map(|s| Spanned(Some(s.0), s.1))
+                .or(span_just(Token::LeftParen)
+                    .then_ignore(span_just(Token::RightParen))
+                    .map(|s| Spanned(None, s.1))),
+        )
+        .map(
+            |(lhs, rhs): (Spanned<Option<Agent>>, Spanned<Option<Agent>>)| {
+                Expr::Net(Net {
+                    lhs: lhs.0,
+                    rhs: rhs.0,
+                })
+            },
+        );
 
-    choice((type_declarations, symbol_dec)).repeated()
+    choice((
+        type_declarations,
+        symbol_dec.map(|x| vec![x]),
+        net.map(|x| vec![x]),
+    ))
+    .repeated()
+    .flatten()
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_parser() {
+        let cases = [(
+            "type atom, list
+             symbol P: atom+
+             symbol O: atom+
+             symbol L: atom+
+             symbol Cons: list+, atom-, list-
+             symbol Nil: list+
+             symbol Append: list-, list-, list+
+             Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
+             Nil() >< Append(v, v)",
+            "type atom
+type list
+symbol P: atom+
+symbol O: atom+
+symbol L: atom+
+symbol Cons: list+, atom-, list-
+symbol Nil: list+
+symbol Append: list-, list-, list+
+Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
+Nil() >< Append(v, v)",
+        )];
+
+        for (case, expected) in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            assert_eq!(
+                expected,
+                parsed
+                    .into_iter()
+                    .map(|expr| expr.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+        }
+    }
 
     #[test]
     fn test_lex() {

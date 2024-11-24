@@ -1,4 +1,4 @@
-# DEVM
+# DVM
 
 Low-level intermediary representation "language" for general interaction calculus-based languages. Supports general interaction net rule programs, including but not limited to interaction combinators. Includes a single-threaded reducer, `icc` for prototyping and proving purposes.
 

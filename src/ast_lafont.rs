@@ -1,3 +1,4 @@
+use super::UNIT_STR;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,7 +86,16 @@ impl fmt::Display for Expr {
                     .join(", ")
             ),
             Self::Net(Net { lhs, rhs }) => {
-                write!(f, "{} >< {}", lhs, rhs)
+                write!(
+                    f,
+                    "{} >< {}",
+                    lhs.as_ref()
+                        .map(|s| s.to_string())
+                        .unwrap_or(UNIT_STR.to_owned()),
+                    rhs.as_ref()
+                        .map(|s| s.to_string())
+                        .unwrap_or(UNIT_STR.to_owned())
+                )
             }
         }
     }
@@ -93,8 +103,8 @@ impl fmt::Display for Expr {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Net {
-    pub lhs: Agent,
-    pub rhs: Agent,
+    pub lhs: Option<Agent>,
+    pub rhs: Option<Agent>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
