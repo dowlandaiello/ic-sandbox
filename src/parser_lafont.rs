@@ -1,5 +1,5 @@
 use super::{
-    ast_lafont::{Expr, Ident, Keyword, PortKind, Token, Type},
+    ast_lafont::{Agent, Expr, Ident, Keyword, Port, PortKind, Token, Type},
     COMMENT_STR,
 };
 use chumsky::{
@@ -115,6 +115,29 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
             ident: symbol.clone().0,
             ports,
         });
+    let agent = recursive(|expr| {
+        select! {
+            Spanned(Token::Ident(s), span) => Spanned(Ident(s), span)
+        }
+        .then(
+            choice((
+                expr.map(|agent: Spanned<Agent>| Spanned(Port::Agent(agent.0), agent.1)),
+                select! {Spanned(Token::Ident(s), span) => Spanned(s, span)}
+                    .map(|var_ident| Spanned(Port::Var(Ident(var_ident.0)), var_ident.1)),
+            ))
+            .separated_by(span_just(Token::Comma))
+            .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen)),
+        )
+        .map(|(name, ports)| {
+            Spanned(
+                Agent {
+                    name: name.0,
+                    ports: ports.into_iter().map(|p| p.0).collect::<Vec<_>>(),
+                },
+                name.1,
+            )
+        })
+    });
 
     choice((type_declarations, symbol_dec)).repeated()
 }
