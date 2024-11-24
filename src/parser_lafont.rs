@@ -15,7 +15,7 @@ use std::{
 pub type Span = Range<usize>;
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct Spanned<T: fmt::Debug>(T, Range<usize>);
+pub struct Spanned<T: fmt::Debug>(pub T, pub Range<usize>);
 
 impl<T: fmt::Debug> Deref for Spanned<T> {
     type Target = T;
@@ -78,7 +78,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         .allow_trailing()
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned<Token>>> {
+pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simple<Spanned<Token>>> {
     let span_just = move |val: Token| {
         filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
             **tok == val
@@ -91,7 +91,6 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
             select! {
                 Spanned(Token::Ident(s), span) => Spanned(Expr::TypeDec(Type(s)), span)
             }
-            .map(|e| e.0)
             .separated_by(span_just(Token::Comma)),
         )
         .map(|(_, elems)| elems);
@@ -116,9 +115,14 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
             })
             .separated_by(span_just(Token::Comma)),
         )
-        .map(|((_, symbol), ports)| Expr::Symbol {
-            ident: symbol.clone().0,
-            ports,
+        .map(|((_, symbol), ports)| {
+            Spanned(
+                Expr::Symbol {
+                    ident: symbol.clone().0,
+                    ports,
+                },
+                symbol.clone().1,
+            )
         });
     let agent = recursive(|expr| {
         select! {
@@ -166,10 +170,13 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Expr>, Error = Simple<Spanned
         )
         .map(
             |(lhs, rhs): (Spanned<Option<Agent>>, Spanned<Option<Agent>>)| {
-                Expr::Net(Net {
-                    lhs: lhs.0,
-                    rhs: rhs.0,
-                })
+                Spanned(
+                    Expr::Net(Net {
+                        lhs: lhs.0,
+                        rhs: rhs.0,
+                    }),
+                    lhs.1,
+                )
             },
         );
 
