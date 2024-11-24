@@ -1,14 +1,18 @@
 use std::fmt;
 
+#[derive(Debug, PartialEq)]
 pub struct Ident(pub String);
 
+#[derive(Debug, PartialEq)]
 pub struct Type(pub String);
 
+#[derive(Debug, PartialEq)]
 pub enum Token {
     Keyword(Keyword),
     Ident(String),
     Semicolon,
     Colon,
+    Comma,
     PlusOutput,
     MinusInput,
     Unit,
@@ -18,6 +22,7 @@ pub enum Token {
     RightSquareBracket,
     LeftParen,
     RightParen,
+    ActivePair,
 }
 
 impl fmt::Display for Token {
@@ -28,6 +33,7 @@ impl fmt::Display for Token {
             Self::Ident(s) => write!(f, "{}", s),
             Self::Semicolon => write!(f, ";"),
             Self::Colon => write!(f, ":"),
+            Self::Comma => write!(f, ","),
             Self::PlusOutput => write!(f, "+"),
             Self::MinusInput => write!(f, "-"),
             Self::Unit => write!(f, "()"),
@@ -37,10 +43,12 @@ impl fmt::Display for Token {
             Self::RightSquareBracket => write!(f, "]"),
             Self::LeftParen => write!(f, "("),
             Self::RightParen => write!(f, ")"),
+            Self::ActivePair => write!(f, "><"),
         }
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Keyword {
     Type,
     Symbol,
@@ -55,6 +63,7 @@ impl fmt::Display for Keyword {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Expr {
     TypeDec(Type),
     Symbol { ident: Ident, ports: Vec<PortKind> },
@@ -82,11 +91,13 @@ impl fmt::Display for Expr {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Net {
     pub lhs: Agent,
     pub rhs: Agent,
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Agent {
     pub name: Ident,
     pub ports: Vec<Port>,
@@ -107,6 +118,7 @@ impl fmt::Display for Agent {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum PortKind {
     Input(Type),
     Output(Type),
@@ -130,6 +142,7 @@ impl fmt::Display for PortKind {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Port {
     Agent(Agent),
     Var(Ident),

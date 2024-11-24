@@ -2,16 +2,22 @@ use super::{
     ast_lafont::{Keyword, Token},
     COMMENT_STR,
 };
-use chumsky::{error::Simple, prelude::*};
+use chumsky::{
+    error::Simple,
+    prelude::*,
+    text::{self, Character},
+};
 use std::ops::Range;
 
-pub fn lex<'src>() -> impl Parser<&'src str, Vec<(Token, Range<usize>)>, Error = Simple<&'src str>>
-{
-    let keyword = just("type")
+type Span = Range<usize>;
+
+pub fn lexer<'src>() -> impl Parser<char, Vec<Vec<(Token, Span)>>, Error = Simple<char>> {
+    let keyword = just::<char, _, _>("type")
         .map(|_| Token::Keyword(Keyword::Type))
         .or(just("symbol").map(|_| Token::Keyword(Keyword::Symbol)));
     let semicolon = just(";").map(|_| Token::Semicolon);
     let colon = just(":").map(|_| Token::Colon);
+    let comma = just(",").map(|_| Token::Comma);
     let plus_output = just("+").map(|_| Token::PlusOutput);
     let minus_output = just("-").map(|_| Token::MinusInput);
     let unit = just("()").map(|_| Token::Unit);
@@ -21,27 +27,94 @@ pub fn lex<'src>() -> impl Parser<&'src str, Vec<(Token, Range<usize>)>, Error =
     let right_square_bracket = just("]").map(|_| Token::RightSquareBracket);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
-    let ident = any().map(|s: &str| Token::Ident(s.to_owned()));
+    let ident = text::ident().map(|s: String| Token::Ident(s));
+    let active_pair = just("><").map(|_| Token::ActivePair);
+    let comment = just(COMMENT_STR).then_ignore(text::newline().not().repeated());
+    let inline_space = filter(Character::is_inline_whitespace);
 
-    let token = keyword
-        .or(semicolon)
-        .or(colon)
-        .or(plus_output)
-        .or(minus_output)
-        .or(unit)
-        .or(non_disc_part_start)
-        .or(non_disc_part_end)
-        .or(left_square_bracket)
-        .or(right_square_bracket)
-        .or(left_paren)
-        .or(right_paren)
-        .or(ident);
-
-    let comment = just(COMMENT_STR).then_ignore(just("\n").not().repeated());
+    let token = choice((
+        keyword,
+        semicolon,
+        colon,
+        comma,
+        plus_output,
+        minus_output,
+        unit,
+        non_disc_part_start,
+        non_disc_part_end,
+        left_square_bracket,
+        right_square_bracket,
+        left_paren,
+        right_paren,
+        active_pair,
+        ident,
+    ));
 
     token
-        .map_with_span(|tok, e: Range<usize>| (tok, e))
-        .padded_by(comment.repeated())
-        .padded_by(just("\n"))
+        .padded_by(inline_space.repeated().or_not())
+        .map_with_span(|tok, e: Span| (tok, e))
         .repeated()
+        .separated_by(
+            comment
+                .padded()
+                .map(|_| ())
+                .or(text::newline())
+                .repeated()
+                .at_least(1),
+        )
+        .allow_leading()
+        .allow_trailing()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_lex() {
+        let cases = [(
+            "type atom, list
+             # This line has a comment
+             symbol P: atom+
+
+             # And this one
+             symbol O: atom+
+
+             # And this one
+
+             symbol L: atom+
+             symbol Cons: list+, atom-, list-
+             symbol Nil: list+
+             symbol Append: list-, list-, list+
+
+             Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
+             Nil >< Append(v, v)",
+            "type atom , list
+symbol P : atom +
+symbol O : atom +
+symbol L : atom +
+symbol Cons : list + , atom - , list -
+symbol Nil : list +
+symbol Append : list - , list - , list +
+Cons ( x , Append ( v , t ) ) >< Append ( v , Cons ( x , t ) )
+Nil >< Append ( v , v )",
+        )];
+
+        for (case, expected) in cases {
+            assert_eq!(
+                expected,
+                lexer()
+                    .parse(case)
+                    .unwrap()
+                    .iter()
+                    .map(|tok| tok
+                        .iter()
+                        .map(|t| t.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" "))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+    }
 }
