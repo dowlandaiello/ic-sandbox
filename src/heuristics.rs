@@ -48,6 +48,10 @@ impl TypedProgram {
             .or_default()
             .extend(ports);
     }
+
+    pub fn push_net(&mut self, net: Net) {
+        self.nets.insert(net);
+    }
 }
 
 pub fn parse_typed_program(
@@ -139,7 +143,7 @@ pub fn parse_typed_program(
                         if !acc.0.has_symbol(&check_agent.name) {
                             acc.1.push(Simple::custom(
                                 span.clone(),
-                                format!("agent references unknown sysmbol {}", check_agent.name),
+                                format!("agent references unknown symbol {}", check_agent.name),
                             ));
 
                             return acc;
@@ -152,6 +156,95 @@ pub fn parse_typed_program(
                         }));
                     }
                 }
+                _ => {}
+            }
+
+            // Guard all redex are joined by opposite polarity, same type ports
+            match &x {
+                Spanned(Expr::Net(Net { lhs, rhs }), span) => match lhs.as_ref().zip(rhs.as_ref()) {
+                    Some((lhs, rhs)) => {
+                        let ty_lhs = acc.0.get_declaration_for(&lhs.name);
+                        let ty_rhs = acc.0.get_declaration_for(&rhs.name);
+
+                        match (ty_lhs, ty_rhs) {
+                            (Some(ty_lhs), Some(ty_rhs)) => {
+				if let Some((port_lhs, port_rhs)) = ty_lhs.iter().zip(ty_rhs.iter()).next() {
+				    match (port_lhs, port_rhs) {
+					(PortGrouping::Singleton(PortKind::Input(ty)), PortGrouping::Singleton(PortKind::Output(ty2))) | (PortGrouping::Singleton(PortKind::Output(ty)), PortGrouping::Singleton(PortKind::Input(ty2))) => {
+					    if ty != ty2 {
+						acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!(
+                                        "agents {}, {} have primary ports with unmatched types; found {} and {}, which do not match",
+                                        lhs.name, rhs.name, ty, ty2
+                                    )));
+
+					    return acc;
+					    }
+
+					    acc.0.push_net(Net { lhs: Some(lhs.clone()), rhs: Some(rhs.clone())});
+					},
+					_ => {
+					    acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!(
+                                        "agents {}, {} do not have equally typed, complementary primary ports",
+                                        lhs.name, rhs.name
+                                    )));
+
+					    return acc;
+					}
+				    }
+				} else {
+				    acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!(
+                                        "missing type primary port connection for agents {}, {}",
+                                        lhs.name, rhs.name
+                                    ),
+                                ));
+
+                                return acc;
+				}
+			    }
+                            (None, None) => {
+                                acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!(
+                                        "missing type declarations for agents {}, {}",
+                                        lhs.name, rhs.name
+                                    ),
+                                ));
+
+                                return acc;
+                            }
+                            (_, None) => {
+                                acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!("missing type declaration for agent {}", rhs.name),
+                                ));
+
+                                return acc;
+                            }
+                            (None, _) => {
+                                acc.1.push(Simple::custom(
+                                    span.clone(),
+                                    format!("missing type declaration for agent {}", lhs.name),
+                                ));
+
+                                return acc;
+                            }
+                        }
+                    }
+                    None => {
+                        acc.1.push(Simple::custom(
+                            span.clone(),
+                            String::from("unit rules are not allowed"),
+                        ));
+
+                        return acc;
+                    }
+                },
                 _ => {}
             }
 
@@ -191,7 +284,8 @@ symbol abc: xyz+
             error_reports,
             vec![
                 Simple::custom(14..17, "duplicate type: xyz"),
-                Simple::custom(23..26, "duplicate type: xyz")
+                Simple::custom(23..26, "duplicate type: xyz"),
+                Simple::custom(52..55, "duplicate symbol: abc"),
             ]
         );
     }
