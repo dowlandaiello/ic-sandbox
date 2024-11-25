@@ -1154,7 +1154,8 @@ pub struct Agent {
 
 #[cfg(test)]
 mod test {
-    use super::{super::super::ast, *};
+    use super::*;
+    use crate::parser::ast;
     use chumsky::Parser;
     use test_log::test;
 

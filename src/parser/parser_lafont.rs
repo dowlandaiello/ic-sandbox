@@ -119,7 +119,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
         .map(|((_, symbol), ports)| {
             Spanned(
                 Expr::Symbol {
-                    ident: symbol.clone().0,
+                    ident: Type(symbol.clone().0 .0),
                     ports,
                 },
                 symbol.clone().1,
@@ -143,7 +143,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
         .map(|(name, ports)| {
             Spanned(
                 Agent {
-                    name: name.0,
+                    name: Type(name.0 .0),
                     ports: ports
                         .unwrap_or_default()
                         .into_iter()

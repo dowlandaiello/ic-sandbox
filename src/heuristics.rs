@@ -1,5 +1,5 @@
 use super::parser::{
-    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
+    ast_lafont::{Agent, Expr, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 #[derive(Default)]
 pub struct TypedProgram {
-    types: BTreeSet<Type>,
-    symbol_declarations_for: BTreeMap<Ident, Vec<PortGrouping>>,
-    nets: HashSet<Net>,
+    pub types: BTreeSet<Type>,
+    pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
+    pub nets: HashSet<Net>,
 }
 
 impl TypedProgram {
@@ -17,7 +17,7 @@ impl TypedProgram {
         self.types.contains(t)
     }
 
-    pub fn has_symbol(&self, s: &Ident) -> bool {
+    pub fn has_symbol(&self, s: &Type) -> bool {
         self.symbol_declarations_for.contains_key(s)
     }
 
@@ -25,7 +25,7 @@ impl TypedProgram {
         self.nets.contains(n)
     }
 
-    pub fn get_declaration_for(&self, symbol: &Ident) -> Option<&[PortGrouping]> {
+    pub fn get_declaration_for(&self, symbol: &Type) -> Option<&[PortGrouping]> {
         self.symbol_declarations_for
             .get(symbol)
             .map(|dec| dec.as_slice())
@@ -35,14 +35,14 @@ impl TypedProgram {
         self.types.insert(t);
     }
 
-    pub fn push_port_grouping(&mut self, ident: Ident, port: PortGrouping) {
+    pub fn push_port_grouping(&mut self, ident: Type, port: PortGrouping) {
         self.symbol_declarations_for
             .entry(ident)
             .or_default()
             .push(port);
     }
 
-    pub fn push_port_kinds(&mut self, ident: Ident, ports: Vec<PortGrouping>) {
+    pub fn push_port_kinds(&mut self, ident: Type, ports: Vec<PortGrouping>) {
         self.symbol_declarations_for
             .entry(ident)
             .or_default()
@@ -255,7 +255,8 @@ pub fn parse_typed_program(
 
 #[cfg(test)]
 mod test {
-    use super::{super::parser_lafont, *};
+    use super::*;
+    use crate::parser::parser_lafont;
     use chumsky::{stream::Stream, Parser};
 
     #[test]

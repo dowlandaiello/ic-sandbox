@@ -9,3 +9,4 @@ symbol Append: list-, list-, list+
 
 Cons(x, Append(v, t)) >< Append(v, Cons(x, t))
 Nil() >< Append(v, v)
+Nil() >< Append(P(), P())

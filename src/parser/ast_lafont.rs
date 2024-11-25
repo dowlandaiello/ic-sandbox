@@ -1,7 +1,8 @@
 use crate::UNIT_STR;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
 
 impl fmt::Display for Ident {
@@ -10,7 +11,7 @@ impl fmt::Display for Ident {
     }
 }
 
-#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Type(pub String);
 
 impl fmt::Display for Type {
@@ -74,7 +75,7 @@ impl fmt::Display for Keyword {
 pub enum Expr {
     TypeDec(Type),
     Symbol {
-        ident: Ident,
+        ident: Type,
         ports: Vec<PortGrouping>,
     },
     Net(Net),
@@ -116,9 +117,9 @@ pub struct Net {
     pub rhs: Option<Agent>,
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Agent {
-    pub name: Ident,
+    pub name: Type,
     pub ports: Vec<Port>,
 }
 
@@ -137,7 +138,7 @@ impl fmt::Display for Agent {
     }
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub enum PortGrouping {
     Singleton(PortKind),
     Partition(Vec<PortKind>),
@@ -163,7 +164,7 @@ impl fmt::Display for PortGrouping {
     }
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub enum PortKind {
     Input(Type),
     Output(Type),
@@ -178,7 +179,7 @@ impl fmt::Display for PortKind {
     }
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub enum Port {
     Agent(Agent),
     Var(Ident),
