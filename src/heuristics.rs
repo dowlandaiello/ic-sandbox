@@ -1,14 +1,14 @@
 use super::{
-    ast_lafont::{Expr, Ident, Net, PortGrouping, PortKind, Type},
+    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 #[derive(Default)]
 pub struct TypedProgram {
     types: BTreeSet<Type>,
-    symbol_declarations_for: BTreeMap<Ident, Vec<PortKind>>,
+    symbol_declarations_for: BTreeMap<Ident, Vec<PortGrouping>>,
     nets: HashSet<Net>,
 }
 
@@ -25,7 +25,7 @@ impl TypedProgram {
         self.nets.contains(n)
     }
 
-    pub fn get_declaration_for(&self, symbol: &Ident) -> Option<&[PortKind]> {
+    pub fn get_declaration_for(&self, symbol: &Ident) -> Option<&[PortGrouping]> {
         self.symbol_declarations_for
             .get(symbol)
             .map(|dec| dec.as_slice())
@@ -34,12 +34,28 @@ impl TypedProgram {
     pub fn push_type(&mut self, t: Type) {
         self.types.insert(t);
     }
+
+    pub fn push_port_grouping(&mut self, ident: Ident, port: PortGrouping) {
+        self.symbol_declarations_for
+            .entry(ident)
+            .or_default()
+            .push(port);
+    }
+
+    pub fn push_port_kinds(&mut self, ident: Ident, ports: Vec<PortGrouping>) {
+        self.symbol_declarations_for
+            .entry(ident)
+            .or_default()
+            .extend(ports);
+    }
 }
 
-pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec<Simple<char>>) {
+pub fn parse_typed_program(
+    statements: Vec<Spanned<Expr>>,
+) -> (TypedProgram, Vec<Simple<Spanned<Expr>>>) {
     statements.into_iter().fold(
         (Default::default(), Default::default()),
-        |mut acc: (TypedProgram, Vec<Simple<char>>), x| {
+        |mut acc: (TypedProgram, Vec<Simple<Spanned<Expr>>>), x| {
             // Guard conflicting identifiers
             // Cannot have the same name, symbol, or rule twice
             match &x {
@@ -107,6 +123,33 @@ pub fn parse_typed_program(statements: Vec<Spanned<Expr>>) -> (TypedProgram, Vec
                             span.clone(),
                             format!("symbol {} references unknown type {}", ident, unknown_type),
                         ));
+
+                        return acc;
+                    }
+
+                    acc.0.push_port_kinds(ident.clone(), ports.clone());
+                }
+                Spanned(Expr::Net(Net { lhs, rhs }), span) => {
+                    let mut to_check: VecDeque<&Agent> = VecDeque::from_iter(
+                        [lhs, rhs].map(|x| x.as_ref()).into_iter().filter_map(|x| x),
+                    );
+
+                    // All agent must have idents matching some symbol
+                    while let Some(check_agent) = to_check.pop_front() {
+                        if !acc.0.has_symbol(&check_agent.name) {
+                            acc.1.push(Simple::custom(
+                                span.clone(),
+                                format!("agent references unknown sysmbol {}", check_agent.name),
+                            ));
+
+                            return acc;
+                        }
+
+                        // Check all agent ports, too
+                        to_check.extend(check_agent.ports.iter().filter_map(|p| match p {
+                            Port::Var(_) => None,
+                            Port::Agent(ref a) => Some(a),
+                        }));
                     }
                 }
                 _ => {}

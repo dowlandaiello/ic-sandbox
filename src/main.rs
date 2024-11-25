@@ -1,6 +1,6 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::{
-    error::{Error, Simple},
+    error::{Error, Simple, SimpleReason},
     Parser,
 };
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
@@ -196,8 +196,11 @@ fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedPr
                 .map_err(|e| {
                     e.into_iter()
                         .map(|e| {
-                            e.map(|s| s.0.to_string().chars().next().unwrap())
-                                .with_label("parsing error")
+                            Simple::<char>::custom(
+                                e.found().unwrap().1.clone(),
+                                format!("{}", e.map(|x| x.0)),
+                            )
+                            .with_label("parsing error")
                         })
                         .collect::<Vec<_>>()
                 })
@@ -207,7 +210,16 @@ fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedPr
                     if !errors.is_empty() {
                         Err(errors
                             .into_iter()
-                            .map(|e| e.with_label("typing error"))
+                            .map(|e| {
+                                Simple::<char>::custom(
+                                    e.span(),
+                                    match e.reason() {
+                                        SimpleReason::Custom(s) => s.to_string(),
+                                        _ => unreachable!(),
+                                    },
+                                )
+                                .with_label("typing error")
+                            })
                             .collect::<Vec<_>>())
                     } else {
                         Ok(output)
@@ -231,7 +243,15 @@ fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedPr
             .with_label(
                 Label::new((fname, err.span()))
                     .with_message(if let Some(label) = err.label() {
-                        format!("{}: {}", label, err.to_string())
+                        format!(
+                            "{}: {}",
+                            label,
+                            if let SimpleReason::Custom(s) = err.reason() {
+                                s.to_string()
+                            } else {
+                                err.to_string()
+                            }
+                        )
                     } else {
                         err.to_string()
                     })
