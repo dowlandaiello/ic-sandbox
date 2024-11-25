@@ -259,6 +259,104 @@ mod test {
     use chumsky::{stream::Stream, Parser};
 
     #[test]
+    fn test_poorly_typed_mismatch() {
+        let program = "type atom
+type bruh
+
+# This cannot compile, since atom is not opposite polarity
+symbol xyz: atom+
+symbol abc: bruh-
+
+xyz() >< abc()";
+
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (_, error_reports) = parse_typed_program(parsed);
+
+        assert_eq!(
+            error_reports,
+            vec![Simple::custom(
+                117..120,
+                "agents xyz, abc have primary ports with unmatched types; found atom and bruh, which do not match"
+            ),]
+        );
+    }
+
+    #[test]
+    fn test_poorly_typed() {
+        let program = "type atom
+
+# This cannot compile, since atom is not opposite polarity
+symbol xyz: atom+
+
+xyz() >< xyz()";
+
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (_, error_reports) = parse_typed_program(parsed);
+
+        assert_eq!(
+            error_reports,
+            vec![Simple::custom(
+                89..92,
+                "agents xyz, xyz do not have equally typed, complementary primary ports"
+            ),]
+        );
+    }
+
+    #[test]
+    fn test_unrecognized_identifiers() {
+        let program = "type atom
+
+# This references a type that does not exist.
+# The compiler will tell you.
+symbol xyz: nat+
+
+# This redex also references symbols that don't exist
+# the compiler will also tell you
+bruh(alsounrecognized(), skibidi()) >< bruh()";
+
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (_, error_reports) = parse_typed_program(parsed);
+
+        assert_eq!(
+            error_reports,
+            vec![
+                Simple::custom(94..97, "symbol xyz references unknown type nat"),
+                Simple::custom(193..197, "agent references unknown symbol bruh"),
+            ]
+        );
+    }
+
+    #[test]
     fn test_duplicate_identifiers() {
         let program = "type xyz
 type xyz
