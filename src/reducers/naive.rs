@@ -1,4 +1,6 @@
-use super::super::ast::{ActivePairMember, Expr, Instance, InstanceActivePair, Rule, VarName};
+use super::super::parser::ast::{
+    ActivePairMember, Expr, Instance, InstanceActivePair, Rule, VarName,
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fmt, iter,

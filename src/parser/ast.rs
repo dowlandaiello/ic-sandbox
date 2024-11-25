@@ -1,4 +1,4 @@
-use super::COMMENT_STR;
+use crate::COMMENT_STR;
 use chumsky::{prelude::*, text, Error, Parser};
 use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, fmt};

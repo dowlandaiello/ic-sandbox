@@ -6,7 +6,7 @@ use chumsky::{
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches, Command};
 use inetlib::{
     heuristics::{self, TypedProgram},
-    parser_lafont::{self},
+    parser::parser_lafont::{self},
     preprocessor,
 };
 use std::{

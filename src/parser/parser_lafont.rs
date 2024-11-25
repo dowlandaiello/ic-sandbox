@@ -1,7 +1,7 @@
-use super::{
-    ast_lafont::{Agent, Expr, Ident, Keyword, Net, Port, PortGrouping, PortKind, Token, Type},
-    COMMENT_STR,
+use super::ast_lafont::{
+    Agent, Expr, Ident, Keyword, Net, Port, PortGrouping, PortKind, Token, Type,
 };
+use crate::COMMENT_STR;
 use chumsky::{
     error::Simple,
     prelude::*,

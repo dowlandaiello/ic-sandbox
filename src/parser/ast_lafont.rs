@@ -1,4 +1,4 @@
-use super::UNIT_STR;
+use crate::UNIT_STR;
 use std::fmt;
 
 #[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]

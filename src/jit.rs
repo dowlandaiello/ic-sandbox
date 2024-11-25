@@ -1,4 +1,4 @@
-use super::ast::{Instance, Rule};
+use super::parser::ast::{Instance, Rule};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt};
 

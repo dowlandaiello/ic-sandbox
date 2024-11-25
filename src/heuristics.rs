@@ -1,4 +1,4 @@
-use super::{
+use super::parser::{
     ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };

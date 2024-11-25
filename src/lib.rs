@@ -1,8 +1,6 @@
-pub mod ast;
-pub mod ast_lafont;
 pub mod heuristics;
 pub mod jit;
-pub mod parser_lafont;
+pub mod parser;
 pub mod preprocessor;
 pub mod reducers;
 
