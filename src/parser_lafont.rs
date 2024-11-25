@@ -33,8 +33,8 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     let comma = just(",").map(|_| Token::Comma);
     let plus_output = just("+").map(|_| Token::PlusOutput);
     let minus_output = just("-").map(|_| Token::MinusInput);
-    let non_disc_part_start = just("{{").map(|_| Token::NonDiscPartStart);
-    let non_disc_part_end = just("}}").map(|_| Token::NonDiscPartEnd);
+    let non_disc_part_start = just(r#"{"#).map(|_| Token::NonDiscPartStart);
+    let non_disc_part_end = just(r#"}"#).map(|_| Token::NonDiscPartEnd);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
@@ -88,6 +88,23 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
             .separated_by(span_just(Token::Comma)),
         )
         .map(|(_, elems)| elems);
+    let port = select! {
+            Spanned(Token::Ident(s), span) => Spanned(s, span)
+    }
+    .then_with(move |ident| {
+        let ident_a = ident.clone();
+        let ident_b = ident.clone();
+
+        span_just(Token::MinusInput)
+            .map(move |_| PortKind::Input(Type(ident_a.clone().0)))
+            .or(span_just(Token::PlusOutput)
+                .map(move |_| PortKind::Output(Type(ident_b.clone().0))))
+    });
+    let port_grouping = span_just(Token::NonDiscPartStart)
+        .ignored()
+        .then(port.clone().separated_by(span_just(Token::Comma)))
+        .then_ignore(span_just(Token::NonDiscPartEnd))
+        .map(|(_, ps)| PortGrouping::Partition(ps));
     let symbol_dec = span_just(Token::Keyword(Keyword::Symbol))
         .ignored()
         .then(select! {
@@ -95,36 +112,15 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
         })
         .then_ignore(span_just(Token::Colon))
         .then(
-            select! {
-                Spanned(Token::Ident(s), span) => Spanned(s, span)
-            }
-            .then_with(move |ident| {
-                let ident_a = ident.clone();
-                let ident_b = ident.clone();
-
-                let port_kind = span_just(Token::MinusInput)
-                    .map(move |_| PortKind::Input(Type(ident_a.clone().0)))
-                    .or(span_just(Token::PlusOutput)
-                        .map(move |_| PortKind::Output(Type(ident_b.clone().0))));
-
-                let port_grouping = span_just(Token::NonDiscPartStart)
-                    .ignored()
-                    .then(port_kind.clone().separated_by(span_just(Token::Comma)))
-                    .then_ignore(span_just(Token::NonDiscPartEnd))
-                    .map(|(_, ps)| PortGrouping::Partition(ps));
-
-                port_kind
-                    .map(|p| PortGrouping::Singleton(p))
-                    .or(port_grouping)
-                    .separated_by(span_just(Token::Comma))
-            })
-            .separated_by(span_just(Token::Comma)),
+            port.map(|p| PortGrouping::Singleton(p))
+                .or(port_grouping)
+                .separated_by(span_just(Token::Comma)),
         )
         .map(|((_, symbol), ports)| {
             Spanned(
                 Expr::Symbol {
                     ident: symbol.clone().0,
-                    ports: ports.into_iter().flatten().collect(),
+                    ports,
                 },
                 symbol.clone().1,
             )
