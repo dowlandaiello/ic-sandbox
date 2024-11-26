@@ -117,6 +117,16 @@ pub struct Net {
     pub rhs: Option<Agent>,
 }
 
+impl fmt::Display for Net {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some((lhs, rhs)) = self.lhs.as_ref().zip(self.rhs.as_ref()) {
+            write!(f, "{} >< {}", lhs, rhs)
+        } else {
+            write!(f, "")
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Agent {
     pub name: Type,

@@ -5,7 +5,7 @@ use super::parser::{
 use chumsky::error::Simple;
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TypedProgram {
     pub types: BTreeSet<Type>,
     pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,

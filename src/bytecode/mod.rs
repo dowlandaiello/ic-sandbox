@@ -1,6 +1,6 @@
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Net, PortGrouping, PortKind, Type},
+    parser::ast_lafont::{Agent, PortGrouping, PortKind, Type},
     BYTECODE_INDENTATION_STR,
 };
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
 };
+
+pub mod vm;
 
 pub type Ptr = usize;
 
@@ -42,6 +44,8 @@ pub struct CallSignature {
 pub struct Program {
     pub names: BTreeSet<Type>,
 
+    pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
+
     // Hash of all input ports to an output agent, and their output
     pub evaluations: BTreeMap<CallSignature, Ptr>,
 
@@ -50,6 +54,18 @@ pub struct Program {
 
     // Output elems of all active pairs
     pub active_pairs: Vec<(Agent, Agent)>,
+}
+
+impl Program {
+    pub fn type_signature_for(&self, a: &Agent) -> Option<TypeSignature> {
+        self.symbol_declarations_for
+            .get(&a.name)
+            .as_ref()
+            .map(|ports| TypeSignature {
+                ty: a.name.clone(),
+                ports: (*ports).clone(),
+            })
+    }
 }
 
 impl fmt::Display for Program {
@@ -118,10 +134,6 @@ pub enum Op {
 
     /// Pushes to the stack whether the element in the stack is None
     PushNone,
-
-    /// Pushes a rule matching the agents in positions #0 and #1, respectively
-    /// or pushes none
-    PushMatchingRedexMaybe,
 }
 
 impl fmt::Display for Op {
@@ -135,29 +147,12 @@ impl fmt::Display for Op {
             Self::PushEq => write!(f, "PUSH_EQ"),
             Self::PushNeq => write!(f, "PUSH_NEQ"),
             Self::PushNone => write!(f, "PUSH_NONE"),
-            Self::PushMatchingRedexMaybe => write!(f, "PUSH_REDEX_MAYBE"),
         }
     }
 }
 
 fn reduction_strategy(lhs: &Agent, rhs: &Agent) -> Vec<Op> {
-    vec![
-        Op::PushPtrInitNet,
-        // If there is no matching rule in the rulebook,
-        // give up and store the net, since it
-        // is fully reduced, or as fully reduced as we can get it
-        //
-        // TODO: This could be a source of bugs. Can we imagine
-        // a scenario in which we have no matching ruless and
-        // where we don't want to store a result?
-        Op::PushMatchingRedexMaybe,
-        // Check if we have a matching redex
-        Op::PushNone,
-        // If we don't, store the result and terminate
-        Op::PushInstr(Box::new(Op::StoreResult)),
-        // Otherwise, stop the program
-        Op::Pop,
-    ]
+    vec![Op::PushPtrInitNet, Op::Pop]
 }
 
 pub fn compile(program: TypedProgram) -> Program {
