@@ -131,25 +131,21 @@ pub enum Op {
     /// Pushes a new node with a name given by the pointer
     /// to the net and a primary port given by the pointer
     /// Primary port must be known at compile time
-    PushBuildNodeVar(Ptr, Ptr),
+    PushNodeVar(Ptr, Ptr),
 
     /// Pushes a new node with a name given by the pointer,
     /// in nodes given by the pointers,
     /// and out nodes given by the pointers
-    PushBuildNodeAgent(Ptr),
+    PushNodeAgent(Ptr),
 
     /// Connects two nodes by a +-+ conn
-    PushConnectOutOut(Ptr, Ptr),
+    PushConnOutOut(Ptr, Ptr),
 
     /// Connects two nodes by a +-- conn
-    PushConnectInOut(Ptr, Ptr),
+    PushConnInOut(Ptr, Ptr),
 
     /// Connects two nodes by a --- conn
-    PushConnectInIn(Ptr, Ptr),
-
-    /// Converts all instructions for building a net to a net buffer
-    /// storing a pointer to the built net in the stack
-    PopBuildNet,
+    PushConnInIn(Ptr, Ptr),
 
     /// This instruction stores whatever net is currently in the stack
     /// in the evaluations record for the call signature
@@ -181,14 +177,13 @@ impl fmt::Display for Op {
             Self::PushEq => write!(f, "PUSH_EQ"),
             Self::PushNeq => write!(f, "PUSH_NEQ"),
             Self::PushNone => write!(f, "PUSH_NONE"),
-            Self::PushBuildNodeVar(name, primary_port) => {
+            Self::PushNodeVar(name, primary_port) => {
                 write!(f, "PUSHB_V {} {}", name, primary_port)
             }
-            Self::PushBuildNodeAgent(name) => write!(f, "PUSHB_A {}", name),
-            Self::PushConnectInIn(a, b) => write!(f, "PUSHC_II {} {}", a, b),
-            Self::PushConnectOutOut(a, b) => write!(f, "PUSHC_OO {} {}", a, b),
-            Self::PushConnectInOut(a, b) => write!(f, "PUSHC_IO {} {}", a, b),
-            Self::PopBuildNet => write!(f, "POPBN"),
+            Self::PushNodeAgent(name) => write!(f, "PUSHB_A {}", name),
+            Self::PushConnInIn(a, b) => write!(f, "PUSHC_II {} {}", a, b),
+            Self::PushConnOutOut(a, b) => write!(f, "PUSHC_OO {} {}", a, b),
+            Self::PushConnInOut(a, b) => write!(f, "PUSHC_IO {} {}", a, b),
         }
     }
 }
@@ -215,8 +210,8 @@ fn try_amortize<'a>(
 
         Some(vec![
             // We aren't connected to anything, we are the output (gigachad)
-            Op::PushBuildNodeAgent(terminal_port_name_id),
-            Op::PopBuildNet,
+            Op::PushPtrInitNet,
+            Op::PushNodeAgent(terminal_port_name_id),
             Op::StoreResult,
         ])
     }

@@ -68,6 +68,49 @@ pub enum Node {
     Var { name: Ptr, primary_port: Ptr },
 }
 
+impl Node {
+    pub fn connect_in(self, other: Ptr) -> Self {
+        match self {
+            Self::Agent {
+                name,
+                mut in_ports,
+                out_port_agents,
+            } => {
+                in_ports.push(other);
+
+                Self::Agent {
+                    name,
+                    in_ports,
+                    out_port_agents,
+                }
+            }
+            Self::Var { .. } => self,
+        }
+    }
+
+    pub fn connect_out(self, other: Ptr) -> Self {
+        match self {
+            Self::Agent {
+                name,
+                in_ports,
+                mut out_port_agents,
+            } => {
+                out_port_agents.push(other);
+
+                Self::Agent {
+                    name,
+                    in_ports,
+                    out_port_agents,
+                }
+            }
+            Self::Var { name, .. } => Self::Var {
+                name,
+                primary_port: other,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct NetBuffer {
     pub nodes: Vec<Node>,
@@ -76,6 +119,7 @@ pub struct NetBuffer {
 #[derive(Debug)]
 pub struct ReductionFrame {
     pub stack: LinkedList<StackElem>,
+    pub instructions: LinkedList<Op>,
     pub nets: Vec<NetBuffer>,
     pub call_signature: CallSignature,
 }
@@ -118,7 +162,12 @@ impl Executor {
     /// Reduction terminates when the output of a top-level redex
     /// is terminal (i.e., it does not contain any other redexs within
     /// it)
-    pub fn new_reduction_frame(&self, lhs: &Agent, rhs: &Agent) -> Option<ReductionFrame> {
+    pub fn new_reduction_frame(
+        &self,
+        reduction: LinkedList<Op>,
+        lhs: &Agent,
+        rhs: &Agent,
+    ) -> Option<ReductionFrame> {
         let ty_lhs = self.p.symbol_declarations_for.get(&lhs.name)?;
         let ty_rhs = self.p.symbol_declarations_for.get(&lhs.name)?;
 
@@ -152,15 +201,22 @@ impl Executor {
         };
 
         Some(ReductionFrame {
+            instructions: reduction,
             stack: Default::default(),
             nets: Default::default(),
             call_signature: sig?,
         })
     }
 
-    pub fn exec(&mut self, op: Op) {
+    pub fn step_frame(&mut self) {
         let frame = if let Some(v) = self.reduction.as_mut() {
             v
+        } else {
+            return;
+        };
+
+        let op = if let Some(op) = frame.instructions.pop_back() {
+            op
         } else {
             return;
         };
@@ -211,11 +267,11 @@ impl Executor {
                             ),
                     )
                 {
-                    if cmp {
-                        self.exec(exec_true);
-                    } else {
-                        self.exec(exec_false);
-                    }
+                    frame
+                        .instructions
+                        .push_back(if cmp { exec_true } else { exec_false });
+
+                    self.step();
                 }
             }
             Op::PushEq => {
@@ -234,6 +290,59 @@ impl Executor {
                         .stack
                         .push_back(StackElem::Bool(cmp_a == StackElem::None));
                 }
+            }
+            // Continuously pop connect and create node instructions until we have created the net
+            p @ Op::PushNodeVar(_, _)
+            | p @ Op::PushNodeAgent(_)
+            | p @ Op::PushConnOutOut(_, _)
+            | p @ Op::PushConnInIn(_, _)
+            | p @ Op::PushConnInOut(_, _) => {
+                let n_ptr = if let Some(StackElem::Ptr(ptr)) = frame.stack.pop_back() {
+                    ptr
+                } else {
+                    return;
+                };
+
+                // Will need to add nodes, conns, or vars to this
+                let net = if let Some(net) = frame.nets.get_mut(n_ptr) {
+                    net
+                } else {
+                    return;
+                };
+
+                match p {
+                    Op::PushNodeVar(name_ptr, primary_port_ptr) => {
+                        net.nodes.push(Node::Var {
+                            name: name_ptr,
+                            primary_port: primary_port_ptr,
+                        });
+                    }
+                    Op::PushNodeAgent(name_ptr) => {
+                        net.nodes.push(Node::Agent {
+                            name: name_ptr,
+                            in_ports: Default::default(),
+                            out_port_agents: Default::default(),
+                        });
+                    }
+                    Op::PushConnOutOut(a_ptr, b_ptr) => {
+                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_out(b_ptr);
+                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_out(a_ptr);
+                    }
+                    Op::PushConnInIn(a_ptr, b_ptr) => {
+                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_in(b_ptr);
+                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_in(a_ptr);
+                    }
+                    Op::PushConnInOut(a_ptr, b_ptr) => {
+                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_in(b_ptr);
+                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_out(a_ptr);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+
+                // We will need this for further operations, and for our outputresult
+                frame.stack.push_back(StackElem::Ptr(n_ptr));
             }
         }
     }
@@ -303,13 +412,17 @@ impl Executor {
             })
             .next()
         {
-            self.reduction = self.new_reduction_frame(a, b);
-
             // Attempt to execute the reduction for this active pair
-            let ops = reduction.clone();
+            self.reduction =
+                self.new_reduction_frame(reduction.into_iter().cloned().collect(), a, b);
 
-            for op in ops.into_iter() {
-                self.exec(op);
+            while self
+                .reduction
+                .as_ref()
+                .map(|r| !r.instructions.is_empty())
+                .unwrap_or_default()
+            {
+                self.step();
             }
         }
     }

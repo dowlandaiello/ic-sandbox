@@ -1,6 +1,6 @@
 use crate::UNIT_STR;
 use serde::{Deserialize, Serialize};
-use std::{fmt, iter};
+use std::fmt;
 
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
@@ -245,7 +245,7 @@ impl Port {
     pub fn as_agent(&self) -> Option<&Agent> {
         match &self {
             Self::Agent(a) => Some(a),
-            Sef::Var(_) => NOne,
+            Self::Var(_) => None,
         }
     }
 }
