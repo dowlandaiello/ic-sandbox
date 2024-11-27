@@ -24,6 +24,7 @@ impl TypedProgram {
         // must be outputs
         let output_child = type_dec
             .iter()
+            .skip(1)
             .map(|pgroup| pgroup.flatten())
             .flatten()
             .zip(a.ports.iter())
@@ -421,6 +422,48 @@ symbol abc: xyz+
                 Simple::custom(23..26, "duplicate type: xyz"),
                 Simple::custom(52..55, "duplicate symbol: abc"),
             ]
+        );
+    }
+
+    #[test]
+    fn test_terminal_port_for() {
+        let program = "type nat
+
+symbol Z: nat+
+symbol S: nat+, nat-
+symbol Add: nat-, nat-, nat+
+
+Z() >< Add(Z(), Z())
+";
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (program, _) = parse_typed_program(parsed);
+
+        assert_eq!(
+            program.terminal_port_for(
+                &program.nets.iter().collect::<Vec<_>>()[0]
+                    .rhs
+                    .clone()
+                    .unwrap()
+            ),
+            Some(
+                program.nets.iter().collect::<Vec<_>>()[0]
+                    .rhs
+                    .clone()
+                    .unwrap()
+                    .ports[1]
+                    .as_agent()
+                    .unwrap()
+            )
         );
     }
 }
