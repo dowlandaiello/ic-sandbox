@@ -105,6 +105,19 @@ impl Executor {
 
     /// Creates a new reduction frame with a call signature equal
     /// to the specified redex.
+    ///
+    /// Attributes of reduction known at compile time:
+    /// - Type signature of call
+    /// - Arguments of call
+    /// - Reduction algorithms for "subproblems"
+    /// - Subproblems can also be identified
+    ///
+    /// Reduction is, in essence, just repeated variable replacement
+    /// on subproblems
+    ///
+    /// Reduction terminates when the output of a top-level redex
+    /// is terminal (i.e., it does not contain any other redexs within
+    /// it)
     pub fn new_reduction_frame(&self, lhs: &Agent, rhs: &Agent) -> Option<ReductionFrame> {
         let ty_lhs = self.p.symbol_declarations_for.get(&lhs.name)?;
         let ty_rhs = self.p.symbol_declarations_for.get(&lhs.name)?;
@@ -115,7 +128,7 @@ impl Executor {
         // Whichever agent has a primary port being an input, we will
         // get its call signature (defined by the hash of all its input ports)
         //
-        // TODO: PortGRouping support?
+        // TODO: PortGrouping support?
         let sig = match (primary_port_lhs, primary_port_rhs) {
             (&PortKind::Input(_), &PortKind::Output(_)) => Some(CallSignature::instantiate(
                 lhs.name.clone(),

@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt,
     hash::{DefaultHasher, Hash, Hasher},
 };
@@ -55,7 +55,7 @@ impl CallSignature {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Program {
-    pub names: BTreeSet<Type>,
+    pub names: Vec<Type>,
 
     pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
 
@@ -116,16 +116,40 @@ impl fmt::Display for Program {
     }
 }
 
-/// Reductions are run with a pointer to the lhs agent
-/// and rhs of a redex in the first and second stack positions, respectively.
+/// Reductions are run with a pointer to a NetBuffer representing the
+/// active redex in stack position #0.
+///
 /// Elements in the stack can either be pointers, instructions, or None
 /// pointers can be to nets, or nodes in nets (variables or agents)
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Op {
-    /// Pushes a pointer to the initialized net to the stack
+    /// Pushes a pointer to a new initialized net buffer to the stack
     PushPtrInitNet,
 
     Pop,
+
+    /// Pushes a new node with a name given by the pointer
+    /// to the net and a primary port given by the pointer
+    /// Primary port must be known at compile time
+    PushBuildNodeVar(Ptr, Ptr),
+
+    /// Pushes a new node with a name given by the pointer,
+    /// in nodes given by the pointers,
+    /// and out nodes given by the pointers
+    PushBuildNodeAgent(Ptr),
+
+    /// Connects two nodes by a +-+ conn
+    PushConnectOutOut(Ptr, Ptr),
+
+    /// Connects two nodes by a +-- conn
+    PushConnectInOut(Ptr, Ptr),
+
+    /// Connects two nodes by a --- conn
+    PushConnectInIn(Ptr, Ptr),
+
+    /// Converts all instructions for building a net to a net buffer
+    /// storing a pointer to the built net in the stack
+    PopBuildNet,
 
     /// This instruction stores whatever net is currently in the stack
     /// in the evaluations record for the call signature
@@ -157,25 +181,65 @@ impl fmt::Display for Op {
             Self::PushEq => write!(f, "PUSH_EQ"),
             Self::PushNeq => write!(f, "PUSH_NEQ"),
             Self::PushNone => write!(f, "PUSH_NONE"),
+            Self::PushBuildNodeVar(name, primary_port) => {
+                write!(f, "PUSHB_V {} {}", name, primary_port)
+            }
+            Self::PushBuildNodeAgent(name) => write!(f, "PUSHB_A {}", name),
+            Self::PushConnectInIn(a, b) => write!(f, "PUSHC_II {} {}", a, b),
+            Self::PushConnectOutOut(a, b) => write!(f, "PUSHC_OO {} {}", a, b),
+            Self::PushConnectInOut(a, b) => write!(f, "PUSHC_IO {} {}", a, b),
+            Self::PopBuildNet => write!(f, "POPBN"),
         }
     }
 }
 
-fn reduction_strategy(lhs: &Agent, rhs: &Agent) -> Vec<Op> {
+/// If the output of a net is terminal (as in, its output is a variable or an output agent),
+/// then its reduction is a simple call to StoreResult, after building the corresponding
+/// netbuffer (can just copy it).
+fn try_amortize<'a>(
+    names: &[Type],
+    typings: &'a TypedProgram,
+    lhs: &'a Agent,
+    rhs: &'a Agent,
+) -> Option<Vec<Op>> {
+    fn amortize_from<'a>(
+        names: &[Type],
+        typings: &'a TypedProgram,
+        output_agent: &'a Agent,
+    ) -> Option<Vec<Op>> {
+        let terminal_port = typings.terminal_port_for(output_agent)?;
+
+        // If we have a terminal port, that means we can amortize the output
+        // to that terminal port's value
+        let terminal_port_name_id = names.iter().position(|x| x == &terminal_port.name)?;
+
+        Some(vec![
+            // We aren't connected to anything, we are the output (gigachad)
+            Op::PushBuildNodeAgent(terminal_port_name_id),
+            Op::PopBuildNet,
+            Op::StoreResult,
+        ])
+    }
+
+    amortize_from(names, typings, lhs).or_else(|| amortize_from(names, typings, rhs))
+}
+
+fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: &Agent) -> Vec<Op> {
+    if let Some(amortized_plan) = try_amortize(names, typings, lhs, rhs) {
+        return amortized_plan;
+    }
+
     vec![Op::PushPtrInitNet, Op::Pop]
 }
 
 pub fn compile(program: TypedProgram) -> Program {
-    let mut p: Program = Default::default();
-
-    p.names = BTreeSet::from_iter(
-        program
-            .types
-            .iter()
-            .chain(program.symbol_declarations_for.iter().map(|(k, _)| k))
-            .cloned(),
-    );
-    p.reductions = BTreeMap::from_iter(
+    let names = program
+        .types
+        .iter()
+        .chain(program.symbol_declarations_for.iter().map(|(k, _)| k))
+        .cloned()
+        .collect::<Vec<_>>();
+    let reductions = BTreeMap::from_iter(
         program
             .nets
             .iter()
@@ -199,7 +263,7 @@ pub fn compile(program: TypedProgram) -> Program {
                                 ports: ty_rhs.to_vec(),
                             },
                         ),
-                        reduction_strategy(lhs, rhs),
+                        reduction_strategy(&names, &program, lhs, rhs),
                     ))
                 } else if let PortGrouping::Singleton(PortKind::Output(_)) = primary_port_rhs {
                     Some((
@@ -213,18 +277,23 @@ pub fn compile(program: TypedProgram) -> Program {
                                 ports: ty_lhs.to_vec(),
                             },
                         ),
-                        reduction_strategy(lhs, rhs),
+                        reduction_strategy(&names, &program, lhs, rhs),
                     ))
                 } else {
                     None
                 }
             }),
     );
-    p.active_pairs = program
+    let active_pairs = program
         .nets
         .iter()
         .filter_map(|net| net.lhs.clone().zip(net.rhs.clone()))
         .collect::<Vec<_>>();
 
-    p
+    Program {
+        names,
+        reductions,
+        active_pairs,
+        symbol_declarations_for: program.symbol_declarations_for,
+    }
 }

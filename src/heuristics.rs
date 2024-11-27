@@ -13,6 +13,41 @@ pub struct TypedProgram {
 }
 
 impl TypedProgram {
+    /// Gets a reference to a port in the agent, if it exists,
+    /// which is an output agent (i.e., an agent with only
+    /// a principal port which is an output)
+    pub fn terminal_port_for<'a>(&'a self, a: &'a Agent) -> Option<&'a Agent> {
+        let type_dec = self.symbol_declarations_for.get(&a.name)?;
+
+        // Both the port on the parent agent
+        // and the primary port on the child agent
+        // must be outputs
+        let output_child = type_dec
+            .iter()
+            .map(|pgroup| pgroup.flatten())
+            .flatten()
+            .zip(a.ports.iter())
+            .filter(|(port_ty, _)| {
+                // Port must be an output port to an agent
+                port_ty.as_output().is_some()
+            })
+            .filter_map(|(_, port)| port.as_agent())
+            .next()?;
+
+        let child_typedec = self.symbol_declarations_for.get(&output_child.name)?;
+
+        // The first port, which is the primary port, must be an output port
+        let primary_port_type_group = child_typedec.iter().next()?;
+        let primary_port_is_output = primary_port_type_group
+            .flatten()
+            .iter()
+            .next()?
+            .as_output()
+            .is_some();
+
+        primary_port_is_output.then(move || output_child)
+    }
+
     pub fn has_type(&self, t: &Type) -> bool {
         self.types.contains(t)
     }

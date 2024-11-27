@@ -1,6 +1,6 @@
 use crate::UNIT_STR;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{fmt, iter};
 
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
@@ -155,6 +155,13 @@ pub enum PortGrouping {
 }
 
 impl PortGrouping {
+    pub fn flatten(&self) -> Vec<PortKind> {
+        match self {
+            Self::Singleton(p) => vec![p.clone()],
+            Self::Partition(ps) => ps.clone(),
+        }
+    }
+
     pub fn as_singleton(&self) -> Option<&PortKind> {
         match &self {
             Self::Singleton(p) => Some(p),
@@ -190,6 +197,20 @@ pub enum PortKind {
 }
 
 impl PortKind {
+    pub fn as_output(&self) -> Option<&Type> {
+        match &self {
+            Self::Input(_) => None,
+            Self::Output(o) => Some(o),
+        }
+    }
+
+    pub fn into_output(self) -> Option<Type> {
+        match self {
+            Self::Input(_) => None,
+            Self::Output(o) => Some(o),
+        }
+    }
+
     pub fn as_input(&self) -> Option<&Type> {
         match &self {
             Self::Input(i) => Some(i),
@@ -211,6 +232,22 @@ impl fmt::Display for PortKind {
 pub enum Port {
     Agent(Agent),
     Var(Ident),
+}
+
+impl Port {
+    pub fn as_var(&self) -> Option<&Ident> {
+        match &self {
+            Self::Agent(_) => None,
+            Self::Var(v) => Some(v),
+        }
+    }
+
+    pub fn as_agent(&self) -> Option<&Agent> {
+        match &self {
+            Self::Agent(a) => Some(a),
+            Sef::Var(_) => NOne,
+        }
+    }
 }
 
 impl fmt::Display for Port {
