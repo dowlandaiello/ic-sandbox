@@ -1,19 +1,20 @@
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, PortGrouping, PortKind, Type},
+    parser::ast_lafont::{Agent, Port, PortGrouping, PortKind, Type},
     BYTECODE_INDENTATION_STR,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
+    hash::{DefaultHasher, Hash, Hasher},
 };
 
 pub mod vm;
 
 pub type Ptr = usize;
 
-#[derive(Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct TypeSignature {
     pub ty: Type,
     pub ports: Vec<PortGrouping>,
@@ -34,20 +35,29 @@ impl fmt::Display for TypeSignature {
     }
 }
 
-#[derive(Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct CallSignature {
     pub ty: Type,
     pub in_ports_hash: u64,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+impl CallSignature {
+    pub fn instantiate(ty: Type, args: Vec<Port>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        args.hash(&mut hasher);
+
+        Self {
+            ty,
+            in_ports_hash: hasher.finish(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Program {
     pub names: BTreeSet<Type>,
 
     pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
-
-    // Hash of all input ports to an output agent, and their output
-    pub evaluations: BTreeMap<CallSignature, Ptr>,
 
     // Mapping from output agent to its reduction strategy
     pub reductions: BTreeMap<(TypeSignature, TypeSignature), Vec<Op>>,
@@ -110,7 +120,7 @@ impl fmt::Display for Program {
 /// and rhs of a redex in the first and second stack positions, respectively.
 /// Elements in the stack can either be pointers, instructions, or None
 /// pointers can be to nets, or nodes in nets (variables or agents)
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Op {
     /// Pushes a pointer to the initialized net to the stack
     PushPtrInitNet,
@@ -124,11 +134,11 @@ pub enum Op {
     PushInstr(Box<Op>),
 
     /// Executes the first instruction in the stack (#1) if the condition (#0) is true
-    /// otherwise executes the second (#3). Does not pop any elements.
+    /// otherwise executes the second (#3).
     CondExec,
 
     /// Pushes to the stack whether the first two elements in the stack
-    /// are equivalent. Does not pop the elements being compared
+    /// are equivalent.
     PushEq,
     PushNeq,
 

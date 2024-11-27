@@ -154,6 +154,15 @@ pub enum PortGrouping {
     Partition(Vec<PortKind>),
 }
 
+impl PortGrouping {
+    pub fn as_singleton(&self) -> Option<&PortKind> {
+        match &self {
+            Self::Singleton(p) => Some(p),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for PortGrouping {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -178,6 +187,15 @@ impl fmt::Display for PortGrouping {
 pub enum PortKind {
     Input(Type),
     Output(Type),
+}
+
+impl PortKind {
+    pub fn as_input(&self) -> Option<&Type> {
+        match &self {
+            Self::Input(i) => Some(i),
+            Self::Output(_) => None,
+        }
+    }
 }
 
 impl fmt::Display for PortKind {
