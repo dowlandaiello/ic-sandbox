@@ -1,9 +1,9 @@
-use super::{CallSignature, Op, Program, Ptr};
+use super::{Op, Program, Ptr};
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Net, PortKind},
+    parser::ast_lafont::{Agent, Ident, Net, Port, Type},
 };
-use std::collections::{linked_list::LinkedList, BTreeMap, HashSet};
+use std::collections::{linked_list::LinkedList, BTreeMap, BTreeSet};
 
 #[derive(Debug, PartialEq)]
 pub enum StackElem {
@@ -50,6 +50,21 @@ impl StackElem {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum NodePort {
+    In(Ptr),
+    Out(Ptr),
+}
+
+impl NodePort {
+    pub fn as_ptr(&self) -> Ptr {
+        match self {
+            Self::In(p) => *p,
+            Self::Out(p) => *p,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Node {
     /// In ports is a vec of pointers to variables or agents
@@ -57,11 +72,7 @@ pub enum Node {
     ///
     /// output_port_agents is a vec of pointers to agents
     /// which the variable or agent is connected to via output
-    Agent {
-        name: Ptr,
-        in_ports: Vec<Ptr>,
-        out_port_agents: Vec<Ptr>,
-    },
+    Agent { name: Ptr, ports: Vec<NodePort> },
 
     /// Primary port is a pointer to the agent which the variable
     /// is connected to by output
@@ -71,18 +82,10 @@ pub enum Node {
 impl Node {
     pub fn connect_in(self, other: Ptr) -> Self {
         match self {
-            Self::Agent {
-                name,
-                mut in_ports,
-                out_port_agents,
-            } => {
-                in_ports.push(other);
+            Self::Agent { name, mut ports } => {
+                ports.push(NodePort::In(other));
 
-                Self::Agent {
-                    name,
-                    in_ports,
-                    out_port_agents,
-                }
+                Self::Agent { name, ports }
             }
             Self::Var { .. } => self,
         }
@@ -90,18 +93,10 @@ impl Node {
 
     pub fn connect_out(self, other: Ptr) -> Self {
         match self {
-            Self::Agent {
-                name,
-                in_ports,
-                mut out_port_agents,
-            } => {
-                out_port_agents.push(other);
+            Self::Agent { name, mut ports } => {
+                ports.push(NodePort::Out(other));
 
-                Self::Agent {
-                    name,
-                    in_ports,
-                    out_port_agents,
-                }
+                Self::Agent { name, ports }
             }
             Self::Var { name, .. } => Self::Var {
                 name,
@@ -114,6 +109,7 @@ impl Node {
 #[derive(Debug, Default, Clone)]
 pub struct NetBuffer {
     pub nodes: Vec<Node>,
+    pub active_pairs: Vec<(Ptr, Ptr)>,
 }
 
 #[derive(Debug)]
@@ -121,7 +117,18 @@ pub struct ReductionFrame {
     pub stack: LinkedList<StackElem>,
     pub instructions: LinkedList<Op>,
     pub nets: Vec<NetBuffer>,
-    pub call_signature: CallSignature,
+    pub call_sig: (Agent, Agent),
+}
+
+impl ReductionFrame {
+    pub fn new(instructions: LinkedList<Op>, call_sig: (Agent, Agent)) -> Self {
+        Self {
+            instructions,
+            nets: Default::default(),
+            stack: Default::default(),
+            call_sig,
+        }
+    }
 }
 
 /// An executor executes reduction steps on a program.
@@ -131,7 +138,7 @@ pub struct Executor {
     // Hash of all input ports to an output agent, and their output
     // Gets added to as reductions are executed
     // TODO: implement this as an LRU cache
-    pub evaluations: BTreeMap<CallSignature, NetBuffer>,
+    pub evaluations: BTreeMap<(Agent, Agent), NetBuffer>,
 
     pub p: Program,
 
@@ -147,148 +154,109 @@ impl Executor {
         }
     }
 
-    pub fn call_signature_for(&self, lhs: &Agent, rhs: &Agent) -> Option<CallSignature> {
-        let ty_lhs = self.p.symbol_declarations_for.get(&lhs.name)?;
-        let ty_rhs = self.p.symbol_declarations_for.get(&lhs.name)?;
+    pub fn step_frame(&mut self) -> Option<()> {
+        let op = self.reduction.as_mut()?.instructions.pop_front()?;
 
-        let primary_port_lhs = ty_lhs.get(0).and_then(|arg| arg.as_singleton())?;
-        let primary_port_rhs = ty_rhs.get(0).and_then(|arg| arg.as_singleton())?;
-
-        // Whichever agent has a primary port being an input, we will
-        // get its call signature (defined by the hash of all its input ports)
-        //
-        // TODO: PortGrouping support?
-        match (primary_port_lhs, primary_port_rhs) {
-            (&PortKind::Input(_), &PortKind::Output(_)) => Some(CallSignature::instantiate(
-                lhs.name.clone(),
-                ty_lhs
-                    .iter()
-                    .zip(lhs.ports.iter())
-                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
-                    .map(|(_, val)| val.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            (&PortKind::Output(_), &PortKind::Input(_)) => Some(CallSignature::instantiate(
-                rhs.name.clone(),
-                ty_rhs
-                    .iter()
-                    .zip(rhs.ports.iter())
-                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
-                    .map(|(_, val)| val.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            _ => None,
-        }
-    }
-
-    /// Creates a new reduction frame with a call signature equal
-    /// to the specified redex.
-    ///
-    /// Attributes of reduction known at compile time:
-    /// - Type signature of call
-    /// - Arguments of call
-    /// - Reduction algorithms for "subproblems"
-    /// - Subproblems can also be identified
-    ///
-    /// Reduction is, in essence, just repeated variable replacement
-    /// on subproblems
-    ///
-    /// Reduction terminates when the output of a top-level redex
-    /// is terminal (i.e., it does not contain any other redexs within
-    /// it)
-    pub fn new_reduction_frame(
-        &self,
-        reduction: LinkedList<Op>,
-        lhs: &Agent,
-        rhs: &Agent,
-    ) -> Option<ReductionFrame> {
-        Some(ReductionFrame {
-            instructions: reduction,
-            stack: Default::default(),
-            nets: Default::default(),
-            call_signature: self.call_signature_for(lhs, rhs)?,
-        })
-    }
-
-    pub fn step_frame(&mut self) {
-        let frame = if let Some(v) = self.reduction.as_mut() {
-            v
-        } else {
-            return;
-        };
-
-        let op = if let Some(op) = frame.instructions.pop_back() {
-            op
-        } else {
-            return;
-        };
+        tracing::debug!("executing op {}", op);
 
         match op {
             Op::PushPtrInitNet => {
-                frame.nets.push(Default::default());
-                let new_net_id = frame.nets.len() - 1;
+                self.reduction.as_mut()?.nets.push(Default::default());
+                let new_net_id = self.reduction.as_ref()?.nets.len() - 1;
 
-                frame.stack.push_back(StackElem::Ptr(new_net_id));
+                self.reduction
+                    .as_mut()?
+                    .stack
+                    .push_back(StackElem::Ptr(new_net_id));
             }
             Op::Pop => {
-                frame.stack.pop_back();
+                self.reduction.as_mut()?.stack.pop_back();
             }
             Op::StoreResult => {
-                let res_net = if let Some(res_net) = frame
+                let res_net = self
+                    .reduction
+                    .as_mut()?
                     .stack
                     .pop_back()
                     .and_then(|elem| elem.into_ptr())
-                    .and_then(|id| frame.nets.get(id))
-                {
-                    res_net
-                } else {
-                    return;
-                };
+                    .and_then(|id| self.reduction.as_ref()?.nets.get(id))?;
+
+                tracing::debug!("storing result: {:?}", res_net);
 
                 self.evaluations
-                    .insert(frame.call_signature.clone(), res_net.clone());
+                    .insert(self.reduction.as_ref()?.call_sig.clone(), res_net.clone());
+
+                tracing::trace!("machine updated to: {:?}", self);
             }
             Op::PushInstr(op) => {
-                frame.stack.push_back(StackElem::Instr(*op));
+                self.reduction
+                    .as_mut()?
+                    .stack
+                    .push_back(StackElem::Instr(*op));
             }
             Op::CondExec => {
-                if let Some((cmp, (Some(exec_true), Some(exec_false)))) = frame
+                if let Some((cmp, (Some(exec_true), Some(exec_false)))) = self
+                    .reduction
+                    .as_mut()?
                     .stack
                     .pop_back()
                     .and_then(|maybe_cond| maybe_cond.as_bool().copied())
                     .zip(
-                        frame
+                        self.reduction
+                            .as_mut()?
                             .stack
                             .pop_back()
                             .map(|maybe_op_true| maybe_op_true.as_instr().cloned())
                             .zip(
-                                frame
+                                self.reduction
+                                    .as_mut()?
                                     .stack
                                     .pop_back()
                                     .map(|maybe_op_false| maybe_op_false.as_instr().cloned()),
                             ),
                     )
                 {
-                    frame
-                        .instructions
-                        .push_back(if cmp { exec_true } else { exec_false });
+                    self.reduction.as_mut()?.instructions.push_front(if cmp {
+                        exec_true
+                    } else {
+                        exec_false
+                    });
 
-                    self.step_frame();
+                    self.step_frame()?;
                 }
             }
             Op::PushEq => {
-                if let Some((cmp_a, cmp_b)) = frame.stack.pop_back().zip(frame.stack.pop_back()) {
-                    frame.stack.push_back(StackElem::Bool(cmp_a == cmp_b));
+                if let Some((cmp_a, cmp_b)) = self
+                    .reduction
+                    .as_mut()?
+                    .stack
+                    .pop_back()
+                    .zip(self.reduction.as_mut()?.stack.pop_back())
+                {
+                    self.reduction
+                        .as_mut()?
+                        .stack
+                        .push_back(StackElem::Bool(cmp_a == cmp_b));
                 }
             }
             Op::PushNeq => {
-                if let Some((cmp_a, cmp_b)) = frame.stack.pop_back().zip(frame.stack.pop_back()) {
-                    frame.stack.push_back(StackElem::Bool(cmp_a != cmp_b));
+                if let Some((cmp_a, cmp_b)) = self
+                    .reduction
+                    .as_mut()?
+                    .stack
+                    .pop_back()
+                    .zip(self.reduction.as_mut()?.stack.pop_back())
+                {
+                    self.reduction
+                        .as_mut()?
+                        .stack
+                        .push_back(StackElem::Bool(cmp_a != cmp_b));
                 }
             }
             Op::PushNone => {
-                if let Some(cmp_a) = frame.stack.pop_back() {
-                    frame
+                if let Some(cmp_a) = self.reduction.as_mut()?.stack.pop_back() {
+                    self.reduction
+                        .as_mut()?
                         .stack
                         .push_back(StackElem::Bool(cmp_a == StackElem::None));
                 }
@@ -299,18 +267,15 @@ impl Executor {
             | p @ Op::PushConnOutOut(_, _)
             | p @ Op::PushConnInIn(_, _)
             | p @ Op::PushConnInOut(_, _) => {
-                let n_ptr = if let Some(StackElem::Ptr(ptr)) = frame.stack.pop_back() {
-                    ptr
-                } else {
-                    return;
-                };
+                let n_ptr =
+                    if let Some(StackElem::Ptr(ptr)) = self.reduction.as_mut()?.stack.pop_back() {
+                        ptr
+                    } else {
+                        return None;
+                    };
 
                 // Will need to add nodes, conns, or vars to this
-                let net = if let Some(net) = frame.nets.get_mut(n_ptr) {
-                    net
-                } else {
-                    return;
-                };
+                let net = self.reduction.as_mut()?.nets.get_mut(n_ptr)?;
 
                 match p {
                     Op::PushNodeVar(name_ptr, primary_port_ptr) => {
@@ -322,8 +287,7 @@ impl Executor {
                     Op::PushNodeAgent(name_ptr) => {
                         net.nodes.push(Node::Agent {
                             name: name_ptr,
-                            in_ports: Default::default(),
-                            out_port_agents: Default::default(),
+                            ports: Default::default(),
                         });
                     }
                     Op::PushConnOutOut(a_ptr, b_ptr) => {
@@ -337,6 +301,8 @@ impl Executor {
                     Op::PushConnInOut(a_ptr, b_ptr) => {
                         net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_in(b_ptr);
                         net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_out(a_ptr);
+
+                        net.active_pairs.push((a_ptr, b_ptr));
                     }
                     _ => {
                         unreachable!()
@@ -344,9 +310,46 @@ impl Executor {
                 }
 
                 // We will need this for further operations, and for our outputresult
-                frame.stack.push_back(StackElem::Ptr(n_ptr));
+                self.reduction
+                    .as_mut()?
+                    .stack
+                    .push_back(StackElem::Ptr(n_ptr));
             }
         }
+
+        Some(())
+    }
+
+    //// TODO: Make this iterative
+    pub fn readback_node(&self, buffer: &NetBuffer, node: &Node) -> Option<Port> {
+        match node {
+            Node::Agent { name, ports } => Some(Port::Agent(Agent {
+                name: Type(self.p.names.get(*name)?.clone().0),
+                ports: ports
+                    .iter()
+                    .filter_map(|p| self.readback_node(buffer, buffer.nodes.get(p.as_ptr())?))
+                    .collect(),
+            })),
+            Node::Var { name, .. } => Some(Port::Var(Ident(self.p.names.get(*name)?.clone().0))),
+        }
+    }
+
+    pub fn readback_buffer(&self, buffer: NetBuffer) -> Vec<(Option<Agent>, Option<Agent>)> {
+        let deref_ptr_node = |p: Ptr| &buffer.nodes[p];
+
+        buffer
+            .active_pairs
+            .iter()
+            .map(|(a, b)| (deref_ptr_node(*a), deref_ptr_node(*b)))
+            .map(|(a_node, b_node)| {
+                (
+                    self.readback_node(&buffer, a_node)
+                        .and_then(|a| a.into_agent()),
+                    self.readback_node(&buffer, b_node)
+                        .and_then(|a| a.into_agent()),
+                )
+            })
+            .collect::<Vec<(Option<Agent>, Option<Agent>)>>()
     }
 
     /// Converts the program to a human-readable form
@@ -357,34 +360,44 @@ impl Executor {
                 .reductions
                 .iter()
                 .fold(Default::default(), |mut acc, ((lhs, rhs), _)| {
-                    acc.insert(lhs.ty.clone());
-                    acc.insert(rhs.ty.clone());
+                    acc.insert(lhs.name.clone());
+                    acc.insert(rhs.name.clone());
 
                     acc
                 }),
             symbol_declarations_for: self.p.reductions.iter().fold(
                 Default::default(),
                 |mut acc, ((lhs, rhs), _)| {
-                    acc.insert(lhs.ty.clone(), lhs.ports.clone());
-                    acc.insert(rhs.ty.clone(), rhs.ports.clone());
+                    if let Some((ty_lhs, ty_rhs)) = self
+                        .p
+                        .type_signature_for(lhs)
+                        .zip(self.p.type_signature_for(rhs))
+                    {
+                        acc.insert(lhs.name.clone(), ty_lhs.ports.clone());
+                        acc.insert(rhs.name.clone(), ty_rhs.ports.clone());
+                    }
 
                     acc
                 },
             ),
             nets: self
-                .p
-                .active_pairs
+                .evaluations
                 .iter()
-                .map(|(lhs, rhs)| Net {
-                    lhs: Some(lhs.clone()),
-                    rhs: Some(rhs.clone()),
+                .map(|(_, buff)| {
+                    self.readback_buffer(buff.clone())
+                        .into_iter()
+                        .map(|(lhs, rhs)| Net { lhs, rhs })
+                        .collect::<Vec<_>>()
                 })
-                .collect::<HashSet<_>>(),
+                .flatten()
+                .collect::<BTreeSet<_>>(),
         }
     }
 
     /// Steps the virtual machine until nothing in the stack is left to execute
     pub fn step_to_end(&mut self) {
+        tracing::debug!("evaluating to end: \n{}", self.p);
+
         // We are done once we have no results
         // left to evaluate
         loop {
@@ -393,11 +406,10 @@ impl Executor {
                 .active_pairs
                 .clone()
                 .iter()
+                .filter_map(|(a, b)| Some((a.clone()?, b.clone()?)))
                 .filter(|(a, b)| {
-                    !self
-                        .call_signature_for(a, b)
-                        .map(|sig| self.evaluations.contains_key(&sig))
-                        .unwrap_or_default()
+                    self.p.reductions.contains_key(&(a.clone(), b.clone()))
+                        && !self.evaluations.contains_key(&(a.clone(), b.clone()))
                 })
                 .next()
             {
@@ -413,16 +425,22 @@ impl Executor {
     pub fn step(&mut self, redex: &(Agent, Agent)) {
         let (a, b) = redex;
 
+        tracing::debug!("reducing redex {} >< {}", a, b);
+
         // Check if we have a rule to reduce the redex
-        if let Some(reduction) = self
-            .p
-            .type_signature_for(&a)
-            .zip(self.p.type_signature_for(&b))
-            .and_then(|(sig_a, sig_b)| self.p.reductions.get(&(sig_a, sig_b)))
-        {
+        if let Some(reduction) = self.p.reductions.get(&(a.clone(), b.clone())) {
+            tracing::debug!("found reduction for redex {} >< {}", a, b);
+
             // Attempt to execute the reduction for this active pair
-            self.reduction =
-                self.new_reduction_frame(reduction.into_iter().cloned().collect(), a, b);
+            self.reduction = Some(ReductionFrame::new(
+                reduction.into_iter().cloned().collect(),
+                (a.clone(), b.clone()),
+            ));
+
+            tracing::trace!(
+                "attempting to initiate step with frame {:?}",
+                self.reduction
+            );
 
             while self
                 .reduction

@@ -111,7 +111,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Net {
     pub lhs: Option<Agent>,
     pub rhs: Option<Agent>,
@@ -264,6 +264,13 @@ pub enum Port {
 }
 
 impl Port {
+    pub fn name(&self) -> Ident {
+        match &self {
+            Self::Agent(a) => Ident(a.name.0.clone()),
+            Self::Var(i) => i.clone(),
+        }
+    }
+
     pub fn as_var(&self) -> Option<&Ident> {
         match &self {
             Self::Agent(_) => None,
@@ -273,6 +280,13 @@ impl Port {
 
     pub fn as_agent(&self) -> Option<&Agent> {
         match &self {
+            Self::Agent(a) => Some(a),
+            Self::Var(_) => None,
+        }
+    }
+
+    pub fn into_agent(self) -> Option<Agent> {
+        match self {
             Self::Agent(a) => Some(a),
             Self::Var(_) => None,
         }

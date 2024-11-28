@@ -1,40 +1,58 @@
 use super::parser::{
-    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
+    ast_lafont::{Agent, Expr, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Default, Clone)]
 pub struct TypedProgram {
     pub types: BTreeSet<Type>,
-    pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
-    pub nets: HashSet<Net>,
+    pub symbol_declarations_for: BTreeMap<Type, Vec<PortKind>>,
+    pub nets: BTreeSet<Net>,
 }
 
 impl TypedProgram {
     /// Gets a reference to a port in the agent, if it exists,
-    /// which is an output variable
-    pub fn terminal_port_for<'a>(&'a self, a: &'a Agent) -> Option<&'a Ident> {
-        let type_dec = self.symbol_declarations_for.get(&a.name)?;
+    /// which is an output variable.
+    pub fn terminal_ports_for<'a>(&'a self, a: &'a Agent) -> Vec<&'a Port> {
+        let type_dec = if let Some(dec) = self.symbol_declarations_for.get(&a.name) {
+            dec
+        } else {
+            return Default::default();
+        };
 
         // Both the port on the parent agent
         // and the primary port on the child agent
         // must be outputs
-        let output_child = type_dec
+        let output_children = type_dec
             .iter()
             .skip(1)
-            .map(|pgroup| pgroup.flatten())
-            .flatten()
             .zip(a.ports.iter())
             .filter(|(port_ty, _)| {
-                // Port must be an output port to an agent
+                // Port must be an output port to an agent or var
                 port_ty.as_output().is_some()
-            })
-            .filter_map(|(_, port)| port.as_var())
-            .next()?;
+            });
 
-        Some(output_child)
+        output_children
+            .filter_map(|(port_ty, port)| {
+                self.symbol_declarations_for
+                    .get(&Type(port.name().0.clone()))
+                    .map(|dec| (port_ty, port, dec))
+            })
+            .filter(
+                |(_, port, name_ty): &(&PortKind, &Port, &Vec<PortKind>)| -> bool {
+                    port.as_var().is_some() || {
+                        name_ty
+                            .iter()
+                            .map(|port| port.as_output().is_some())
+                            .next()
+                            .is_some()
+                    }
+                },
+            )
+            .map(|(_, port, _)| port)
+            .collect::<Vec<_>>()
     }
 
     pub fn has_type(&self, t: &Type) -> bool {
@@ -49,7 +67,7 @@ impl TypedProgram {
         self.nets.contains(n)
     }
 
-    pub fn get_declaration_for(&self, symbol: &Type) -> Option<&[PortGrouping]> {
+    pub fn get_declaration_for(&self, symbol: &Type) -> Option<&[PortKind]> {
         self.symbol_declarations_for
             .get(symbol)
             .map(|dec| dec.as_slice())
@@ -59,14 +77,14 @@ impl TypedProgram {
         self.types.insert(t);
     }
 
-    pub fn push_port_grouping(&mut self, ident: Type, port: PortGrouping) {
+    pub fn push_port_kind(&mut self, ident: Type, port: PortKind) {
         self.symbol_declarations_for
             .entry(ident)
             .or_default()
             .push(port);
     }
 
-    pub fn push_port_kinds(&mut self, ident: Type, ports: Vec<PortGrouping>) {
+    pub fn push_port_kinds(&mut self, ident: Type, ports: Vec<PortKind>) {
         self.symbol_declarations_for
             .entry(ident)
             .or_default()
@@ -132,18 +150,7 @@ pub fn parse_typed_program(
                                     None
                                 }
                             }
-                            PortGrouping::Partition(ps) => ps
-                                .iter()
-                                .filter_map(|p| match p {
-                                    PortKind::Input(ty) | PortKind::Output(ty) => {
-                                        if !acc.0.has_type(ty) {
-                                            Some(ty)
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                })
-                                .next(),
+                            PortGrouping::Partition(_) => None
                         })
                         .next()
                     {
@@ -155,7 +162,7 @@ pub fn parse_typed_program(
                         return acc;
                     }
 
-                    acc.0.push_port_kinds(ident.clone(), ports.clone());
+                    acc.0.push_port_kinds(ident.clone(), ports.iter().filter_map(|p| p.as_singleton()).cloned().collect());
                 }
                 Spanned(Expr::Net(Net { lhs, rhs }), span) => {
                     let mut to_check: VecDeque<&Agent> = VecDeque::from_iter(
@@ -194,7 +201,7 @@ pub fn parse_typed_program(
                             (Some(ty_lhs), Some(ty_rhs)) => {
 				if let Some((port_lhs, port_rhs)) = ty_lhs.iter().zip(ty_rhs.iter()).next() {
 				    match (port_lhs, port_rhs) {
-					(PortGrouping::Singleton(PortKind::Input(ty)), PortGrouping::Singleton(PortKind::Output(ty2))) | (PortGrouping::Singleton(PortKind::Output(ty)), PortGrouping::Singleton(PortKind::Input(ty2))) => {
+					(PortKind::Input(ty), PortKind::Output(ty2)) | (PortKind::Output(ty), PortKind::Input(ty2)) => {
 					    if ty != ty2 {
 						acc.1.push(Simple::custom(
                                     span.clone(),

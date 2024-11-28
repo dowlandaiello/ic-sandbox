@@ -1,13 +1,12 @@
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Port, PortGrouping, PortKind, Type},
+    parser::ast_lafont::{Agent, Port, PortKind, Type},
     BYTECODE_INDENTATION_STR,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
-    fmt,
-    hash::{DefaultHasher, Hash, Hasher},
+    fmt, iter,
 };
 
 pub mod vm;
@@ -17,7 +16,7 @@ pub type Ptr = usize;
 #[derive(Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct TypeSignature {
     pub ty: Type,
-    pub ports: Vec<PortGrouping>,
+    pub ports: Vec<PortKind>,
 }
 
 impl fmt::Display for TypeSignature {
@@ -35,35 +34,17 @@ impl fmt::Display for TypeSignature {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
-pub struct CallSignature {
-    pub ty: Type,
-    pub in_ports_hash: u64,
-}
-
-impl CallSignature {
-    pub fn instantiate(ty: Type, args: Vec<Port>) -> Self {
-        let mut hasher = DefaultHasher::new();
-        args.hash(&mut hasher);
-
-        Self {
-            ty,
-            in_ports_hash: hasher.finish(),
-        }
-    }
-}
-
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Program {
     pub names: Vec<Type>,
 
-    pub symbol_declarations_for: BTreeMap<Type, Vec<PortGrouping>>,
+    pub symbol_declarations_for: BTreeMap<Type, Vec<PortKind>>,
 
     // Mapping from output agent to its reduction strategy
-    pub reductions: BTreeMap<(TypeSignature, TypeSignature), Vec<Op>>,
+    pub reductions: BTreeMap<(Agent, Agent), Vec<Op>>,
 
     // Output elems of all active pairs
-    pub active_pairs: Vec<(Agent, Agent)>,
+    pub active_pairs: Vec<(Option<Agent>, Option<Agent>)>,
 }
 
 impl Program {
@@ -82,12 +63,26 @@ impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "names:\n{}\n\nreductions:\n{}\n\nactive_pairs:\n{}",
+            "names:\n{}\n\ntypes:\n{}\n\nreductions:\n{}\n\nactive_pairs:\n{}",
             self.names
                 .iter()
                 .map(|name| format!("{}{}", BYTECODE_INDENTATION_STR, name.0))
                 .collect::<Vec<_>>()
                 .join(&format!("{}\n", BYTECODE_INDENTATION_STR)),
+            self.symbol_declarations_for
+                .iter()
+                .map(|(ty, ports)| format!(
+                    "{}{}: {}",
+                    BYTECODE_INDENTATION_STR,
+                    ty,
+                    ports
+                        .iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join("\n"),
             self.reductions
                 .iter()
                 .map(|((signature_a, signature_b), ops)| format!(
@@ -109,7 +104,12 @@ impl fmt::Display for Program {
                 .join("\n\n"),
             self.active_pairs
                 .iter()
-                .map(|(a, b)| format!("{}{} >< {}", BYTECODE_INDENTATION_STR, a, b))
+                .map(|(a, b)| format!(
+                    "{}{} >< {}",
+                    BYTECODE_INDENTATION_STR,
+                    a.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                    b.as_ref().map(|b| b.to_string()).unwrap_or_default()
+                ))
                 .collect::<Vec<_>>()
                 .join("\n")
         )
@@ -188,9 +188,10 @@ impl fmt::Display for Op {
     }
 }
 
-/// If the output of a net is terminal (as in, its output is a variable or an output agent),
-/// then its reduction is a simple call to StoreResult, after building the corresponding
-/// netbuffer (can just copy it).
+/// If a net has no further active pairs to reduced, then it is terminal
+/// and its result can be committed to the store.
+///
+/// Nodes to be committed are output nodes connected to output ports
 fn try_amortize<'a>(
     names: &[Type],
     typings: &'a TypedProgram,
@@ -201,31 +202,43 @@ fn try_amortize<'a>(
         names: &[Type],
         typings: &'a TypedProgram,
         output_agent: &'a Agent,
-    ) -> Option<Vec<Op>> {
-        let terminal_port = typings.terminal_port_for(output_agent)?;
-
-        // If we have a terminal port, that means we can amortize the output
-        // to that terminal port's value
-        let terminal_port_name_id = names.iter().position(|x| x.0 == terminal_port.0)?;
+    ) -> Vec<Op> {
+        let terminal_ports = typings.terminal_ports_for(output_agent);
 
         tracing::debug!(
-            "agent {} has terminal port {} (@{})",
+            "agent {} has terminal port {:?}",
             output_agent,
-            terminal_port,
-            terminal_port_name_id
+            terminal_ports,
         );
 
-        Some(vec![
-            // We aren't connected to anything, we are the output (gigachad)
-            Op::PushPtrInitNet,
-            Op::PushNodeAgent(terminal_port_name_id),
-            Op::StoreResult,
-        ])
+        let mut ops = Vec::default();
+
+        ops.extend(terminal_ports.into_iter().filter_map(|p| match p {
+            Port::Agent(a) => {
+                let name_ptr = names.iter().position(|name| name.0 == a.name.0)?;
+
+                Some(Op::PushNodeAgent(name_ptr))
+            }
+            Port::Var(_) => None,
+        }));
+
+        ops
     }
 
-    amortize_from(names, typings, lhs).or_else(|| amortize_from(names, typings, rhs))
+    let mut ops = amortize_from(names, typings, lhs);
+    ops.extend(amortize_from(names, typings, rhs));
+
+    if ops.is_empty() {
+        return None;
+    }
+
+    Some(ops)
 }
 
+/// Reduction is repeated replacing and result storing:
+/// - Replacing is replacing variables, in all places they occur, with other values
+/// - Result storing is the commitment of fully reduced terms, which commits
+/// a fully reduced net to the store to skip further evaluation.
 fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: &Agent) -> Vec<Op> {
     tracing::debug!(
         "calculating reduction strategy for redex {} >< {}",
@@ -234,18 +247,12 @@ fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: 
     );
 
     if let Some(amortized_plan) = try_amortize(names, typings, lhs, rhs) {
-        tracing::debug!(
-            "redex {} >< {} is amortizable:\n{}",
-            lhs,
-            rhs,
-            amortized_plan
-                .iter()
-                .map(|s| format!("{}{}", BYTECODE_INDENTATION_STR, s))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
+        tracing::debug!("redex {} >< {} is amortizable", lhs, rhs);
 
-        return amortized_plan;
+        return iter::once(Op::PushPtrInitNet)
+            .chain(amortized_plan.into_iter())
+            .chain(iter::once(Op::StoreResult))
+            .collect();
     }
 
     vec![Op::PushPtrInitNet, Op::Pop]
@@ -284,32 +291,14 @@ pub fn compile(program: TypedProgram) -> Program {
                 let primary_port_lhs = ty_lhs.get(0)?;
                 let primary_port_rhs = ty_rhs.get(0)?;
 
-                if let PortGrouping::Singleton(PortKind::Output(_)) = primary_port_lhs {
+                if let PortKind::Output(_) = primary_port_lhs {
                     Some((
-                        (
-                            TypeSignature {
-                                ty: lhs.name.clone(),
-                                ports: ty_lhs.to_vec(),
-                            },
-                            TypeSignature {
-                                ty: rhs.name.clone(),
-                                ports: ty_rhs.to_vec(),
-                            },
-                        ),
+                        (lhs.clone(), rhs.clone()),
                         reduction_strategy(&names, &program, lhs, rhs),
                     ))
-                } else if let PortGrouping::Singleton(PortKind::Output(_)) = primary_port_rhs {
+                } else if let PortKind::Output(_) = primary_port_rhs {
                     Some((
-                        (
-                            TypeSignature {
-                                ty: rhs.name.clone(),
-                                ports: ty_rhs.to_vec(),
-                            },
-                            TypeSignature {
-                                ty: lhs.name.clone(),
-                                ports: ty_lhs.to_vec(),
-                            },
-                        ),
+                        (lhs.clone(), rhs.clone()),
                         reduction_strategy(&names, &program, lhs, rhs),
                     ))
                 } else {
@@ -320,7 +309,7 @@ pub fn compile(program: TypedProgram) -> Program {
     let active_pairs = program
         .nets
         .iter()
-        .filter_map(|net| net.lhs.clone().zip(net.rhs.clone()))
+        .map(|net| (net.lhs.clone(), net.rhs.clone()))
         .collect::<Vec<_>>();
 
     Program {

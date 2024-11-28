@@ -38,4 +38,7 @@ This project is still very bleeding edge, and needs to be refactored significant
 
 ## Todo
 
-- [ ] Syntax rework to implement original lafont paper spec
+- [x] Syntax rework to implement original lafont paper spec
+- [ ] Do we even need net buffers?
+- [ ] Rework some instances of expensive cloning to use Rc<>
+- [ ] Partition support
