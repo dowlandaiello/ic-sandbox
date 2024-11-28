@@ -147,6 +147,40 @@ impl Executor {
         }
     }
 
+    pub fn call_signature_for(&self, lhs: &Agent, rhs: &Agent) -> Option<CallSignature> {
+        let ty_lhs = self.p.symbol_declarations_for.get(&lhs.name)?;
+        let ty_rhs = self.p.symbol_declarations_for.get(&lhs.name)?;
+
+        let primary_port_lhs = ty_lhs.get(0).and_then(|arg| arg.as_singleton())?;
+        let primary_port_rhs = ty_rhs.get(0).and_then(|arg| arg.as_singleton())?;
+
+        // Whichever agent has a primary port being an input, we will
+        // get its call signature (defined by the hash of all its input ports)
+        //
+        // TODO: PortGrouping support?
+        match (primary_port_lhs, primary_port_rhs) {
+            (&PortKind::Input(_), &PortKind::Output(_)) => Some(CallSignature::instantiate(
+                lhs.name.clone(),
+                ty_lhs
+                    .iter()
+                    .zip(lhs.ports.iter())
+                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
+                    .map(|(_, val)| val.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            (&PortKind::Output(_), &PortKind::Input(_)) => Some(CallSignature::instantiate(
+                rhs.name.clone(),
+                ty_rhs
+                    .iter()
+                    .zip(rhs.ports.iter())
+                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
+                    .map(|(_, val)| val.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            _ => None,
+        }
+    }
+
     /// Creates a new reduction frame with a call signature equal
     /// to the specified redex.
     ///
@@ -168,43 +202,11 @@ impl Executor {
         lhs: &Agent,
         rhs: &Agent,
     ) -> Option<ReductionFrame> {
-        let ty_lhs = self.p.symbol_declarations_for.get(&lhs.name)?;
-        let ty_rhs = self.p.symbol_declarations_for.get(&lhs.name)?;
-
-        let primary_port_lhs = ty_lhs.get(0).and_then(|arg| arg.as_singleton())?;
-        let primary_port_rhs = ty_rhs.get(0).and_then(|arg| arg.as_singleton())?;
-
-        // Whichever agent has a primary port being an input, we will
-        // get its call signature (defined by the hash of all its input ports)
-        //
-        // TODO: PortGrouping support?
-        let sig = match (primary_port_lhs, primary_port_rhs) {
-            (&PortKind::Input(_), &PortKind::Output(_)) => Some(CallSignature::instantiate(
-                lhs.name.clone(),
-                ty_lhs
-                    .iter()
-                    .zip(lhs.ports.iter())
-                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
-                    .map(|(_, val)| val.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            (&PortKind::Output(_), &PortKind::Input(_)) => Some(CallSignature::instantiate(
-                rhs.name.clone(),
-                ty_rhs
-                    .iter()
-                    .zip(rhs.ports.iter())
-                    .filter(|(ty, _)| ty.as_singleton().and_then(|s| s.as_input()).is_some())
-                    .map(|(_, val)| val.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            _ => None,
-        };
-
         Some(ReductionFrame {
             instructions: reduction,
             stack: Default::default(),
             nets: Default::default(),
-            call_signature: sig?,
+            call_signature: self.call_signature_for(lhs, rhs)?,
         })
     }
 
@@ -271,7 +273,7 @@ impl Executor {
                         .instructions
                         .push_back(if cmp { exec_true } else { exec_false });
 
-                    self.step();
+                    self.step_frame();
                 }
             }
             Op::PushEq => {
@@ -383,34 +385,40 @@ impl Executor {
 
     /// Steps the virtual machine until nothing in the stack is left to execute
     pub fn step_to_end(&mut self) {
-        while self
-            .reduction
-            .as_ref()
-            .map(|r| !r.stack.is_empty())
-            .unwrap_or_default()
-        {
-            self.step();
+        // We are done once we have no results
+        // left to evaluate
+        loop {
+            if let Some(next) = self
+                .p
+                .active_pairs
+                .clone()
+                .iter()
+                .filter(|(a, b)| {
+                    !self
+                        .call_signature_for(a, b)
+                        .map(|sig| self.evaluations.contains_key(&sig))
+                        .unwrap_or_default()
+                })
+                .next()
+            {
+                self.step(&next);
+            } else {
+                break;
+            }
         }
     }
 
     /// Attempts to reduce the next redex which has a redex in the rulebook
     /// to reduce it
-    pub fn step(&mut self) {
+    pub fn step(&mut self, redex: &(Agent, Agent)) {
+        let (a, b) = redex;
+
         // Check if we have a rule to reduce the redex
-        if let Some(((a, b), reduction)) = self
+        if let Some(reduction) = self
             .p
-            .active_pairs
-            .iter()
-            .filter_map(|(a, b)| {
-                self.p
-                    .reductions
-                    .get(&(
-                        self.p.type_signature_for(&a)?,
-                        self.p.type_signature_for(&b)?,
-                    ))
-                    .map(|reduction| ((a, b), reduction))
-            })
-            .next()
+            .type_signature_for(&a)
+            .zip(self.p.type_signature_for(&b))
+            .and_then(|(sig_a, sig_b)| self.p.reductions.get(&(sig_a, sig_b)))
         {
             // Attempt to execute the reduction for this active pair
             self.reduction =
@@ -422,7 +430,7 @@ impl Executor {
                 .map(|r| !r.instructions.is_empty())
                 .unwrap_or_default()
             {
-                self.step();
+                self.step_frame();
             }
         }
     }

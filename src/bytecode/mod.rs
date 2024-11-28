@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt,
     hash::{DefaultHasher, Hash, Hasher},
 };
@@ -206,7 +206,14 @@ fn try_amortize<'a>(
 
         // If we have a terminal port, that means we can amortize the output
         // to that terminal port's value
-        let terminal_port_name_id = names.iter().position(|x| x == &terminal_port.name)?;
+        let terminal_port_name_id = names.iter().position(|x| x.0 == terminal_port.0)?;
+
+        tracing::debug!(
+            "agent {} has terminal port {} (@{})",
+            output_agent,
+            terminal_port,
+            terminal_port_name_id
+        );
 
         Some(vec![
             // We aren't connected to anything, we are the output (gigachad)
@@ -220,7 +227,24 @@ fn try_amortize<'a>(
 }
 
 fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: &Agent) -> Vec<Op> {
+    tracing::debug!(
+        "calculating reduction strategy for redex {} >< {}",
+        lhs,
+        rhs
+    );
+
     if let Some(amortized_plan) = try_amortize(names, typings, lhs, rhs) {
+        tracing::debug!(
+            "redex {} >< {} is amortizable:\n{}",
+            lhs,
+            rhs,
+            amortized_plan
+                .iter()
+                .map(|s| format!("{}{}", BYTECODE_INDENTATION_STR, s))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+
         return amortized_plan;
     }
 
@@ -228,12 +252,26 @@ fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: 
 }
 
 pub fn compile(program: TypedProgram) -> Program {
-    let names = program
+    let names_iter = program
         .types
         .iter()
         .chain(program.symbol_declarations_for.iter().map(|(k, _)| k))
         .cloned()
-        .collect::<Vec<_>>();
+        .chain(program.nets.iter().map(|n| n.names_mentioned()).flatten());
+
+    let mut unique_names: HashSet<Type> = HashSet::default();
+
+    let names = names_iter.fold(Vec::default(), |mut acc, x| {
+        if unique_names.contains(&x) {
+            return acc;
+        }
+
+        unique_names.insert(x.clone());
+        acc.push(x);
+
+        acc
+    });
+
     let reductions = BTreeMap::from_iter(
         program
             .nets

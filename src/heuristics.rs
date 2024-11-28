@@ -1,5 +1,5 @@
 use super::parser::{
-    ast_lafont::{Agent, Expr, Net, Port, PortGrouping, PortKind, Type},
+    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
@@ -14,9 +14,8 @@ pub struct TypedProgram {
 
 impl TypedProgram {
     /// Gets a reference to a port in the agent, if it exists,
-    /// which is an output agent (i.e., an agent with only
-    /// a principal port which is an output)
-    pub fn terminal_port_for<'a>(&'a self, a: &'a Agent) -> Option<&'a Agent> {
+    /// which is an output variable
+    pub fn terminal_port_for<'a>(&'a self, a: &'a Agent) -> Option<&'a Ident> {
         let type_dec = self.symbol_declarations_for.get(&a.name)?;
 
         // Both the port on the parent agent
@@ -32,21 +31,10 @@ impl TypedProgram {
                 // Port must be an output port to an agent
                 port_ty.as_output().is_some()
             })
-            .filter_map(|(_, port)| port.as_agent())
+            .filter_map(|(_, port)| port.as_var())
             .next()?;
 
-        let child_typedec = self.symbol_declarations_for.get(&output_child.name)?;
-
-        // The first port, which is the primary port, must be an output port
-        let primary_port_type_group = child_typedec.iter().next()?;
-        let primary_port_is_output = primary_port_type_group
-            .flatten()
-            .iter()
-            .next()?
-            .as_output()
-            .is_some();
-
-        primary_port_is_output.then(move || output_child)
+        Some(output_child)
     }
 
     pub fn has_type(&self, t: &Type) -> bool {
@@ -430,10 +418,9 @@ symbol abc: xyz+
         let program = "type nat
 
 symbol Z: nat+
-symbol S: nat+, nat-
 symbol Add: nat-, nat-, nat+
 
-Z() >< Add(Z(), Z())
+Z() >< Add(y, y)
 ";
         let lexed = parser_lafont::lexer().parse(program).unwrap();
         let parsed = parser_lafont::parser()
@@ -461,7 +448,7 @@ Z() >< Add(Z(), Z())
                     .clone()
                     .unwrap()
                     .ports[1]
-                    .as_agent()
+                    .as_var()
                     .unwrap()
             )
         );

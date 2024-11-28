@@ -1,6 +1,6 @@
 use crate::UNIT_STR;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{collections::VecDeque, fmt};
 
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
@@ -115,6 +115,35 @@ impl fmt::Display for Expr {
 pub struct Net {
     pub lhs: Option<Agent>,
     pub rhs: Option<Agent>,
+}
+
+impl Net {
+    /// Gets a list of all the names mentioned in the net.
+    pub fn names_mentioned(&self) -> Vec<Type> {
+        let mut to_check = VecDeque::from_iter(
+            [&self.lhs, &self.rhs]
+                .into_iter()
+                .filter_map(|x| x.as_ref()),
+        );
+        let mut names = Vec::default();
+
+        while let Some(c) = to_check.pop_front() {
+            names.push(c.name.clone());
+
+            for p in c.ports.iter() {
+                match p {
+                    Port::Var(v) => {
+                        names.push(Type(v.0.clone()));
+                    }
+                    Port::Agent(a) => {
+                        to_check.push_back(&a);
+                    }
+                }
+            }
+        }
+
+        names
+    }
 }
 
 impl fmt::Display for Net {
