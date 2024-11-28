@@ -126,6 +126,9 @@ pub enum Op {
     /// Pushes a pointer to a new initialized net buffer to the stack
     PushPtrInitNet,
 
+    /// Pushes a pointer to a copy of a net, as a net buffer to the stack
+    PushPtrCpyNet(Ptr),
+
     Pop,
 
     /// Pushes a new node with a name given by the pointer
@@ -138,14 +141,8 @@ pub enum Op {
     /// and out nodes given by the pointers
     PushNodeAgent(Ptr),
 
-    /// Connects two nodes by a +-+ conn
-    PushConnOutOut(Ptr, Ptr),
-
-    /// Connects two nodes by a +-- conn
-    PushConnInOut(Ptr, Ptr),
-
-    /// Connects two nodes by a --- conn
-    PushConnInIn(Ptr, Ptr),
+    /// Connects two nodes
+    PushConn(Ptr, Ptr),
 
     /// This instruction stores whatever net is currently in the stack
     /// in the evaluations record for the call signature
@@ -181,9 +178,8 @@ impl fmt::Display for Op {
                 write!(f, "PUSHB_V {} {}", name, primary_port)
             }
             Self::PushNodeAgent(name) => write!(f, "PUSHB_A {}", name),
-            Self::PushConnInIn(a, b) => write!(f, "PUSHC_II {} {}", a, b),
-            Self::PushConnOutOut(a, b) => write!(f, "PUSHC_OO {} {}", a, b),
-            Self::PushConnInOut(a, b) => write!(f, "PUSHC_IO {} {}", a, b),
+            Self::PushConn(a, b) => write!(f, "PUSHC {} {}", a, b),
+            Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_N {}", ptr),
         }
     }
 }
@@ -195,8 +191,8 @@ impl fmt::Display for Op {
 fn try_amortize<'a>(
     names: &[Type],
     typings: &'a TypedProgram,
-    lhs: &'a Agent,
-    rhs: &'a Agent,
+    lhs: Option<&'a Agent>,
+    rhs: Option<&'a Agent>,
 ) -> Option<Vec<Op>> {
     fn amortize_from<'a>(
         names: &[Type],
@@ -225,8 +221,13 @@ fn try_amortize<'a>(
         ops
     }
 
-    let mut ops = amortize_from(names, typings, lhs);
-    ops.extend(amortize_from(names, typings, rhs));
+    let mut ops = lhs
+        .map(|lhs| amortize_from(names, typings, lhs))
+        .unwrap_or_default();
+    ops.extend(
+        rhs.map(|rhs| amortize_from(names, typings, rhs))
+            .unwrap_or_default(),
+    );
 
     if ops.is_empty() {
         return None;
@@ -235,19 +236,42 @@ fn try_amortize<'a>(
     Some(ops)
 }
 
+/// A strategy that is a noop. Just copies the net to a buffer.
+fn reduction_strategy_copy(net: Ptr) -> Vec<Op> {
+    vec![Op::PushPtrCpyNet(net)]
+}
+
 /// Reduction is repeated replacing and result storing:
 /// - Replacing is replacing variables, in all places they occur, with other values
 /// - Result storing is the commitment of fully reduced terms, which commits
 /// a fully reduced net to the store to skip further evaluation.
-fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: &Agent) -> Vec<Op> {
+fn reduction_strategy(
+    names: &[Type],
+    typings: &TypedProgram,
+    lhs: Option<&Agent>,
+    rhs: Option<&Agent>,
+    net_ptr: Ptr,
+) -> Vec<Op> {
     tracing::debug!(
         "calculating reduction strategy for redex {} >< {}",
-        lhs,
-        rhs
+        lhs.as_ref()
+            .map(|agent| agent.to_string())
+            .unwrap_or_default(),
+        rhs.as_ref()
+            .map(|agent| agent.to_string())
+            .unwrap_or_default()
     );
 
     if let Some(amortized_plan) = try_amortize(names, typings, lhs, rhs) {
-        tracing::debug!("redex {} >< {} is amortizable", lhs, rhs);
+        tracing::debug!(
+            "redex {} >< {} is amortizable",
+            lhs.as_ref()
+                .map(|agent| agent.to_string())
+                .unwrap_or_default(),
+            rhs.as_ref()
+                .map(|agent| agent.to_string())
+                .unwrap_or_default()
+        );
 
         return iter::once(Op::PushPtrInitNet)
             .chain(amortized_plan.into_iter())
@@ -255,7 +279,7 @@ fn reduction_strategy(names: &[Type], typings: &TypedProgram, lhs: &Agent, rhs: 
             .collect();
     }
 
-    vec![Op::PushPtrInitNet, Op::Pop]
+    reduction_strategy_copy(net_ptr)
 }
 
 pub fn compile(program: TypedProgram) -> Program {
@@ -283,27 +307,13 @@ pub fn compile(program: TypedProgram) -> Program {
         program
             .nets
             .iter()
-            .filter_map(|net| net.lhs.as_ref().zip(net.rhs.as_ref()))
-            .filter_map(|(lhs, rhs)| {
-                let ty_lhs = program.get_declaration_for(&lhs.name)?;
-                let ty_rhs = program.get_declaration_for(&rhs.name)?;
-
-                let primary_port_lhs = ty_lhs.get(0)?;
-                let primary_port_rhs = ty_rhs.get(0)?;
-
-                if let PortKind::Output(_) = primary_port_lhs {
-                    Some((
-                        (lhs.clone(), rhs.clone()),
-                        reduction_strategy(&names, &program, lhs, rhs),
-                    ))
-                } else if let PortKind::Output(_) = primary_port_rhs {
-                    Some((
-                        (lhs.clone(), rhs.clone()),
-                        reduction_strategy(&names, &program, lhs, rhs),
-                    ))
-                } else {
-                    None
-                }
+            .enumerate()
+            .map(|(i, net)| (i, net.lhs.as_ref(), net.rhs.as_ref()))
+            .filter_map(|(ptr, lhs, rhs)| {
+                Some((
+                    (lhs?.clone(), rhs?.clone()),
+                    reduction_strategy(&names, &program, lhs, rhs, ptr),
+                ))
             }),
     );
     let active_pairs = program

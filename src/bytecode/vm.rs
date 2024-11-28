@@ -3,9 +3,9 @@ use crate::{
     heuristics::TypedProgram,
     parser::ast_lafont::{Agent, Ident, Net, Port, Type},
 };
-use std::collections::{linked_list::LinkedList, BTreeMap, BTreeSet};
+use std::collections::{linked_list::LinkedList, BTreeMap, BTreeSet, VecDeque};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum StackElem {
     Ptr(Ptr),
     None,
@@ -50,21 +50,6 @@ impl StackElem {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum NodePort {
-    In(Ptr),
-    Out(Ptr),
-}
-
-impl NodePort {
-    pub fn as_ptr(&self) -> Ptr {
-        match self {
-            Self::In(p) => *p,
-            Self::Out(p) => *p,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum Node {
     /// In ports is a vec of pointers to variables or agents
@@ -72,7 +57,7 @@ pub enum Node {
     ///
     /// output_port_agents is a vec of pointers to agents
     /// which the variable or agent is connected to via output
-    Agent { name: Ptr, ports: Vec<NodePort> },
+    Agent { name: Ptr, ports: Vec<Ptr> },
 
     /// Primary port is a pointer to the agent which the variable
     /// is connected to by output
@@ -80,21 +65,10 @@ pub enum Node {
 }
 
 impl Node {
-    pub fn connect_in(self, other: Ptr) -> Self {
+    pub fn connect(self, other: Ptr) -> Self {
         match self {
             Self::Agent { name, mut ports } => {
-                ports.push(NodePort::In(other));
-
-                Self::Agent { name, ports }
-            }
-            Self::Var { .. } => self,
-        }
-    }
-
-    pub fn connect_out(self, other: Ptr) -> Self {
-        match self {
-            Self::Agent { name, mut ports } => {
-                ports.push(NodePort::Out(other));
+                ports.push(other);
 
                 Self::Agent { name, ports }
             }
@@ -110,6 +84,13 @@ impl Node {
 pub struct NetBuffer {
     pub nodes: Vec<Node>,
     pub active_pairs: Vec<(Ptr, Ptr)>,
+}
+
+impl NetBuffer {
+    pub fn connect(&mut self, a_ptr: Ptr, b_ptr: Ptr) {
+        self.nodes[a_ptr] = self.nodes.remove(a_ptr).connect(b_ptr);
+        self.nodes[b_ptr] = self.nodes.remove(b_ptr).connect(a_ptr);
+    }
 }
 
 #[derive(Debug)]
@@ -152,6 +133,97 @@ impl Executor {
             p,
             reduction: Default::default(),
         }
+    }
+
+    fn push_ast_agent_net_buffer(&self, buffer: &mut NetBuffer, agent: &Agent) -> Option<Ptr> {
+        let name_ptr = self
+            .p
+            .names
+            .iter()
+            .position(|name| name.0 == agent.name.0)?;
+
+        buffer.nodes.push(Node::Agent {
+            name: name_ptr,
+            ports: Default::default(),
+        });
+
+        Some(buffer.nodes.len() - 1)
+    }
+
+    /// Todo: make this iterative
+    pub fn new_net_buffer(&self, net: &Net) -> NetBuffer {
+        let mut n = NetBuffer::default();
+
+        // Push all agents in one pass
+        // then connect them
+
+        let mut to_insert_nodes = VecDeque::from_iter(
+            [net.lhs.as_ref(), net.rhs.as_ref()]
+                .into_iter()
+                .filter_map(|x| x),
+        );
+        let mut inserted: BTreeMap<&Agent, Ptr> = Default::default();
+
+        while let Some(to_insert) = to_insert_nodes.pop_front() {
+            if inserted.contains_key(to_insert) {
+                continue;
+            }
+
+            if let Some(agent_ptr) = self.push_ast_agent_net_buffer(&mut n, to_insert) {
+                inserted.insert(to_insert, agent_ptr);
+            }
+
+            to_insert_nodes.extend(to_insert.ports.iter().filter_map(|p| match p {
+                Port::Agent(a) => Some(a),
+                Port::Var(_) => None,
+            }));
+        }
+
+        // Now connect all inserted nodes
+        let mut to_connect_nodes = VecDeque::from_iter(
+            [net.lhs.as_ref(), net.rhs.as_ref()]
+                .into_iter()
+                .filter_map(|x| x),
+        );
+
+        while let Some((to_connect, to_connect_inserted)) = to_connect_nodes
+            .pop_front()
+            .and_then(|to_connect| Some((to_connect, inserted.get(to_connect)?)))
+        {
+            for port in to_connect.ports.iter() {
+                match port {
+                    Port::Agent(a) => {
+                        let ptr_child = if let Some(v) = inserted.get(&a) {
+                            v
+                        } else {
+                            continue;
+                        };
+
+                        n.connect(*to_connect_inserted, *ptr_child);
+
+                        to_connect_nodes.extend(a.ports.iter().filter_map(|p| p.as_agent()));
+                    }
+                    Port::Var(v) => {
+                        let name_ptr = if let Some(v) = self.p.names.iter().position(|x| x.0 == v.0)
+                        {
+                            v
+                        } else {
+                            continue;
+                        };
+
+                        n.nodes.push(Node::Var {
+                            name: name_ptr,
+                            primary_port: *to_connect_inserted,
+                        });
+                        let ptr = n.nodes.len() - 1;
+
+                        n.connect(*to_connect_inserted, ptr);
+                    }
+                }
+            }
+        }
+
+        n
     }
 
     pub fn step_frame(&mut self) -> Option<()> {
@@ -264,56 +336,77 @@ impl Executor {
             // Continuously pop connect and create node instructions until we have created the net
             p @ Op::PushNodeVar(_, _)
             | p @ Op::PushNodeAgent(_)
-            | p @ Op::PushConnOutOut(_, _)
-            | p @ Op::PushConnInIn(_, _)
-            | p @ Op::PushConnInOut(_, _) => {
-                let n_ptr =
-                    if let Some(StackElem::Ptr(ptr)) = self.reduction.as_mut()?.stack.pop_back() {
-                        ptr
-                    } else {
-                        return None;
-                    };
-
-                // Will need to add nodes, conns, or vars to this
-                let net = self.reduction.as_mut()?.nets.get_mut(n_ptr)?;
+            | p @ Op::PushConn(_, _)
+            | p @ Op::PushPtrCpyNet(_) => {
+                let n_ptr = if let Some(StackElem::Ptr(ptr)) =
+                    self.reduction.as_ref()?.stack.iter().next().cloned()
+                {
+                    ptr
+                } else {
+                    return None;
+                };
 
                 match p {
-                    Op::PushNodeVar(name_ptr, primary_port_ptr) => {
-                        net.nodes.push(Node::Var {
-                            name: name_ptr,
-                            primary_port: primary_port_ptr,
+                    Op::PushPtrCpyNet(n) => {
+                        let (lhs, rhs) = self.p.active_pairs.get(n)?;
+                        let buffer = self.new_net_buffer(&Net {
+                            lhs: lhs.clone(),
+                            rhs: rhs.clone(),
                         });
+
+                        self.reduction.as_mut()?.nets.push(buffer);
+
+                        let ptr = StackElem::Ptr(
+                            self.reduction.as_ref()?.nets.get(n_ptr)?.nodes.len() - 1,
+                        );
+
+                        self.reduction.as_mut()?.stack.push_back(ptr);
+                    }
+                    Op::PushNodeVar(name_ptr, primary_port_ptr) => {
+                        self.reduction
+                            .as_mut()?
+                            .nets
+                            .get_mut(n_ptr)?
+                            .nodes
+                            .push(Node::Var {
+                                name: name_ptr,
+                                primary_port: primary_port_ptr,
+                            });
+
+                        // We will need this for further operations, and for our outputresult
+                        let ptr = StackElem::Ptr(
+                            self.reduction.as_ref()?.nets.get(n_ptr)?.nodes.len() - 1,
+                        );
+
+                        self.reduction.as_mut()?.stack.push_back(ptr);
                     }
                     Op::PushNodeAgent(name_ptr) => {
-                        net.nodes.push(Node::Agent {
-                            name: name_ptr,
-                            ports: Default::default(),
-                        });
-                    }
-                    Op::PushConnOutOut(a_ptr, b_ptr) => {
-                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_out(b_ptr);
-                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_out(a_ptr);
-                    }
-                    Op::PushConnInIn(a_ptr, b_ptr) => {
-                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_in(b_ptr);
-                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_in(a_ptr);
-                    }
-                    Op::PushConnInOut(a_ptr, b_ptr) => {
-                        net.nodes[a_ptr] = net.nodes.remove(a_ptr).connect_in(b_ptr);
-                        net.nodes[b_ptr] = net.nodes.remove(b_ptr).connect_out(a_ptr);
+                        self.reduction
+                            .as_mut()?
+                            .nets
+                            .get_mut(n_ptr)?
+                            .nodes
+                            .push(Node::Agent {
+                                name: name_ptr,
+                                ports: Default::default(),
+                            });
 
-                        net.active_pairs.push((a_ptr, b_ptr));
+                        // We will need this for further operations, and for our outputresult
+                        let ptr = StackElem::Ptr(
+                            self.reduction.as_ref()?.nets.get(n_ptr)?.nodes.len() - 1,
+                        );
+
+                        self.reduction.as_mut()?.stack.push_back(ptr);
+                    }
+                    Op::PushConn(a_ptr, b_ptr) => {
+                        let net = self.reduction.as_mut()?.nets.get_mut(n_ptr)?;
+
+                        net.connect(a_ptr, b_ptr);
                     }
                     _ => {
                         unreachable!()
                     }
                 }
-
-                // We will need this for further operations, and for our outputresult
-                self.reduction
-                    .as_mut()?
-                    .stack
-                    .push_back(StackElem::Ptr(n_ptr));
             }
         }
 
@@ -327,7 +420,7 @@ impl Executor {
                 name: Type(self.p.names.get(*name)?.clone().0),
                 ports: ports
                     .iter()
-                    .filter_map(|p| self.readback_node(buffer, buffer.nodes.get(p.as_ptr())?))
+                    .filter_map(|p| self.readback_node(buffer, buffer.nodes.get(*p)?))
                     .collect(),
             })),
             Node::Var { name, .. } => Some(Port::Var(Ident(self.p.names.get(*name)?.clone().0))),
@@ -396,27 +489,23 @@ impl Executor {
 
     /// Steps the virtual machine until nothing in the stack is left to execute
     pub fn step_to_end(&mut self) {
-        tracing::debug!("evaluating to end: \n{}", self.p);
+        tracing::trace!("evaluating to end: \n{}", self.p);
 
         // We are done once we have no results
         // left to evaluate
-        loop {
-            if let Some(next) = self
-                .p
-                .active_pairs
-                .clone()
-                .iter()
-                .filter_map(|(a, b)| Some((a.clone()?, b.clone()?)))
-                .filter(|(a, b)| {
-                    self.p.reductions.contains_key(&(a.clone(), b.clone()))
-                        && !self.evaluations.contains_key(&(a.clone(), b.clone()))
-                })
-                .next()
-            {
-                self.step(&next);
-            } else {
-                break;
-            }
+        while let Some(next) = self
+            .p
+            .active_pairs
+            .clone()
+            .iter()
+            .filter_map(|(a, b)| Some((a.clone()?, b.clone()?)))
+            .filter(|(a, b)| {
+                self.p.reductions.contains_key(&(a.clone(), b.clone()))
+                    && !self.evaluations.contains_key(&(a.clone(), b.clone()))
+            })
+            .next()
+        {
+            self.step(&next);
         }
     }
 
