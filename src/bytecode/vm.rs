@@ -50,7 +50,7 @@ impl StackElem {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub enum Node {
     /// In ports is a vec of pointers to variables or agents
     /// which the agent is connected to via input
@@ -80,7 +80,7 @@ impl Node {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
 pub struct NetBuffer {
     pub nodes: Vec<Node>,
     pub active_pairs: Vec<(Ptr, Ptr)>,
@@ -88,8 +88,11 @@ pub struct NetBuffer {
 
 impl NetBuffer {
     pub fn connect(&mut self, a_ptr: Ptr, b_ptr: Ptr) {
-        self.nodes[a_ptr] = self.nodes.remove(a_ptr).connect(b_ptr);
-        self.nodes[b_ptr] = self.nodes.remove(b_ptr).connect(a_ptr);
+        let updated_a = self.nodes.remove(a_ptr).connect(b_ptr);
+        self.nodes.insert(a_ptr, updated_a);
+
+        let updated_b = self.nodes.remove(b_ptr).connect(a_ptr);
+        self.nodes.insert(b_ptr, updated_b);
     }
 }
 
@@ -186,11 +189,29 @@ impl Executor {
                 .filter_map(|x| x),
         );
 
+        // Connect top-level redex
+        match (
+            net.lhs
+                .as_ref()
+                .and_then(|agent| Some((agent, inserted.get(&agent)?))),
+            net.rhs
+                .as_ref()
+                .and_then(|agent| Some((agent, inserted.get(&agent)?))),
+        ) {
+            (Some((_, ptr_lhs)), Some((_, ptr_rhs))) => {
+                n.connect(*ptr_lhs, *ptr_rhs);
+
+                // This is also an active pair
+                n.active_pairs.push((*ptr_lhs, *ptr_rhs));
+            }
+            _ => {}
+        }
+
         while let Some((to_connect, to_connect_inserted)) = to_connect_nodes
             .pop_front()
             .and_then(|to_connect| Some((to_connect, inserted.get(to_connect)?)))
         {
-            for port in to_connect.ports.iter() {
+            for (i, port) in to_connect.ports.iter().enumerate() {
                 match port {
                     Port::Agent(a) => {
                         let ptr_child = if let Some(v) = inserted.get(&a) {
@@ -200,6 +221,11 @@ impl Executor {
                         };
 
                         n.connect(*to_connect_inserted, *ptr_child);
+
+                        // This is an active pair
+                        if i == 0 {
+                            n.active_pairs.push((*to_connect_inserted, *ptr_child));
+                        }
 
                         to_connect_nodes.extend(a.ports.iter().filter_map(|p| p.as_agent()));
                     }
@@ -230,6 +256,7 @@ impl Executor {
         let op = self.reduction.as_mut()?.instructions.pop_front()?;
 
         tracing::debug!("executing op {}", op);
+        tracing::trace!("stack at execution: {:?}", self.reduction.as_ref()?.stack);
 
         match op {
             Op::PushPtrInitNet => {
@@ -333,11 +360,39 @@ impl Executor {
                         .push_back(StackElem::Bool(cmp_a == StackElem::None));
                 }
             }
+
+            Op::PushPtrCpyNet(n) => {
+                tracing::trace!("copying {} to buffer", n);
+
+                let (lhs, rhs) = self.p.active_pairs.get(n)?;
+
+                tracing::trace!(
+                    "copying {} >< {} to buffer",
+                    lhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                    rhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                );
+
+                let buffer = self.new_net_buffer(&Net {
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                });
+
+                tracing::trace!(
+                    "copied {} >< {} to buffer {:?}",
+                    lhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                    rhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
+                    buffer
+                );
+
+                self.reduction.as_mut()?.nets.push(buffer);
+
+                let ptr = StackElem::Ptr(self.reduction.as_ref()?.nets.len() - 1);
+
+                self.reduction.as_mut()?.stack.push_back(ptr);
+            }
+
             // Continuously pop connect and create node instructions until we have created the net
-            p @ Op::PushNodeVar(_, _)
-            | p @ Op::PushNodeAgent(_)
-            | p @ Op::PushConn(_, _)
-            | p @ Op::PushPtrCpyNet(_) => {
+            p @ Op::PushNodeVar(_, _) | p @ Op::PushNodeAgent(_) | p @ Op::PushConn(_, _) => {
                 let n_ptr = if let Some(StackElem::Ptr(ptr)) =
                     self.reduction.as_ref()?.stack.iter().next().cloned()
                 {
@@ -347,21 +402,6 @@ impl Executor {
                 };
 
                 match p {
-                    Op::PushPtrCpyNet(n) => {
-                        let (lhs, rhs) = self.p.active_pairs.get(n)?;
-                        let buffer = self.new_net_buffer(&Net {
-                            lhs: lhs.clone(),
-                            rhs: rhs.clone(),
-                        });
-
-                        self.reduction.as_mut()?.nets.push(buffer);
-
-                        let ptr = StackElem::Ptr(
-                            self.reduction.as_ref()?.nets.get(n_ptr)?.nodes.len() - 1,
-                        );
-
-                        self.reduction.as_mut()?.stack.push_back(ptr);
-                    }
                     Op::PushNodeVar(name_ptr, primary_port_ptr) => {
                         self.reduction
                             .as_mut()?
@@ -420,6 +460,7 @@ impl Executor {
                 name: Type(self.p.names.get(*name)?.clone().0),
                 ports: ports
                     .iter()
+                    .skip(1)
                     .filter_map(|p| self.readback_node(buffer, buffer.nodes.get(*p)?))
                     .collect(),
             })),
@@ -428,39 +469,76 @@ impl Executor {
     }
 
     pub fn readback_buffer(&self, buffer: NetBuffer) -> Vec<(Option<Agent>, Option<Agent>)> {
-        let deref_ptr_node = |p: Ptr| &buffer.nodes[p];
-
         buffer
-            .active_pairs
+            .nodes
             .iter()
-            .map(|(a, b)| (deref_ptr_node(*a), deref_ptr_node(*b)))
-            .map(|(a_node, b_node)| {
-                (
-                    self.readback_node(&buffer, a_node)
-                        .and_then(|a| a.into_agent()),
-                    self.readback_node(&buffer, b_node)
-                        .and_then(|a| a.into_agent()),
-                )
+            .filter_map(|node| match node {
+                Node::Var { .. } => None,
+                Node::Agent { ports, name } => {
+                    let primary = ports.iter().next().and_then(|p| buffer.nodes.get(*p));
+
+                    Some(
+                        if let Some(p) = primary.map(|p| self.readback_node(&buffer, p)) {
+                            (
+                                self.readback_node(
+                                    &buffer,
+                                    &Node::Agent {
+                                        ports: ports.clone(),
+                                        name: name.clone(),
+                                    },
+                                )
+                                .and_then(|p| p.into_agent()),
+                                p.and_then(|p| p.into_agent()),
+                            )
+                        } else {
+                            (
+                                self.readback_node(
+                                    &buffer,
+                                    &Node::Agent {
+                                        ports: ports.clone(),
+                                        name: name.clone(),
+                                    },
+                                )
+                                .and_then(|p| p.into_agent()),
+                                None,
+                            )
+                        },
+                    )
+                }
             })
-            .collect::<Vec<(Option<Agent>, Option<Agent>)>>()
+            .map(|(a, b)| {
+                a.clone()
+                    .zip(b.clone())
+                    .map(|(a, b)| {
+                        let ord = Agent::pair_ord(a, b);
+
+                        (Some(ord.0), Some(ord.1))
+                    })
+                    .unwrap_or((a, b))
+            })
+            .collect::<BTreeSet<(Option<Agent>, Option<Agent>)>>()
+            .into_iter()
+            .collect::<Vec<_>>()
     }
 
     /// Converts the program to a human-readable form
     pub fn readback(&self) -> TypedProgram {
-        TypedProgram {
-            types: self
-                .p
+        let types =
+            self.p
                 .reductions
                 .iter()
-                .fold(Default::default(), |mut acc, ((lhs, rhs), _)| {
+                .fold(BTreeSet::default(), |mut acc, ((lhs, rhs), _)| {
                     acc.insert(lhs.name.clone());
                     acc.insert(rhs.name.clone());
 
                     acc
-                }),
-            symbol_declarations_for: self.p.reductions.iter().fold(
-                Default::default(),
-                |mut acc, ((lhs, rhs), _)| {
+                });
+
+        let symbol_declarations_for =
+            self.p
+                .reductions
+                .iter()
+                .fold(BTreeMap::default(), |mut acc, ((lhs, rhs), _)| {
                     if let Some((ty_lhs, ty_rhs)) = self
                         .p
                         .type_signature_for(lhs)
@@ -471,19 +549,24 @@ impl Executor {
                     }
 
                     acc
-                },
-            ),
-            nets: self
-                .evaluations
-                .iter()
-                .map(|(_, buff)| {
-                    self.readback_buffer(buff.clone())
-                        .into_iter()
-                        .map(|(lhs, rhs)| Net { lhs, rhs })
-                        .collect::<Vec<_>>()
-                })
-                .flatten()
-                .collect::<BTreeSet<_>>(),
+                });
+
+        let nets = self
+            .evaluations
+            .iter()
+            .map(|(_, buff)| {
+                self.readback_buffer(buff.clone())
+                    .into_iter()
+                    .map(|(lhs, rhs)| Net { lhs, rhs })
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect::<BTreeSet<_>>();
+
+        TypedProgram {
+            types,
+            symbol_declarations_for,
+            nets,
         }
     }
 
@@ -493,20 +576,25 @@ impl Executor {
 
         // We are done once we have no results
         // left to evaluate
-        while let Some(next) = self
-            .p
-            .active_pairs
-            .clone()
-            .iter()
-            .filter_map(|(a, b)| Some((a.clone()?, b.clone()?)))
-            .filter(|(a, b)| {
-                self.p.reductions.contains_key(&(a.clone(), b.clone()))
-                    && !self.evaluations.contains_key(&(a.clone(), b.clone()))
-            })
-            .next()
-        {
-            self.step(&next);
+        loop {
+            if let Some(next) = self
+                .p
+                .active_pairs
+                .iter()
+                .filter_map(|(a, b)| Some((a.clone()?, b.clone()?)))
+                .filter(|(a, b)| {
+                    self.p.reductions.contains_key(&(a.clone(), b.clone()))
+                        && !self.evaluations.contains_key(&(a.clone(), b.clone()))
+                })
+                .next()
+            {
+                self.step(&next);
+            } else {
+                break;
+            }
         }
+
+        tracing::trace!("done evaluating");
     }
 
     /// Attempts to reduce the next redex which has a redex in the rulebook
@@ -540,5 +628,69 @@ impl Executor {
                 self.step_frame();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{
+        heuristics::parse_typed_program,
+        parser::parser_lafont::{self, Spanned},
+    };
+    use chumsky::{prelude::*, Stream};
+
+    #[test]
+    fn test_cpy_net_buffer() {
+        let program = "type nat
+
+symbol Z: nat+
+symbol S: nat+, nat-
+symbol Add: nat-, nat-, nat+
+
+Z() >< Add(y, y)";
+
+        let lexed = parser_lafont::lexer().parse(program).unwrap();
+        let parsed = parser_lafont::parser()
+            .parse(Stream::from_iter(
+                0..program.len(),
+                lexed
+                    .into_iter()
+                    .flatten()
+                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
+            ))
+            .unwrap();
+
+        let (typed, _) = parse_typed_program(parsed);
+        let program = super::super::compile(typed);
+
+        let mut exec = Executor::new(program);
+        let (lhs, rhs) = exec.p.active_pairs.remove(0);
+        let buffer = exec.new_net_buffer(&Net { lhs, rhs });
+
+        assert_eq!(
+            buffer,
+            NetBuffer {
+                nodes: vec![
+                    Node::Agent {
+                        name: 3,
+                        ports: vec![1],
+                    },
+                    Node::Agent {
+                        name: 1,
+                        ports: vec![0, 2, 3]
+                    },
+                    Node::Var {
+                        name: 4,
+                        primary_port: 1
+                    },
+                    Node::Var {
+                        name: 4,
+                        primary_port: 1
+                    }
+                ],
+                active_pairs: vec![(0, 1)],
+            }
+        );
     }
 }

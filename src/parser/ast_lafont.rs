@@ -148,10 +148,14 @@ impl Net {
 
 impl fmt::Display for Net {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some((lhs, rhs)) = self.lhs.as_ref().zip(self.rhs.as_ref()) {
-            write!(f, "{} >< {}", lhs, rhs)
-        } else {
-            write!(f, "")
+        match (self.lhs.as_ref(), self.rhs.as_ref()) {
+            (Some(lhs), Some(rhs)) => {
+                write!(f, "{} >< {}", lhs, rhs)
+            }
+            (Some(lhs), None) | (None, Some(lhs)) => {
+                write!(f, "{}", lhs)
+            }
+            (None, None) => write!(f, ""),
         }
     }
 }
@@ -160,6 +164,16 @@ impl fmt::Display for Net {
 pub struct Agent {
     pub name: Type,
     pub ports: Vec<Port>,
+}
+
+impl Agent {
+    pub fn pair_ord<'a>(a: Self, b: Self) -> (Self, Self) {
+        if a < b {
+            (a, b)
+        } else {
+            (b, a)
+        }
+    }
 }
 
 impl fmt::Display for Agent {

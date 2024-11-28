@@ -280,6 +280,9 @@ fn reduction_strategy(
     }
 
     reduction_strategy_copy(net_ptr)
+        .into_iter()
+        .chain(iter::once(Op::StoreResult))
+        .collect()
 }
 
 pub fn compile(program: TypedProgram) -> Program {

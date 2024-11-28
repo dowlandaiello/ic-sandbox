@@ -427,7 +427,7 @@ symbol abc: xyz+
 symbol Z: nat+
 symbol Add: nat-, nat-, nat+
 
-Z() >< Add(y, y)
+Z() >< Add(Z(), Z())
 ";
         let lexed = parser_lafont::lexer().parse(program).unwrap();
         let parsed = parser_lafont::parser()
@@ -443,21 +443,24 @@ Z() >< Add(y, y)
         let (program, _) = parse_typed_program(parsed);
 
         assert_eq!(
-            program.terminal_port_for(
-                &program.nets.iter().collect::<Vec<_>>()[0]
-                    .rhs
-                    .clone()
-                    .unwrap()
-            ),
-            Some(
-                program.nets.iter().collect::<Vec<_>>()[0]
-                    .rhs
-                    .clone()
-                    .unwrap()
-                    .ports[1]
-                    .as_var()
-                    .unwrap()
-            )
+            program
+                .terminal_ports_for(
+                    &program.nets.iter().collect::<Vec<_>>()[0]
+                        .rhs
+                        .clone()
+                        .unwrap()
+                )
+                .into_iter()
+                .map(|p| p.name().0)
+                .collect::<Vec<_>>(),
+            vec![program.nets.iter().collect::<Vec<_>>()[0]
+                .rhs
+                .clone()
+                .unwrap()
+                .ports[1]
+                .name()
+                .0
+                .clone()]
         );
     }
 }
