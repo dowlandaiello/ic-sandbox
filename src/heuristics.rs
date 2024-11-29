@@ -16,7 +16,7 @@ impl TypedProgram {
     /// Gets a reference to a port in the agent, if it exists,
     /// which is an output variable.
     pub fn terminal_ports_for<'a>(
-        &'a self,
+        typings: &'a BTreeMap<Type, Vec<PortKind>>,
         a: &'a Agent,
         port_typings: &Vec<PortKind>,
     ) -> Vec<&'a Port> {
@@ -36,14 +36,14 @@ impl TypedProgram {
                 match &port {
                     p @ Port::Var(_) => Some(vec![p]),
                     Port::Agent(a) => {
-                        let typings = self.symbol_declarations_for.get(&a.name)?;
+                        let typedec = typings.get(&a.name)?;
 
                         // We are the output
-                        if typings.iter().filter(|ty| ty.as_output().is_some()).count() == 1 {
+                        if typedec.iter().filter(|ty| ty.as_output().is_some()).count() == 1 {
                             return Some(vec![port]);
                         }
 
-                        Some(self.terminal_ports_for(&a, typings))
+                        Some(Self::terminal_ports_for(typings, &a, typedec))
                     }
                 }
             })

@@ -130,6 +130,9 @@ pub enum Op {
     /// Renames all names to other names in the net
     Rename(Ptr, Port),
 
+    /// Attempts runtime amortization of the net
+    Amortize,
+
     Pop,
 
     /// This instruction stores whatever net is currently in the stack
@@ -146,6 +149,7 @@ impl fmt::Display for Op {
             Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_NET {}", ptr),
             Self::CutAgent(a) => write!(f, "CUT_AGENT {}", a.name),
             Self::Rename(src_ptr, dest_ptr) => write!(f, "RENAME {} {}", src_ptr, dest_ptr),
+            Self::Amortize => write!(f, "AMORTIZE"),
         }
     }
 }
@@ -167,7 +171,11 @@ fn try_amortize<'a>(
             return Default::default();
         };
 
-        let terminal_ports = typings.terminal_ports_for(output_agent, &type_dec);
+        let terminal_ports = TypedProgram::terminal_ports_for(
+            &typings.symbol_declarations_for,
+            output_agent,
+            &type_dec,
+        );
 
         tracing::debug!(
             "agent {} has terminal ports {}",
@@ -200,6 +208,8 @@ fn try_amortize<'a>(
     if ops.is_empty() {
         return None;
     }
+
+    ops.push(Op::StoreResult);
 
     Some(ops)
 }
@@ -243,6 +253,8 @@ fn try_infer<'a>(
 
                 ops.push(Op::Rename(var_ptr, replace.clone()));
             }
+
+            ops.extend(vec![Op::Amortize, Op::StoreResult]);
 
             return Some(ops);
         }
@@ -315,15 +327,25 @@ pub fn compile(program: TypedProgram) -> Program {
             ))
         }),
     ));
-    let reductions = BTreeMap::from_iter(amortizable_reductions.clone().into_iter().chain(
-        to_reduce.filter_map(|(ptr, lhs, rhs)| {
-            Some((
-                (lhs?.clone(), rhs?.clone()),
-                try_infer(&amortizable_reductions, &names, lhs?, rhs?)
-                    .unwrap_or(reduction_strategy_copy(ptr)),
-            ))
-        }),
-    ));
+    let reductions = BTreeMap::from_iter(
+        amortizable_reductions
+            .clone()
+            .into_iter()
+            .chain(to_reduce.filter_map(|(ptr, lhs, rhs)| {
+                Some((
+                    (lhs?.clone(), rhs?.clone()),
+                    try_infer(&amortizable_reductions, &names, lhs?, rhs?)
+                        .unwrap_or(reduction_strategy_copy(ptr)),
+                ))
+            }))
+            .map(|((lhs, rhs), mut ops)| {
+                if !ops.contains(&Op::StoreResult) {
+                    ops.push(Op::StoreResult);
+                }
+
+                ((lhs, rhs), ops)
+            }),
+    );
 
     let active_pairs = program
         .nets

@@ -1,7 +1,7 @@
 use super::{Op, Program, Ptr};
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Ident, Net},
+    parser::ast_lafont::{Agent, Ident, Net, Port, PortKind, Type},
 };
 use std::collections::{linked_list::LinkedList, BTreeMap, BTreeSet};
 
@@ -92,6 +92,52 @@ impl Executor {
         }
     }
 
+    fn try_amortize_dyn<'a>(&self, n: Net) -> Net {
+        fn amortize_from<'a>(
+            typings: &'a BTreeMap<Type, Vec<PortKind>>,
+            output_agent: &'a Agent,
+        ) -> Option<Agent> {
+            let type_dec = if let Some(typing) = typings.get(&output_agent.name) {
+                typing.iter().cloned().skip(1).collect::<Vec<_>>()
+            } else {
+                return Default::default();
+            };
+
+            let terminal_ports = TypedProgram::terminal_ports_for(typings, output_agent, &type_dec);
+
+            tracing::debug!(
+                "agent {} has terminal ports {}",
+                output_agent,
+                terminal_ports
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+
+            terminal_ports
+                .into_iter()
+                .filter_map(|p| match p {
+                    // TODO: Use references for this
+                    Port::Agent(a) => Some(a.clone()),
+                    Port::Var(_) => None,
+                })
+                .next()
+        }
+
+        let lhs_out = n
+            .lhs
+            .and_then(|lhs| amortize_from(&self.p.symbol_declarations_for, &lhs));
+        let rhs_out = n
+            .rhs
+            .and_then(|rhs| amortize_from(&self.p.symbol_declarations_for, &rhs));
+
+        Net {
+            lhs: lhs_out,
+            rhs: rhs_out,
+        }
+    }
+
     pub fn step_frame(&mut self) -> Option<()> {
         let op = self.reduction.as_mut()?.instructions.pop_front()?;
 
@@ -99,20 +145,40 @@ impl Executor {
         tracing::trace!("stack at execution: {:?}", self.reduction.as_ref()?.stack);
 
         match op {
-            Op::Rename(name_ptr, val) => {
-                tracing::trace!("renaming {} to {}", name_ptr, val);
-
-                let res_net = self
+            Op::Amortize => {
+                let res_net_ptr = self
                     .reduction
                     .as_mut()?
                     .stack
                     .pop_back()
-                    .and_then(|elem| elem.into_ptr())
-                    .and_then(|id| self.reduction.as_mut()?.nets.get_mut(id))?;
+                    .and_then(|elem| elem.into_ptr())?;
+
+                let res_net = self.reduction.as_mut()?.nets.remove(res_net_ptr);
+                let new_net = self.try_amortize_dyn(res_net);
+
+                self.reduction.as_mut()?.nets.insert(res_net_ptr, new_net);
+
+                let ptr = StackElem::Ptr(res_net_ptr);
+                self.reduction.as_mut()?.stack.push_back(ptr);
+            }
+            Op::Rename(name_ptr, val) => {
+                tracing::trace!("renaming {} to {}", name_ptr, val);
+
+                let res_net_ptr = self
+                    .reduction
+                    .as_mut()?
+                    .stack
+                    .pop_back()
+                    .and_then(|elem| elem.into_ptr())?;
+
+                let res_net = self.reduction.as_mut()?.nets.get_mut(res_net_ptr)?;
 
                 let name_deref = self.p.names.get(name_ptr)?;
 
                 res_net.replace_name(Ident(name_deref.0.clone()), val);
+
+                let ptr = StackElem::Ptr(res_net_ptr);
+                self.reduction.as_mut()?.stack.push_back(ptr);
             }
             Op::CutAgent(agent) => {
                 tracing::trace!("copying {} to buffer", agent);
