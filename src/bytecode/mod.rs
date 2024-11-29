@@ -116,17 +116,12 @@ impl fmt::Display for Program {
     }
 }
 
-/// Reductions are run with a pointer to a NetBuffer representing the
-/// active redex in stack position #0.
-///
-/// Elements in the stack can either be pointers, instructions, or None
-/// pointers can be to nets, or nodes in nets (variables or agents)
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum Op {
     /// Pushes a pointer to a new initialized net buffer to the stack
     PushPtrInitNet,
 
-    /// Pushes a pointer to a copy of a net, as a net buffer to the stack
+    /// Pushes a pointer to a copy of a net to the stack
     PushPtrCpyNet(Ptr),
 
     /// Copies an agent into the net buffer
@@ -134,36 +129,9 @@ pub enum Op {
 
     Pop,
 
-    /// Pushes a new node with a name given by the pointer
-    /// to the net and a primary port given by the pointer
-    /// Primary port must be known at compile time
-    PushNodeVar(Ptr, Ptr),
-
-    /// Pushes a new node with a name given by the pointer,
-    /// in nodes given by the pointers,
-    /// and out nodes given by the pointers
-    PushNodeAgent(Ptr),
-
-    /// Connects two nodes
-    PushConn(Ptr, Ptr),
-
     /// This instruction stores whatever net is currently in the stack
     /// in the evaluations record for the call signature
     StoreResult,
-
-    PushInstr(Box<Op>),
-
-    /// Executes the first instruction in the stack (#1) if the condition (#0) is true
-    /// otherwise executes the second (#3).
-    CondExec,
-
-    /// Pushes to the stack whether the first two elements in the stack
-    /// are equivalent.
-    PushEq,
-    PushNeq,
-
-    /// Pushes to the stack whether the element in the stack is None
-    PushNone,
 }
 
 impl fmt::Display for Op {
@@ -172,16 +140,6 @@ impl fmt::Display for Op {
             Self::PushPtrInitNet => write!(f, "PUSH_INIT"),
             Self::Pop => write!(f, "POP"),
             Self::StoreResult => write!(f, "STORE_RES"),
-            Self::PushInstr(op) => write!(f, "PUSH_INSTR {}", op),
-            Self::CondExec => write!(f, "COND_EXEC"),
-            Self::PushEq => write!(f, "PUSH_EQ"),
-            Self::PushNeq => write!(f, "PUSH_NEQ"),
-            Self::PushNone => write!(f, "PUSH_NONE"),
-            Self::PushNodeVar(name, primary_port) => {
-                write!(f, "PUSHB_V {} {}", name, primary_port)
-            }
-            Self::PushNodeAgent(name) => write!(f, "PUSHB_A {}", name),
-            Self::PushConn(a, b) => write!(f, "PUSHC {} {}", a, b),
             Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_NET {}", ptr),
             Self::CutAgent(a) => write!(f, "CUT_AGENT {}", a.name),
         }
