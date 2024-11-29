@@ -38,6 +38,11 @@ impl TypedProgram {
                     Port::Agent(a) => {
                         let typings = self.symbol_declarations_for.get(&a.name)?;
 
+                        // We are the output
+                        if typings.iter().filter(|ty| ty.as_output().is_some()).count() == 1 {
+                            return Some(vec![port]);
+                        }
+
                         Some(self.terminal_ports_for(&a, typings))
                     }
                 }

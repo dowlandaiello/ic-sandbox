@@ -170,20 +170,23 @@ fn try_amortize<'a>(
         let terminal_ports = typings.terminal_ports_for(output_agent, &type_dec);
 
         tracing::debug!(
-            "agent {} has terminal port {:?}",
+            "agent {} has terminal ports {}",
             output_agent,
-            terminal_ports,
+            terminal_ports
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
         );
 
-        let mut ops = Vec::default();
-
-        ops.extend(terminal_ports.into_iter().filter_map(|p| match p {
-            // TODO: Use references for this
-            Port::Agent(a) => Some(Op::CutAgent(a.clone())),
-            Port::Var(_) => None,
-        }));
-
-        ops
+        terminal_ports
+            .into_iter()
+            .filter_map(|p| match p {
+                // TODO: Use references for this
+                Port::Agent(a) => Some(Op::CutAgent(a.clone())),
+                Port::Var(_) => None,
+            })
+            .collect()
     }
 
     let mut ops = lhs
@@ -210,43 +213,56 @@ fn try_infer<'a>(
     let mut ops: Vec<Op> = Vec::default();
     let mut renamed = (lhs.clone(), rhs.clone());
 
-    for ((a, b), reduction) in reductions.iter() {
-        let bindings = a
-            .subset_bindings(&mut renamed.0)
-            .into_iter()
-            .chain(b.subset_bindings(&mut renamed.1))
-            .collect::<Vec<_>>();
+    for ((a, b), reduction) in reductions
+        .iter()
+        .filter(|((r_lhs, r_rhs), _)| r_lhs != lhs || r_rhs != rhs)
+    {
+        let bindings_lhs = a.subset_bindings(&renamed.0);
+        let bindings_rhs = b.subset_bindings(&renamed.1);
 
-        if !bindings.is_empty() {
+        if let Some((mut bindings_lhs, mut bindings_rhs)) = bindings_lhs.zip(bindings_rhs) {
+            tracing::trace!(
+                "{} is subset of {}, {} is subset of {}",
+                renamed.0,
+                a,
+                renamed.1,
+                b
+            );
+
+            bindings_lhs.append(&mut bindings_rhs);
+
             // This rule is a match. Replace variables in original
             // expression, then follow subproblem reduction
             // then replace again
             ops.extend(reduction.clone());
 
-            for (var_ptr, replace) in bindings.into_iter().filter_map(|(var, replace)| {
+            for (var_ptr, replace) in bindings_lhs.into_iter().filter_map(|(var, replace)| {
                 Some((names.iter().position(|x| x.0 == var.0)?, replace))
             }) {
+                tracing::debug!("renaming {} to {}", var_ptr, replace);
+
                 ops.push(Op::Rename(var_ptr, replace.clone()));
             }
 
             return Some(ops);
         }
 
-        let bindings = a
-            .subset_bindings(&mut renamed.0)
-            .into_iter()
-            .chain(b.subset_bindings(&mut renamed.1))
-            .collect::<Vec<_>>();
+        let bindings_lhs = a.subset_bindings(&mut renamed.0);
+        let bindings_rhs = b.subset_bindings(&mut renamed.1);
 
-        if !bindings.is_empty() {
+        if let Some((mut bindings_lhs, mut bindings_rhs)) = bindings_lhs.zip(bindings_rhs) {
+            bindings_lhs.append(&mut bindings_rhs);
+
             // This rule is a match. Replace variables in original
             // expression, then follow subproblem reduction
             // then replace again
             ops.extend(reduction.clone());
 
-            for (var_ptr, replace) in bindings.into_iter().filter_map(|(var, replace)| {
+            for (var_ptr, replace) in bindings_lhs.into_iter().filter_map(|(var, replace)| {
                 Some((names.iter().position(|x| x.0 == var.0)?, replace))
             }) {
+                tracing::debug!("renaming {} to {}", var_ptr, replace);
+
                 ops.push(Op::Rename(var_ptr, replace.clone()));
             }
 
@@ -254,9 +270,11 @@ fn try_infer<'a>(
         }
     }
 
-    // Replace
-
     None
+}
+
+fn reduction_strategy_copy(net_ptr: Ptr) -> Vec<Op> {
+    vec![Op::PushPtrCpyNet(net_ptr)]
 }
 
 pub fn compile(program: TypedProgram) -> Program {
@@ -286,18 +304,23 @@ pub fn compile(program: TypedProgram) -> Program {
         .enumerate()
         .map(|(i, net)| (i, net.lhs.as_ref(), net.rhs.as_ref()));
 
-    let amortizable_reductions =
-        BTreeMap::from_iter(to_reduce.clone().filter_map(|(_, lhs, rhs)| {
+    let copy_reductions = to_reduce.clone().filter_map(|(ptr, lhs, rhs)| {
+        Some(((lhs?.clone(), rhs?.clone()), reduction_strategy_copy(ptr)))
+    });
+    let amortizable_reductions = BTreeMap::from_iter(copy_reductions.chain(
+        to_reduce.clone().filter_map(|(_, lhs, rhs)| {
             Some((
                 (lhs?.clone(), rhs?.clone()),
                 try_amortize(&program, lhs, rhs)?,
             ))
-        }));
+        }),
+    ));
     let reductions = BTreeMap::from_iter(amortizable_reductions.clone().into_iter().chain(
-        to_reduce.filter_map(|(_, lhs, rhs)| {
+        to_reduce.filter_map(|(ptr, lhs, rhs)| {
             Some((
                 (lhs?.clone(), rhs?.clone()),
-                try_infer(&amortizable_reductions, &names, lhs?, rhs?)?,
+                try_infer(&amortizable_reductions, &names, lhs?, rhs?)
+                    .unwrap_or(reduction_strategy_copy(ptr)),
             ))
         }),
     ));

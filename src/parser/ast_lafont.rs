@@ -200,24 +200,33 @@ impl Agent {
     /// That is, is values are matching up to terminal values.
     ///
     /// Gets vars which need to be replaced.
-    pub fn subset_bindings<'a>(&'a self, other: &'a Self) -> Vec<(&'a Ident, &'a Port)> {
+    pub fn subset_bindings<'a>(&'a self, other: &'a Self) -> Option<Vec<(&'a Ident, &'a Port)>> {
         if self.name != other.name {
-            return Default::default();
+            return None;
         }
 
-        self.ports
-            .iter()
-            .zip(other.ports.iter())
-            .map(|(a, b)| {
-                match (a, b) {
-                    // All vars can match all values
-                    (Port::Var(v), b) => vec![(v, b)],
-                    (Port::Agent(a), Port::Agent(b)) => a.subset_bindings(b),
-                    _ => Vec::default(),
+        let mut res = Vec::default();
+
+        for (a, b) in self.ports.iter().zip(other.ports.iter()) {
+            match (a, b) {
+                // All vars can match all values
+                (Port::Var(v), b) => {
+                    res.push((v, b));
                 }
-            })
-            .flatten()
-            .collect::<Vec<_>>()
+                (Port::Agent(a), Port::Agent(b)) => {
+                    if a.name != b.name {
+                        return None;
+                    }
+
+                    res.extend(a.subset_bindings(b)?);
+                }
+                _ => {
+                    return None;
+                }
+            }
+        }
+
+        Some(res)
     }
 
     // TODO: Make this iterative, as well
