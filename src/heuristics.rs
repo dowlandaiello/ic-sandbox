@@ -15,19 +15,16 @@ pub struct TypedProgram {
 impl TypedProgram {
     /// Gets a reference to a port in the agent, if it exists,
     /// which is an output variable.
-    pub fn terminal_ports_for<'a>(&'a self, a: &'a Agent) -> Vec<&'a Port> {
-        let type_dec = if let Some(dec) = self.symbol_declarations_for.get(&a.name) {
-            dec
-        } else {
-            return Default::default();
-        };
-
+    pub fn terminal_ports_for<'a>(
+        &'a self,
+        a: &'a Agent,
+        port_typings: &Vec<PortKind>,
+    ) -> Vec<&'a Port> {
         // Both the port on the parent agent
         // and the primary port on the child agent
         // must be outputs
-        let output_children = type_dec
+        let output_children = port_typings
             .iter()
-            .skip(1)
             .zip(a.ports.iter())
             .filter(|(port_ty, _)| {
                 // Port must be an output port to an agent or var
@@ -35,27 +32,17 @@ impl TypedProgram {
             });
 
         output_children
-            .filter_map(|(port_ty, port)| {
-                self.symbol_declarations_for
-                    .get(&Type(port.name().0.clone()))
-                    .map(|dec| (port_ty, port, dec))
-            })
-            .filter(
-                |(_, port, name_ty): &(&PortKind, &Port, &Vec<PortKind>)| -> bool {
-                    match port {
-                        Port::Var(_) => true,
-                        Port::Agent(a) => {
-                            name_ty
-                                .iter()
-                                .map(|port| port.as_output().is_some())
-                                .next()
-                                .is_some()
-                                && a.vars_mentioned().is_empty()
-                        }
+            .filter_map(|(_, port): (&PortKind, &Port)| -> Option<Vec<&Port>> {
+                match &port {
+                    p @ Port::Var(_) => Some(vec![p]),
+                    Port::Agent(a) => {
+                        let typings = self.symbol_declarations_for.get(&a.name)?;
+
+                        Some(self.terminal_ports_for(&a, typings))
                     }
-                },
-            )
-            .map(|(_, port, _)| port)
+                }
+            })
+            .flatten()
             .collect::<Vec<_>>()
     }
 

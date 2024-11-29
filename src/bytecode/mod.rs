@@ -6,7 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
-    fmt, iter,
+    fmt,
 };
 
 pub mod vm;
@@ -127,6 +127,9 @@ pub enum Op {
     /// Copies an agent into the net buffer
     CutAgent(Agent),
 
+    /// Renames all names to other names in the net
+    Rename(Ptr, Port),
+
     Pop,
 
     /// This instruction stores whatever net is currently in the stack
@@ -142,6 +145,7 @@ impl fmt::Display for Op {
             Self::StoreResult => write!(f, "STORE_RES"),
             Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_NET {}", ptr),
             Self::CutAgent(a) => write!(f, "CUT_AGENT {}", a.name),
+            Self::Rename(src_ptr, dest_ptr) => write!(f, "RENAME {} {}", src_ptr, dest_ptr),
         }
     }
 }
@@ -156,7 +160,14 @@ fn try_amortize<'a>(
     rhs: Option<&'a Agent>,
 ) -> Option<Vec<Op>> {
     fn amortize_from<'a>(typings: &'a TypedProgram, output_agent: &'a Agent) -> Vec<Op> {
-        let terminal_ports = typings.terminal_ports_for(output_agent);
+        let type_dec = if let Some(typing) = typings.symbol_declarations_for.get(&output_agent.name)
+        {
+            typing.iter().cloned().skip(1).collect::<Vec<_>>()
+        } else {
+            return Default::default();
+        };
+
+        let terminal_ports = typings.terminal_ports_for(output_agent, &type_dec);
 
         tracing::debug!(
             "agent {} has terminal port {:?}",
@@ -190,52 +201,62 @@ fn try_amortize<'a>(
     Some(ops)
 }
 
-/// A strategy that is a noop. Just copies the net to a buffer.
-fn reduction_strategy_copy(net: Ptr) -> Vec<Op> {
-    vec![Op::PushPtrCpyNet(net)]
-}
+fn try_infer<'a>(
+    reductions: &BTreeMap<(Agent, Agent), Vec<Op>>,
+    names: &Vec<Type>,
+    lhs: &'a Agent,
+    rhs: &'a Agent,
+) -> Option<Vec<Op>> {
+    let mut ops: Vec<Op> = Vec::default();
+    let mut renamed = (lhs.clone(), rhs.clone());
 
-/// Reduction is repeated replacing and result storing:
-/// - Replacing is replacing variables, in all places they occur, with other values
-/// - Result storing is the commitment of fully reduced terms, which commits
-/// a fully reduced net to the store to skip further evaluation.
-fn reduction_strategy(
-    typings: &TypedProgram,
-    lhs: Option<&Agent>,
-    rhs: Option<&Agent>,
-    net_ptr: Ptr,
-) -> Vec<Op> {
-    tracing::debug!(
-        "calculating reduction strategy for redex {} >< {}",
-        lhs.as_ref()
-            .map(|agent| agent.to_string())
-            .unwrap_or_default(),
-        rhs.as_ref()
-            .map(|agent| agent.to_string())
-            .unwrap_or_default()
-    );
-
-    if let Some(amortized_plan) = try_amortize(typings, lhs, rhs) {
-        tracing::debug!(
-            "redex {} >< {} is amortizable",
-            lhs.as_ref()
-                .map(|agent| agent.to_string())
-                .unwrap_or_default(),
-            rhs.as_ref()
-                .map(|agent| agent.to_string())
-                .unwrap_or_default()
-        );
-
-        return amortized_plan
+    for ((a, b), reduction) in reductions.iter() {
+        let bindings = a
+            .subset_bindings(&mut renamed.0)
             .into_iter()
-            .chain(iter::once(Op::StoreResult))
-            .collect();
+            .chain(b.subset_bindings(&mut renamed.1))
+            .collect::<Vec<_>>();
+
+        if !bindings.is_empty() {
+            // This rule is a match. Replace variables in original
+            // expression, then follow subproblem reduction
+            // then replace again
+            ops.extend(reduction.clone());
+
+            for (var_ptr, replace) in bindings.into_iter().filter_map(|(var, replace)| {
+                Some((names.iter().position(|x| x.0 == var.0)?, replace))
+            }) {
+                ops.push(Op::Rename(var_ptr, replace.clone()));
+            }
+
+            return Some(ops);
+        }
+
+        let bindings = a
+            .subset_bindings(&mut renamed.0)
+            .into_iter()
+            .chain(b.subset_bindings(&mut renamed.1))
+            .collect::<Vec<_>>();
+
+        if !bindings.is_empty() {
+            // This rule is a match. Replace variables in original
+            // expression, then follow subproblem reduction
+            // then replace again
+            ops.extend(reduction.clone());
+
+            for (var_ptr, replace) in bindings.into_iter().filter_map(|(var, replace)| {
+                Some((names.iter().position(|x| x.0 == var.0)?, replace))
+            }) {
+                ops.push(Op::Rename(var_ptr, replace.clone()));
+            }
+
+            return Some(ops);
+        }
     }
 
-    reduction_strategy_copy(net_ptr)
-        .into_iter()
-        .chain(iter::once(Op::StoreResult))
-        .collect()
+    // Replace
+
+    None
 }
 
 pub fn compile(program: TypedProgram) -> Program {
@@ -259,19 +280,28 @@ pub fn compile(program: TypedProgram) -> Program {
         acc
     });
 
-    let reductions = BTreeMap::from_iter(
-        program
-            .nets
-            .iter()
-            .enumerate()
-            .map(|(i, net)| (i, net.lhs.as_ref(), net.rhs.as_ref()))
-            .filter_map(|(ptr, lhs, rhs)| {
-                Some((
-                    (lhs?.clone(), rhs?.clone()),
-                    reduction_strategy(&program, lhs, rhs, ptr),
-                ))
-            }),
-    );
+    let to_reduce = program
+        .nets
+        .iter()
+        .enumerate()
+        .map(|(i, net)| (i, net.lhs.as_ref(), net.rhs.as_ref()));
+
+    let amortizable_reductions =
+        BTreeMap::from_iter(to_reduce.clone().filter_map(|(_, lhs, rhs)| {
+            Some((
+                (lhs?.clone(), rhs?.clone()),
+                try_amortize(&program, lhs, rhs)?,
+            ))
+        }));
+    let reductions = BTreeMap::from_iter(amortizable_reductions.clone().into_iter().chain(
+        to_reduce.filter_map(|(_, lhs, rhs)| {
+            Some((
+                (lhs?.clone(), rhs?.clone()),
+                try_infer(&amortizable_reductions, &names, lhs?, rhs?)?,
+            ))
+        }),
+    ));
+
     let active_pairs = program
         .nets
         .iter()

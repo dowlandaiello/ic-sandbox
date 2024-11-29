@@ -118,6 +118,16 @@ pub struct Net {
 }
 
 impl Net {
+    pub fn replace_name(&mut self, name: Ident, val: Port) {
+        if let Some(lhs) = self.lhs.take() {
+            self.lhs = Some(lhs.replace_name(&name, &val));
+        }
+
+        if let Some(rhs) = self.rhs.take() {
+            self.rhs = Some(rhs.replace_name(&name, &val));
+        }
+    }
+
     /// Gets a list of all the names mentioned in the net.
     pub fn names_mentioned(&self) -> Vec<Type> {
         let mut to_check = VecDeque::from_iter(
@@ -167,6 +177,49 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn replace_name(mut self, name: &Ident, val: &Port) -> Self {
+        self.ports = self
+            .ports
+            .drain(..)
+            .map(|p| match p {
+                Port::Agent(a) => Port::Agent(a.replace_name(name, val)),
+                Port::Var(v) => {
+                    if v.0 == name.0 {
+                        val.clone()
+                    } else {
+                        Port::Var(v.clone())
+                    }
+                }
+            })
+            .collect();
+
+        self
+    }
+
+    /// Determines whether this agent can match the other agent.
+    /// That is, is values are matching up to terminal values.
+    ///
+    /// Gets vars which need to be replaced.
+    pub fn subset_bindings<'a>(&'a self, other: &'a Self) -> Vec<(&'a Ident, &'a Port)> {
+        if self.name != other.name {
+            return Default::default();
+        }
+
+        self.ports
+            .iter()
+            .zip(other.ports.iter())
+            .map(|(a, b)| {
+                match (a, b) {
+                    // All vars can match all values
+                    (Port::Var(v), b) => vec![(v, b)],
+                    (Port::Agent(a), Port::Agent(b)) => a.subset_bindings(b),
+                    _ => Vec::default(),
+                }
+            })
+            .flatten()
+            .collect::<Vec<_>>()
+    }
+
     // TODO: Make this iterative, as well
     pub fn vars_mentioned(&self) -> Vec<Ident> {
         self.ports

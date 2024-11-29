@@ -4,4 +4,6 @@ symbol Z: nat+
 symbol S: nat+, nat-
 symbol Add: nat-, nat-, nat+
 
-S(Add(Z(), Z())) >< Add(Z(), S(Z()))
+Z() >< Add(x, x)
+S(Add(y, t)) >< Add(y, S(t))
+Z() >< Add(S(Z()), x)

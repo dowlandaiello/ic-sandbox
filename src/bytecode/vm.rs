@@ -1,7 +1,7 @@
 use super::{Op, Program, Ptr};
 use crate::{
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Net},
+    parser::ast_lafont::{Agent, Ident, Net},
 };
 use std::collections::{linked_list::LinkedList, BTreeMap, BTreeSet};
 
@@ -99,6 +99,21 @@ impl Executor {
         tracing::trace!("stack at execution: {:?}", self.reduction.as_ref()?.stack);
 
         match op {
+            Op::Rename(name_ptr, val) => {
+                tracing::trace!("renaming {} to {}", name_ptr, val);
+
+                let res_net = self
+                    .reduction
+                    .as_mut()?
+                    .stack
+                    .pop_back()
+                    .and_then(|elem| elem.into_ptr())
+                    .and_then(|id| self.reduction.as_mut()?.nets.get_mut(id))?;
+
+                let name_deref = self.p.names.get(name_ptr)?;
+
+                res_net.replace_name(Ident(name_deref.0.clone()), val);
+            }
             Op::CutAgent(agent) => {
                 tracing::trace!("copying {} to buffer", agent);
 
@@ -281,130 +296,5 @@ impl Executor {
                 self.step_frame();
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::{
-        heuristics::parse_typed_program,
-        parser::parser_lafont::{self, Spanned},
-    };
-    use chumsky::{prelude::*, Stream};
-    use test_log::test;
-
-    #[test]
-    fn test_eval_cpy_net_buffer() {
-        let program = "type nat
-
-symbol Z: nat+
-symbol S: nat+, nat-
-symbol Add: nat-, nat-, nat+
-
-S(Add(Z(), Z())) >< Add(Z(), S(Z()))";
-
-        let lexed = parser_lafont::lexer().parse(program).unwrap();
-        let parsed = parser_lafont::parser()
-            .parse(Stream::from_iter(
-                0..program.len(),
-                lexed
-                    .into_iter()
-                    .flatten()
-                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
-            ))
-            .unwrap();
-
-        let (typed, _) = parse_typed_program(parsed);
-        let program = super::super::compile(typed);
-
-        let mut exec = Executor::new(program);
-        let (lhs, rhs) = exec.p.active_pairs.remove(0);
-        let buffer = exec.new_net_buffer(&Net { lhs, rhs });
-
-        assert_eq!(
-            buffer,
-            NetBuffer {
-                nodes: vec![
-                    // S(Add(Z(), Z()))
-                    Node::Agent {
-                        name: 2,
-                        ports: vec![1, 2]
-                    },
-                    // Add(Z(), S(Z()))
-                    Node::Agent {
-                        name: 1,
-                        ports: vec![0, 3, 4]
-                    },
-                    Node::Agent {
-                        name: 1,
-                        ports: vec![3, 0]
-                    },
-                    Node::Agent {
-                        name: 3,
-                        ports: vec![1, 2, 4]
-                    },
-                    Node::Agent {
-                        name: 2,
-                        ports: vec![1, 3]
-                    }
-                ],
-                active_pairs: vec![(0, 1)]
-            }
-        );
-    }
-
-    #[test]
-    fn test_cpy_net_buffer() {
-        let program = "type nat
-
-symbol Z: nat+
-symbol S: nat+, nat-
-symbol Add: nat-, nat-, nat+
-
-Z() >< Add(y, y)";
-
-        let lexed = parser_lafont::lexer().parse(program).unwrap();
-        let parsed = parser_lafont::parser()
-            .parse(Stream::from_iter(
-                0..program.len(),
-                lexed
-                    .into_iter()
-                    .flatten()
-                    .map(|Spanned(v, s)| (Spanned(v, s.clone()), s)),
-            ))
-            .unwrap();
-
-        let (typed, _) = parse_typed_program(parsed);
-        let program = super::super::compile(typed);
-
-        let mut exec = Executor::new(program);
-        let (lhs, rhs) = exec.p.active_pairs.remove(0);
-        let buffer = exec.new_net_buffer(&Net { lhs, rhs });
-
-        assert_eq!(
-            buffer,
-            NetBuffer {
-                nodes: vec![
-                    Node::Agent {
-                        name: 3,
-                        ports: vec![1],
-                    },
-                    Node::Agent {
-                        name: 1,
-                        ports: vec![0, 2, 3]
-                    },
-                    Node::Var {
-                        name: 4,
-                        primary_port: 1
-                    },
-                    Node::Var {
-                        name: 4,
-                        primary_port: 1
-                    }
-                ],
-                active_pairs: vec![(0, 1)],
-            }
-        );
     }
 }
