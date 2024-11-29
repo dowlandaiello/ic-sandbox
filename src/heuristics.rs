@@ -42,12 +42,16 @@ impl TypedProgram {
             })
             .filter(
                 |(_, port, name_ty): &(&PortKind, &Port, &Vec<PortKind>)| -> bool {
-                    port.as_var().is_some() || {
-                        name_ty
-                            .iter()
-                            .map(|port| port.as_output().is_some())
-                            .next()
-                            .is_some()
+                    match port {
+                        Port::Var(_) => true,
+                        Port::Agent(a) => {
+                            name_ty
+                                .iter()
+                                .map(|port| port.as_output().is_some())
+                                .next()
+                                .is_some()
+                                && a.vars_mentioned().is_empty()
+                        }
                     }
                 },
             )

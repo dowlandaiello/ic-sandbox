@@ -65,6 +65,13 @@ pub enum Node {
 }
 
 impl Node {
+    pub fn has_conn(&self, other: Ptr) -> bool {
+        match self {
+            Self::Var { primary_port, .. } => *primary_port == other,
+            Self::Agent { ports, .. } => ports.iter().filter(|p| **p == other).next().is_some(),
+        }
+    }
+
     pub fn connect(self, other: Ptr) -> Self {
         match self {
             Self::Agent { name, mut ports } => {
@@ -78,6 +85,13 @@ impl Node {
             },
         }
     }
+
+    pub fn port_count(&self) -> usize {
+        match self {
+            Self::Var { .. } => 1,
+            Self::Agent { ports, .. } => ports.len(),
+        }
+    }
 }
 
 #[derive(Eq, PartialEq, Debug, Default, Clone)]
@@ -88,11 +102,25 @@ pub struct NetBuffer {
 
 impl NetBuffer {
     pub fn connect(&mut self, a_ptr: Ptr, b_ptr: Ptr) {
-        let updated_a = self.nodes.remove(a_ptr).connect(b_ptr);
-        self.nodes.insert(a_ptr, updated_a);
+        let mut original_a = self.nodes.remove(a_ptr);
 
-        let updated_b = self.nodes.remove(b_ptr).connect(a_ptr);
-        self.nodes.insert(b_ptr, updated_b);
+        if !original_a.has_conn(b_ptr) {
+            original_a = original_a.connect(b_ptr);
+        }
+
+        self.nodes.insert(a_ptr, original_a);
+
+        let mut original_b = self.nodes.remove(b_ptr);
+
+        if !original_b.has_conn(a_ptr) {
+            original_b = original_b.connect(a_ptr);
+        }
+
+        self.nodes.insert(b_ptr, original_b);
+
+        if self.nodes[b_ptr].port_count() == 1 && self.nodes[a_ptr].port_count() == 1 {
+            self.active_pairs.push((a_ptr, b_ptr));
+        }
     }
 }
 
@@ -200,9 +228,6 @@ impl Executor {
         ) {
             (Some((_, ptr_lhs)), Some((_, ptr_rhs))) => {
                 n.connect(*ptr_lhs, *ptr_rhs);
-
-                // This is also an active pair
-                n.active_pairs.push((*ptr_lhs, *ptr_rhs));
             }
             _ => {}
         }
@@ -214,7 +239,10 @@ impl Executor {
             for (i, port) in to_connect.ports.iter().enumerate() {
                 match port {
                     Port::Agent(a) => {
-                        let ptr_child = if let Some(v) = inserted.get(&a) {
+                        let (ptr_child, node): (&usize, Node) = if let Some(v) = inserted
+                            .get(&a)
+                            .and_then(|ptr| Some((ptr, n.nodes.get(*ptr).cloned()?)))
+                        {
                             v
                         } else {
                             continue;
@@ -222,10 +250,10 @@ impl Executor {
 
                         n.connect(*to_connect_inserted, *ptr_child);
 
-                        // This is an active pair
-                        if i == 0 {
-                            n.active_pairs.push((*to_connect_inserted, *ptr_child));
-                        }
+                        let is_empty = match node {
+                            Node::Agent { ports, .. } => ports.is_empty(),
+                            _ => true,
+                        };
 
                         to_connect_nodes.extend(a.ports.iter().filter_map(|p| p.as_agent()));
                     }
@@ -259,6 +287,22 @@ impl Executor {
         tracing::trace!("stack at execution: {:?}", self.reduction.as_ref()?.stack);
 
         match op {
+            Op::CutAgent(agent) => {
+                tracing::trace!("copying {} to buffer", agent);
+
+                let n = Net {
+                    lhs: Some(agent),
+                    rhs: None,
+                };
+
+                let buffer = self.new_net_buffer(&n);
+
+                self.reduction.as_mut()?.nets.push(buffer);
+
+                let ptr = StackElem::Ptr(self.reduction.as_ref()?.nets.len() - 1);
+
+                self.reduction.as_mut()?.stack.push_back(ptr);
+            }
             Op::PushPtrInitNet => {
                 self.reduction.as_mut()?.nets.push(Default::default());
                 let new_net_id = self.reduction.as_ref()?.nets.len() - 1;
@@ -469,53 +513,34 @@ impl Executor {
     }
 
     pub fn readback_buffer(&self, buffer: NetBuffer) -> Vec<(Option<Agent>, Option<Agent>)> {
+        // Nodes to readback are all active pairs
+        // and all nodes which have no connecting nodes
         buffer
-            .nodes
+            .active_pairs
             .iter()
-            .filter_map(|node| match node {
-                Node::Var { .. } => None,
-                Node::Agent { ports, name } => {
-                    let primary = ports.iter().next().and_then(|p| buffer.nodes.get(*p));
-
-                    Some(
-                        if let Some(p) = primary.map(|p| self.readback_node(&buffer, p)) {
-                            (
-                                self.readback_node(
-                                    &buffer,
-                                    &Node::Agent {
-                                        ports: ports.clone(),
-                                        name: name.clone(),
-                                    },
-                                )
-                                .and_then(|p| p.into_agent()),
-                                p.and_then(|p| p.into_agent()),
-                            )
-                        } else {
-                            (
-                                self.readback_node(
-                                    &buffer,
-                                    &Node::Agent {
-                                        ports: ports.clone(),
-                                        name: name.clone(),
-                                    },
-                                )
-                                .and_then(|p| p.into_agent()),
-                                None,
-                            )
-                        },
-                    )
-                }
+            .filter_map(|(a, b)| buffer.nodes.get(*a).zip(buffer.nodes.get(*b)))
+            .filter_map(|(a, b)| {
+                Some((
+                    self.readback_node(&buffer, a).and_then(|n| n.into_agent()),
+                    self.readback_node(&buffer, b).and_then(|n| n.into_agent()),
+                ))
             })
-            .map(|(a, b)| {
-                a.clone()
-                    .zip(b.clone())
-                    .map(|(a, b)| {
-                        let ord = Agent::pair_ord(a, b);
-
-                        (Some(ord.0), Some(ord.1))
+            .map(|(a, b)| Agent::pair_ord(a, b))
+            .chain(
+                buffer
+                    .nodes
+                    .iter()
+                    .filter(|n| match n {
+                        Node::Agent { ports, .. } => ports.is_empty(),
+                        _ => false,
                     })
-                    .unwrap_or((a, b))
-            })
+                    .map(|n| {
+                        (
+                            self.readback_node(&buffer, n).and_then(|n| n.into_agent()),
+                            None,
+                        )
+                    }),
+            )
             .collect::<BTreeSet<(Option<Agent>, Option<Agent>)>>()
             .into_iter()
             .collect::<Vec<_>>()

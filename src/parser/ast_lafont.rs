@@ -167,7 +167,19 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn pair_ord<'a>(a: Self, b: Self) -> (Self, Self) {
+    // TODO: Make this iterative, as well
+    pub fn vars_mentioned(&self) -> Vec<Ident> {
+        self.ports
+            .iter()
+            .map(|p| match p {
+                Port::Var(v) => vec![v.clone()],
+                Port::Agent(a) => a.vars_mentioned(),
+            })
+            .flatten()
+            .collect()
+    }
+
+    pub fn pair_ord<'a>(a: Option<Self>, b: Option<Self>) -> (Option<Self>, Option<Self>) {
         if a < b {
             (a, b)
         } else {

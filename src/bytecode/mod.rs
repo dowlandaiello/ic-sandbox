@@ -129,6 +129,9 @@ pub enum Op {
     /// Pushes a pointer to a copy of a net, as a net buffer to the stack
     PushPtrCpyNet(Ptr),
 
+    /// Copies an agent into the net buffer
+    CutAgent(Agent),
+
     Pop,
 
     /// Pushes a new node with a name given by the pointer
@@ -179,7 +182,8 @@ impl fmt::Display for Op {
             }
             Self::PushNodeAgent(name) => write!(f, "PUSHB_A {}", name),
             Self::PushConn(a, b) => write!(f, "PUSHC {} {}", a, b),
-            Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_N {}", ptr),
+            Self::PushPtrCpyNet(ptr) => write!(f, "PUSHCPY_NET {}", ptr),
+            Self::CutAgent(a) => write!(f, "CUT_AGENT {}", a.name),
         }
     }
 }
@@ -189,16 +193,11 @@ impl fmt::Display for Op {
 ///
 /// Nodes to be committed are output nodes connected to output ports
 fn try_amortize<'a>(
-    names: &[Type],
     typings: &'a TypedProgram,
     lhs: Option<&'a Agent>,
     rhs: Option<&'a Agent>,
 ) -> Option<Vec<Op>> {
-    fn amortize_from<'a>(
-        names: &[Type],
-        typings: &'a TypedProgram,
-        output_agent: &'a Agent,
-    ) -> Vec<Op> {
+    fn amortize_from<'a>(typings: &'a TypedProgram, output_agent: &'a Agent) -> Vec<Op> {
         let terminal_ports = typings.terminal_ports_for(output_agent);
 
         tracing::debug!(
@@ -210,11 +209,8 @@ fn try_amortize<'a>(
         let mut ops = Vec::default();
 
         ops.extend(terminal_ports.into_iter().filter_map(|p| match p {
-            Port::Agent(a) => {
-                let name_ptr = names.iter().position(|name| name.0 == a.name.0)?;
-
-                Some(Op::PushNodeAgent(name_ptr))
-            }
+            // TODO: Use references for this
+            Port::Agent(a) => Some(Op::CutAgent(a.clone())),
             Port::Var(_) => None,
         }));
 
@@ -222,10 +218,10 @@ fn try_amortize<'a>(
     }
 
     let mut ops = lhs
-        .map(|lhs| amortize_from(names, typings, lhs))
+        .map(|lhs| amortize_from(typings, lhs))
         .unwrap_or_default();
     ops.extend(
-        rhs.map(|rhs| amortize_from(names, typings, rhs))
+        rhs.map(|rhs| amortize_from(typings, rhs))
             .unwrap_or_default(),
     );
 
@@ -246,7 +242,6 @@ fn reduction_strategy_copy(net: Ptr) -> Vec<Op> {
 /// - Result storing is the commitment of fully reduced terms, which commits
 /// a fully reduced net to the store to skip further evaluation.
 fn reduction_strategy(
-    names: &[Type],
     typings: &TypedProgram,
     lhs: Option<&Agent>,
     rhs: Option<&Agent>,
@@ -262,7 +257,7 @@ fn reduction_strategy(
             .unwrap_or_default()
     );
 
-    if let Some(amortized_plan) = try_amortize(names, typings, lhs, rhs) {
+    if let Some(amortized_plan) = try_amortize(typings, lhs, rhs) {
         tracing::debug!(
             "redex {} >< {} is amortizable",
             lhs.as_ref()
@@ -273,8 +268,8 @@ fn reduction_strategy(
                 .unwrap_or_default()
         );
 
-        return iter::once(Op::PushPtrInitNet)
-            .chain(amortized_plan.into_iter())
+        return amortized_plan
+            .into_iter()
             .chain(iter::once(Op::StoreResult))
             .collect();
     }
@@ -315,7 +310,7 @@ pub fn compile(program: TypedProgram) -> Program {
             .filter_map(|(ptr, lhs, rhs)| {
                 Some((
                     (lhs?.clone(), rhs?.clone()),
-                    reduction_strategy(&names, &program, lhs, rhs, ptr),
+                    reduction_strategy(&program, lhs, rhs, ptr),
                 ))
             }),
     );
