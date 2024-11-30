@@ -103,7 +103,7 @@ impl Executor {
                 return Default::default();
             };
 
-            let terminal_ports = TypedProgram::terminal_ports_for(typings, output_agent, &type_dec);
+            let terminal_ports = TypedProgram::terminal_ports_for(output_agent, &type_dec);
 
             tracing::debug!(
                 "agent {} has terminal ports {}",
@@ -177,6 +177,8 @@ impl Executor {
 
                 res_net.replace_name(Ident(name_deref.0.clone()), val);
 
+                tracing::trace!("renamed: {}", res_net);
+
                 let ptr = StackElem::Ptr(res_net_ptr);
                 self.reduction.as_mut()?.stack.push_back(ptr);
             }
@@ -243,7 +245,7 @@ impl Executor {
                 };
 
                 tracing::trace!(
-                    "copied {} >< {} to buffer {:?}",
+                    "copied {} >< {} to buffer {}",
                     lhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
                     rhs.as_ref().map(|a| a.to_string()).unwrap_or_default(),
                     buffer

@@ -4,6 +4,9 @@ pub mod parser;
 pub mod preprocessor;
 pub mod reducers;
 
+#[cfg(test)]
+mod test;
+
 pub const UNIT_STR: &str = "()";
 pub const COMMENT_STR: &str = "#";
 pub const BYTECODE_INDENTATION_STR: &str = "  ";

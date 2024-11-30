@@ -1,5 +1,5 @@
 use super::parser::{
-    ast_lafont::{Agent, Expr, Net, Port, PortGrouping, PortKind, Type},
+    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
@@ -13,16 +13,60 @@ pub struct TypedProgram {
 }
 
 impl TypedProgram {
-    /// Gets a reference to a port in the agent, if it exists,
-    /// which is an output variable.
-    pub fn terminal_ports_for<'a>(
+    /// Determines whether this agent can match the other agent.
+    /// That is, is values are matching up to terminal values.
+    ///
+    /// Gets vars which need to be replaced.
+    pub fn subset_bindings<'a>(
         typings: &'a BTreeMap<Type, Vec<PortKind>>,
         a: &'a Agent,
-        port_typings: &Vec<PortKind>,
-    ) -> Vec<&'a Port> {
+        other: &'a Agent,
+        port_typings: &[PortKind],
+    ) -> Option<Vec<(&'a Ident, &'a Port)>> {
+        if a.name != other.name {
+            return None;
+        }
+
+        let mut res = Vec::default();
+
+        // Skip matching output ports, since these can match anything
+        for ((a, b), _) in a
+            .ports
+            .iter()
+            .zip(other.ports.iter())
+            .zip(port_typings)
+            .filter(|((_, _), ty)| ty.as_output().is_none())
+        {
+            match (a, b) {
+                // All vars can match all values
+                (Port::Var(v), b) => {
+                    res.push((v, b));
+                }
+                (Port::Agent(a), Port::Agent(b)) => {
+                    if a.name != b.name {
+                        return None;
+                    }
+
+                    let typedec = typings.get(&a.name)?;
+
+                    res.extend(Self::subset_bindings(typings, a, b, typedec)?);
+                }
+                _ => {
+                    return None;
+                }
+            }
+        }
+
+        Some(res)
+    }
+
+    /// Gets a reference to a port in the agent, if it exists,
+    /// which is an output variable.
+    pub fn terminal_ports_for<'a>(a: &'a Agent, port_typings: &Vec<PortKind>) -> Vec<&'a Port> {
         // Both the port on the parent agent
         // and the primary port on the child agent
-        // must be outputs
+        // must be outputs and child agents
+        // must not mention any names
         let output_children = port_typings
             .iter()
             .zip(a.ports.iter())
@@ -34,16 +78,13 @@ impl TypedProgram {
         output_children
             .filter_map(|(_, port): (&PortKind, &Port)| -> Option<Vec<&Port>> {
                 match &port {
-                    p @ Port::Var(_) => Some(vec![p]),
+                    Port::Var(_) => None,
                     Port::Agent(a) => {
-                        let typedec = typings.get(&a.name)?;
-
-                        // We are the output
-                        if typedec.iter().filter(|ty| ty.as_output().is_some()).count() == 1 {
-                            return Some(vec![port]);
+                        if !a.vars_mentioned().is_empty() {
+                            return None;
                         }
 
-                        Some(Self::terminal_ports_for(typings, &a, typedec))
+                        Some(vec![port])
                     }
                 }
             })
@@ -283,7 +324,7 @@ pub fn parse_typed_program(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::parser::parser_lafont;
+    use crate::{parser::parser_lafont, test as test_utils};
     use chumsky::{stream::Stream, Parser};
 
     #[test]
@@ -438,17 +479,26 @@ Z() >< Add(Z(), Z())
 
         let (program, _) = parse_typed_program(parsed);
 
+        let type_dec = if let Some(typing) = program
+            .symbol_declarations_for
+            .get(&Type(String::from("Add")))
+        {
+            typing.iter().cloned().skip(1).collect::<Vec<_>>()
+        } else {
+            return Default::default();
+        };
+
         assert_eq!(
-            program
-                .terminal_ports_for(
-                    &program.nets.iter().collect::<Vec<_>>()[0]
-                        .rhs
-                        .clone()
-                        .unwrap()
-                )
-                .into_iter()
-                .map(|p| p.name().0)
-                .collect::<Vec<_>>(),
+            TypedProgram::terminal_ports_for(
+                &program.nets.iter().collect::<Vec<_>>()[0]
+                    .rhs
+                    .clone()
+                    .unwrap(),
+                &type_dec,
+            )
+            .into_iter()
+            .map(|p| p.name().0)
+            .collect::<Vec<_>>(),
             vec![program.nets.iter().collect::<Vec<_>>()[0]
                 .rhs
                 .clone()
@@ -458,5 +508,35 @@ Z() >< Add(Z(), Z())
                 .0
                 .clone()]
         );
+    }
+
+    #[test]
+    fn test_subset_bindings() {
+        let types = test_utils::with_typed(
+            "type nat
+
+symbol Z: nat+
+symbol S: nat+, nat-
+symbol Add: nat-, nat-, nat+
+
+S(Z()) >< Add(x, S(x))
+S(Z()) >< Add(Z(), x)",
+        );
+        let nets = types.nets.iter().cloned().collect::<Vec<_>>();
+        let subbindings = TypedProgram::subset_bindings(
+            &types.symbol_declarations_for,
+            &nets[1].rhs.as_ref().unwrap(),
+            &nets[0].rhs.as_ref().unwrap(),
+            &types
+                .symbol_declarations_for
+                .get(&nets[1].rhs.as_ref().unwrap().name)
+                .unwrap()
+                .into_iter()
+                .cloned()
+                .skip(1)
+                .collect::<Vec<_>>(),
+        );
+
+        assert!(subbindings.is_some());
     }
 }
