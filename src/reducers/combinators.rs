@@ -1,111 +1,6 @@
 use crate::parser::ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port};
 use std::{cell::RefCell, rc::Rc};
 
-// TODO: do this with adjacency matrix, perhaps
-// for a single owner, no refcell necessary
-fn make_constr_dup_commutation_net(
-    original_ports: [Option<Port>; 4],
-    lhs: Port,
-    rhs: Port,
-) -> Option<Vec<Port>> {
-    let top_lhs: Port = Expr::Dup(Duplicator::new()).into();
-    let top_rhs: Port = Expr::Dup(Duplicator::new()).into();
-
-    let bot_lhs: Port = Expr::Constr(Constructor::new()).into();
-    let bot_rhs: Port = Expr::Constr(Constructor::new()).into();
-
-    top_lhs
-        .try_borrow_mut()
-        .ok()?
-        .set_aux_ports([Some(bot_lhs.clone()), Some(bot_rhs.clone())]);
-    top_rhs
-        .try_borrow_mut()
-        .ok()?
-        .set_aux_ports([Some(bot_lhs.clone()), Some(bot_rhs.clone())]);
-    bot_lhs
-        .try_borrow_mut()
-        .ok()?
-        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
-    bot_rhs
-        .try_borrow_mut()
-        .ok()?
-        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
-
-    // Connect original top left, top right, bottom left, bottom right vars
-    // to new agents
-    match &original_ports {
-        [a, b, c, d] => {
-            top_lhs.try_borrow_mut().ok()?.set_primary_port(a.clone());
-            top_rhs.try_borrow_mut().ok()?.set_primary_port(b.clone());
-            bot_lhs.try_borrow_mut().ok()?.set_primary_port(c.clone());
-            bot_rhs.try_borrow_mut().ok()?.set_primary_port(d.clone());
-        }
-    }
-
-    if let Some(top_left) = &original_ports[0] {
-        top_left
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&lhs, top_lhs.clone());
-    }
-
-    if let Some(top_right) = &original_ports[1] {
-        top_right
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&lhs, top_rhs.clone());
-    }
-
-    if let Some(bot_left) = &original_ports[2] {
-        bot_left
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&rhs, bot_lhs.clone());
-    }
-
-    if let Some(bot_right) = &original_ports[3] {
-        bot_right
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&rhs, bot_rhs.clone());
-    }
-
-    Some(vec![top_lhs])
-}
-
-fn make_constr_era_commutation_net(
-    original_ports: [Option<Port>; 2],
-    lhs: Port,
-) -> Option<Vec<Port>> {
-    let era_lhs: Port = Expr::Era(Eraser::new()).into();
-    let era_rhs: Port = Expr::Era(Eraser::new()).into();
-
-    era_lhs
-        .try_borrow_mut()
-        .ok()?
-        .set_primary_port(original_ports[0].clone());
-    era_rhs
-        .try_borrow_mut()
-        .ok()?
-        .set_primary_port(original_ports[1].clone());
-
-    if let Some(top_left) = &original_ports[0] {
-        top_left
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&lhs, era_lhs.clone());
-    }
-
-    if let Some(top_right) = &original_ports[1] {
-        top_right
-            .try_borrow_mut()
-            .ok()?
-            .swap_conn(&lhs, era_rhs.clone());
-    }
-
-    Some(vec![era_lhs, era_rhs])
-}
-
 pub fn reduce_dyn(e: Port) -> Option<Vec<Rc<RefCell<Expr>>>> {
     let e_borrow = e.as_ref().try_borrow_mut().ok()?;
     let (lhs, rhs) = e_borrow.try_as_active_pair()?;
@@ -218,3 +113,111 @@ pub fn reduce_dyn(e: Port) -> Option<Vec<Rc<RefCell<Expr>>>> {
         _ => None,
     }
 }
+
+// TODO: do this with adjacency matrix, perhaps
+// for a single owner, no refcell necessary
+fn make_constr_dup_commutation_net(
+    original_ports: [Option<Port>; 4],
+    lhs: Port,
+    rhs: Port,
+) -> Option<Vec<Port>> {
+    let top_lhs: Port = Expr::Dup(Duplicator::new()).into();
+    let top_rhs: Port = Expr::Dup(Duplicator::new()).into();
+
+    let bot_lhs: Port = Expr::Constr(Constructor::new()).into();
+    let bot_rhs: Port = Expr::Constr(Constructor::new()).into();
+
+    top_lhs
+        .try_borrow_mut()
+        .ok()?
+        .set_aux_ports([Some(bot_lhs.clone()), Some(bot_rhs.clone())]);
+    top_rhs
+        .try_borrow_mut()
+        .ok()?
+        .set_aux_ports([Some(bot_lhs.clone()), Some(bot_rhs.clone())]);
+    bot_lhs
+        .try_borrow_mut()
+        .ok()?
+        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
+    bot_rhs
+        .try_borrow_mut()
+        .ok()?
+        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
+
+    // Connect original top left, top right, bottom left, bottom right vars
+    // to new agents
+    match &original_ports {
+        [a, b, c, d] => {
+            top_lhs.try_borrow_mut().ok()?.set_primary_port(a.clone());
+            top_rhs.try_borrow_mut().ok()?.set_primary_port(b.clone());
+            bot_lhs.try_borrow_mut().ok()?.set_primary_port(c.clone());
+            bot_rhs.try_borrow_mut().ok()?.set_primary_port(d.clone());
+        }
+    }
+
+    if let Some(top_left) = &original_ports[0] {
+        top_left
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&lhs, top_lhs.clone());
+    }
+
+    if let Some(top_right) = &original_ports[1] {
+        top_right
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&lhs, top_rhs.clone());
+    }
+
+    if let Some(bot_left) = &original_ports[2] {
+        bot_left
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&rhs, bot_lhs.clone());
+    }
+
+    if let Some(bot_right) = &original_ports[3] {
+        bot_right
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&rhs, bot_rhs.clone());
+    }
+
+    Some(vec![top_lhs])
+}
+
+fn make_constr_era_commutation_net(
+    original_ports: [Option<Port>; 2],
+    lhs: Port,
+) -> Option<Vec<Port>> {
+    let era_lhs: Port = Expr::Era(Eraser::new()).into();
+    let era_rhs: Port = Expr::Era(Eraser::new()).into();
+
+    era_lhs
+        .try_borrow_mut()
+        .ok()?
+        .set_primary_port(original_ports[0].clone());
+    era_rhs
+        .try_borrow_mut()
+        .ok()?
+        .set_primary_port(original_ports[1].clone());
+
+    if let Some(top_left) = &original_ports[0] {
+        top_left
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&lhs, era_lhs.clone());
+    }
+
+    if let Some(top_right) = &original_ports[1] {
+        top_right
+            .try_borrow_mut()
+            .ok()?
+            .swap_conn(&lhs, era_rhs.clone());
+    }
+
+    Some(vec![era_lhs, era_rhs])
+}
+
+#[cfg(test)]
+mod test {}
