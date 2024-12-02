@@ -1,4 +1,7 @@
-use crate::{parser::ast_lafont::Ident, UNIT_STR};
+use crate::{
+    parser::ast_lafont::{Agent, Ident, Port as LafontPort},
+    NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
+};
 use std::{
     cell::{Ref, RefCell, RefMut},
     fmt,
@@ -16,6 +19,40 @@ pub enum Expr {
     Dup(Duplicator),
     Constr(Constructor),
     Var(Var),
+}
+
+impl TryFrom<Agent> for Port {
+    type Error = ();
+
+    fn try_from(a: Agent) -> Result<Self, Self::Error> {
+        let agent: Port = match a.name.0.as_ref() {
+            NAME_CONSTR_AGENT => Ok::<Port, _>(Expr::Constr(Constructor::new()).into()),
+            NAME_ERA_AGENT => Ok::<Port, _>(Expr::Era(Eraser::new()).into()),
+            NAME_DUP_AGENT => Ok::<Port, _>(Expr::Dup(Duplicator::new()).into()),
+            _ => Err(()),
+        }?
+        .into();
+
+        agent.try_borrow_mut().map_err(|_| ())?.set_aux_ports(
+            a.ports
+                .into_iter()
+                .map(|p| match p {
+                    LafontPort::Var(v) => Some(
+                        Expr::Var(Var {
+                            port: Some(agent.clone()),
+                            name: Ident(v.0),
+                        })
+                        .into(),
+                    ),
+                    LafontPort::Agent(a) => Self::try_from(a.clone()).ok(),
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .map_err(|_| ())?,
+        );
+
+        Ok(agent)
+    }
 }
 
 impl From<Expr> for Rc<RefCell<Expr>> {
