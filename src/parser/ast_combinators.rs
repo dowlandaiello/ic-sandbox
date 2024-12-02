@@ -124,17 +124,17 @@ impl Expr {
         .as_ref()
     }
 
-    pub fn swap_conn(&mut self, initial: &Port, new: Port) {
-        fn swap_conn_maybe(slf: &mut Expr, initial: &Port, new: Port) -> Option<()> {
+    pub fn swap_conn(&mut self, initial: &Port, new: Option<Port>) {
+        fn swap_conn_maybe(slf: &mut Expr, initial: &Port, new: Option<Port>) -> Option<()> {
             match slf {
                 Expr::Era(e) => {
                     if Rc::ptr_eq(e.primary_port.as_ref()?, &initial) {
-                        e.primary_port = Some(new);
+                        e.primary_port = new;
                     }
                 }
                 Expr::Constr(c) => {
                     if Rc::ptr_eq(c.primary_port.as_ref()?, &initial) {
-                        c.primary_port = Some(new.clone());
+                        c.primary_port = new.clone();
                     }
 
                     c.aux_ports = c
@@ -143,7 +143,7 @@ impl Expr {
                         .cloned()
                         .map(|p| {
                             if Rc::ptr_eq(p.as_ref()?, &initial) {
-                                Some(new.clone())
+                                new.clone()
                             } else {
                                 p
                             }
@@ -154,7 +154,7 @@ impl Expr {
                 }
                 Expr::Dup(d) => {
                     if Rc::ptr_eq(d.primary_port.as_ref()?, &initial) {
-                        d.primary_port = Some(new.clone());
+                        d.primary_port = new.clone();
                     }
 
                     d.aux_ports = d
@@ -163,7 +163,7 @@ impl Expr {
                         .cloned()
                         .map(|p| {
                             if Rc::ptr_eq(p.as_ref()?, &initial) {
-                                Some(new.clone())
+                                new.clone()
                             } else {
                                 p
                             }
@@ -174,7 +174,7 @@ impl Expr {
                 }
                 Expr::Var(v) => {
                     if Rc::ptr_eq(v.port.as_ref()?, &initial) {
-                        v.port = Some(new);
+                        v.port = new;
                     }
                 }
             };
