@@ -9,6 +9,7 @@ use std::{
     fmt,
 };
 
+pub mod combinated;
 pub mod vm;
 
 pub type Ptr = usize;

@@ -1,52 +1,9 @@
 use super::parser::{
-    ast_combinators::Port as CombinatorPort,
     ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
     parser_lafont::Spanned,
 };
 use chumsky::error::Simple;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-
-#[derive(Debug, Clone)]
-pub struct CombinatedProgram {
-    pub nets: Vec<CombinatorPort>,
-    pub original: TypedProgram,
-}
-
-impl CombinatedProgram {
-    /// Converts a general program into a program
-    /// made with the era, dup, constr combinators
-    pub fn compile(program: TypedProgram) -> Self {
-        let nets = program
-            .nets
-            .iter()
-            .filter_map(|n| match (&n.lhs, &n.rhs) {
-                (Some(a), None) | (None, Some(a)) => {
-                    Some(vec![CombinatorPort::try_from(a.clone()).ok()?])
-                }
-                (Some(a), Some(b)) => {
-                    let lhs = CombinatorPort::try_from(a.clone()).ok()?;
-                    let rhs = CombinatorPort::try_from(b.clone()).ok()?;
-
-                    lhs.try_borrow_mut()
-                        .ok()?
-                        .set_primary_port(Some(rhs.clone()));
-                    rhs.try_borrow_mut()
-                        .ok()?
-                        .set_primary_port(Some(lhs.clone()));
-
-                    Some(vec![lhs, rhs])
-                }
-                (None, None) => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
-        Self {
-            nets,
-            original: program,
-        }
-    }
-}
 
 #[derive(Debug, Default, Clone)]
 pub struct TypedProgram {

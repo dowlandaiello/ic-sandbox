@@ -124,6 +124,36 @@ impl Expr {
         .as_ref()
     }
 
+    pub fn aux_ports(&self) -> &[Option<Port>] {
+        match self {
+            Self::Era(_) => &[],
+            Self::Dup(d) => &d.aux_ports,
+            Self::Constr(c) => &c.aux_ports,
+            Self::Var(_) => &[],
+        }
+    }
+
+    pub fn push_aux_port(&mut self, val: Option<Port>) {
+        match self {
+            Self::Era(_) => {}
+            Self::Dup(d) => {
+                if d.aux_ports[0].is_none() {
+                    d.aux_ports[0] = val;
+                } else {
+                    d.aux_ports[1] = val;
+                }
+            }
+            Self::Constr(c) => {
+                if c.aux_ports[0].is_none() {
+                    c.aux_ports[0] = val;
+                } else {
+                    c.aux_ports[1] = val;
+                }
+            }
+            Self::Var(_) => {}
+        }
+    }
+
     pub fn swap_conn(&mut self, initial: &Port, new: Option<Port>) {
         fn swap_conn_maybe(slf: &mut Expr, initial: &Port, new: Option<Port>) -> Option<()> {
             match slf {
