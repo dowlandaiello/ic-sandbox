@@ -17,6 +17,16 @@ pub enum Expr {
     Var(Var),
 }
 
+impl Expr {
+    pub fn is_var(&self) -> bool {
+        matches!(self, Self::Var(_))
+    }
+
+    pub fn is_agent(&self) -> bool {
+        !self.is_var()
+    }
+}
+
 impl TryFrom<Agent> for Port {
     type Error = ();
 
@@ -250,49 +260,111 @@ pub fn try_as_active_pair(slf: &Port) -> Option<(Port, Port)> {
 pub fn port_to_string(slf: &Port) -> String {
     let mut seen: HashSet<*mut Expr> = Default::default();
 
-    fn fmt_expr(seen: &mut HashSet<*mut Expr>, e: &Port) -> String {
+    fn fmt_expr_ports(seen: &mut HashSet<*mut Expr>, e: &Port, ports: Vec<Port>) -> Option<String> {
         if seen.contains(&e.as_ptr()) {
-            return String::from("");
+            return None;
         }
 
         seen.insert(e.as_ptr());
 
-        match &*e.borrow() {
-            Expr::Era(_) => String::from("Era()"),
-            Expr::Dup(d) => format!(
-                "Dup({}, {})",
-                d.aux_ports[0]
-                    .as_ref()
-                    .map(|p| fmt_expr(seen, p))
-                    .unwrap_or(UNIT_STR.to_owned()),
-                d.aux_ports[1]
-                    .as_ref()
-                    .map(|p| fmt_expr(seen, p))
-                    .unwrap_or(UNIT_STR.to_owned())
+        Some(match &*e.borrow() {
+            Expr::Era(_) => format!(
+                "Era({})",
+                ports
+                    .iter()
+                    .map(|p| {
+                        fmt_expr_ports(
+                            seen,
+                            p,
+                            [p.borrow().primary_port().cloned()]
+                                .into_iter()
+                                .chain(p.borrow().aux_ports().into_iter().cloned())
+                                .filter_map(|x| x)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
-            Expr::Constr(c) => format!(
-                "Constr({}, {})",
-                c.aux_ports[0]
-                    .as_ref()
-                    .map(|p| fmt_expr(seen, p))
-                    .unwrap_or(UNIT_STR.to_owned()),
-                c.aux_ports[1]
-                    .as_ref()
-                    .map(|p| fmt_expr(seen, p))
-                    .unwrap_or(UNIT_STR.to_owned()),
+            Expr::Dup(_) => format!(
+                "Dup({})",
+                ports
+                    .iter()
+                    .map(|p| fmt_expr_ports(
+                        seen,
+                        p,
+                        [p.borrow().primary_port().cloned()]
+                            .into_iter()
+                            .chain(p.borrow().aux_ports().into_iter().cloned())
+                            .filter_map(|x| x)
+                            .collect::<Vec<_>>(),
+                    ))
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            Expr::Constr(_) => format!(
+                "Constr({})",
+                ports
+                    .iter()
+                    .map(|p| fmt_expr_ports(
+                        seen,
+                        p,
+                        [p.borrow().primary_port().cloned()]
+                            .into_iter()
+                            .chain(p.borrow().aux_ports().into_iter().cloned())
+                            .filter_map(|x| x)
+                            .collect::<Vec<_>>(),
+                    ))
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>()
+                    .join(", "),
             ),
             Expr::Var(v) => format!("{}", v.name),
-        }
+        })
     }
 
     if let Some((_, rhs)) = try_as_active_pair(slf) {
         format!(
             "{} >< {}",
-            fmt_expr(&mut seen, slf),
-            fmt_expr(&mut seen, &rhs)
+            fmt_expr_ports(
+                &mut seen,
+                slf,
+                slf.borrow()
+                    .aux_ports()
+                    .into_iter()
+                    .filter_map(|x| x.as_ref())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            )
+            .unwrap_or(UNIT_STR.to_owned()),
+            fmt_expr_ports(
+                &mut seen,
+                &rhs,
+                rhs.borrow()
+                    .aux_ports()
+                    .into_iter()
+                    .filter_map(|x| x.as_ref())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            )
+            .unwrap_or(UNIT_STR.to_owned())
         )
     } else {
-        format!("{}", fmt_expr(&mut seen, slf))
+        format!(
+            "{}",
+            fmt_expr_ports(
+                &mut seen,
+                slf,
+                [slf.borrow().primary_port().cloned()]
+                    .into_iter()
+                    .chain(slf.borrow().aux_ports().into_iter().cloned())
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>()
+            )
+            .unwrap_or(UNIT_STR.to_owned())
+        )
     }
 }
 

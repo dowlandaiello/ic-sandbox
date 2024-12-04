@@ -7,6 +7,10 @@ pub struct NameIter {
 }
 
 impl NameIter {
+    pub fn advance_by(&mut self, n: usize) {
+        self.curr += n;
+    }
+
     pub fn next(&mut self) -> String {
         let ident = self.curr.to_string();
 
