@@ -1,9 +1,10 @@
-use crate::parser::ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port};
+use crate::parser::ast_combinators::{
+    try_as_active_pair, Constructor, Duplicator, Eraser, Expr, Port,
+};
 
 pub fn reduce_dyn(e: Port) -> Option<Vec<Port>> {
-    let e_borrow = e.as_ref().try_borrow_mut().ok()?;
-    let (lhs, rhs) = e_borrow.try_as_active_pair()?;
-    let e2 = e_borrow.primary_port()?;
+    let (e, e2) = try_as_active_pair(&e)?;
+    let (lhs, rhs) = (e.try_borrow().ok()?, e2.try_borrow().ok()?);
 
     match (&*lhs, &*rhs) {
         // commutation of constr >< dup

@@ -2,11 +2,7 @@ use crate::{
     parser::ast_lafont::{Agent, Ident, Port as LafontPort},
     NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
 };
-use std::{
-    cell::{Ref, RefCell, RefMut},
-    fmt,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
 pub type Port = Rc<RefCell<Expr>>;
 
@@ -92,27 +88,6 @@ impl Expr {
         }
     }
 
-    /// Gets the agent connected to this agent's primary port, if it exists
-    pub fn try_as_active_pair(&self) -> Option<(&Expr, Ref<Expr>)> {
-        let primary_port = self.primary_port();
-
-        if matches!(&*primary_port.as_ref()?.try_borrow().ok()?, Expr::Var(_)) {
-            return None;
-        }
-
-        Some((self, primary_port.as_ref()?.try_borrow().ok()?))
-    }
-
-    pub fn try_as_active_pair_mut(&self) -> Option<(&Expr, RefMut<Expr>)> {
-        let primary_port = self.primary_port();
-
-        if matches!(&*primary_port.as_ref()?.try_borrow().ok()?, Expr::Var(_)) {
-            return None;
-        }
-
-        Some((self, primary_port.as_ref()?.try_borrow_mut().ok()?))
-    }
-
     /// Gets the agent's primary port, whether it is a variable or an agent
     pub fn primary_port(&self) -> Option<&Port> {
         match &self {
@@ -149,6 +124,19 @@ impl Expr {
                 } else {
                     c.aux_ports[1] = val;
                 }
+            }
+            Self::Var(_) => {}
+        }
+    }
+
+    pub fn insert_aux_port(&mut self, index: usize, val: Option<Port>) {
+        match self {
+            Self::Era(_) => {}
+            Self::Dup(d) => {
+                d.aux_ports[index] = val;
+            }
+            Self::Constr(c) => {
+                c.aux_ports[index] = val;
             }
             Self::Var(_) => {}
         }
@@ -216,14 +204,95 @@ impl Expr {
     }
 }
 
-impl fmt::Display for Expr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Era(e) => write!(f, "{}", e),
-            Self::Dup(d) => write!(f, "{}", d),
-            Self::Constr(c) => write!(f, "{}", c),
-            Self::Var(v) => write!(f, "{}", v),
+pub fn try_as_active_pair(slf: &Port) -> Option<(Port, Port)> {
+    let slf_port = slf.try_borrow().ok()?;
+    let primary_port = slf_port.primary_port()?;
+    let port = primary_port.try_borrow().ok()?;
+
+    match &*port {
+        Expr::Var(_) => None,
+        Expr::Constr(c) => {
+            if c.primary_port
+                .as_ref()
+                .map(|p| Rc::ptr_eq(slf, &p))
+                .unwrap_or_default()
+            {
+                Some((slf.clone(), primary_port.clone()))
+            } else {
+                None
+            }
         }
+        Expr::Dup(d) => {
+            if d.primary_port
+                .as_ref()
+                .map(|p| Rc::ptr_eq(slf, &p))
+                .unwrap_or_default()
+            {
+                Some((slf.clone(), primary_port.clone()))
+            } else {
+                None
+            }
+        }
+        Expr::Era(e) => {
+            if e.primary_port
+                .as_ref()
+                .map(|p| Rc::ptr_eq(slf, &p))
+                .unwrap_or_default()
+            {
+                Some((slf.clone(), primary_port.clone()))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+pub fn port_to_string(slf: &Port) -> String {
+    let mut seen: HashSet<*mut Expr> = Default::default();
+
+    fn fmt_expr(seen: &mut HashSet<*mut Expr>, e: &Port) -> String {
+        if seen.contains(&e.as_ptr()) {
+            return String::from("");
+        }
+
+        seen.insert(e.as_ptr());
+
+        match &*e.borrow() {
+            Expr::Era(_) => String::from("Era()"),
+            Expr::Dup(d) => format!(
+                "Dup({}, {})",
+                d.aux_ports[0]
+                    .as_ref()
+                    .map(|p| fmt_expr(seen, p))
+                    .unwrap_or(UNIT_STR.to_owned()),
+                d.aux_ports[1]
+                    .as_ref()
+                    .map(|p| fmt_expr(seen, p))
+                    .unwrap_or(UNIT_STR.to_owned())
+            ),
+            Expr::Constr(c) => format!(
+                "Constr({}, {})",
+                c.aux_ports[0]
+                    .as_ref()
+                    .map(|p| fmt_expr(seen, p))
+                    .unwrap_or(UNIT_STR.to_owned()),
+                c.aux_ports[1]
+                    .as_ref()
+                    .map(|p| fmt_expr(seen, p))
+                    .unwrap_or(UNIT_STR.to_owned()),
+            ),
+            Expr::Var(v) => format!("{}", v.name),
+        }
+    }
+
+    if let Some((_, rhs)) = try_as_active_pair(slf) {
+        format!(
+            "{} >< {}",
+            fmt_expr(&mut seen, slf),
+            fmt_expr(&mut seen, &rhs)
+        )
+    } else {
+        format!("{}", fmt_expr(&mut seen, slf))
     }
 }
 
@@ -235,19 +304,6 @@ pub struct Eraser {
 impl Eraser {
     pub const fn new() -> Self {
         Self { primary_port: None }
-    }
-}
-
-impl fmt::Display for Eraser {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Era >< {}",
-            self.primary_port
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned())
-        )
     }
 }
 
@@ -266,27 +322,6 @@ impl Duplicator {
     }
 }
 
-impl fmt::Display for Duplicator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Dup({}, {}) >< {}",
-            self.aux_ports[0]
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned()),
-            self.aux_ports[1]
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned()),
-            self.primary_port
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned())
-        )
-    }
-}
-
 #[derive(Default, Debug, Clone)]
 pub struct Constructor {
     pub primary_port: Option<Port>,
@@ -302,35 +337,8 @@ impl Constructor {
     }
 }
 
-impl fmt::Display for Constructor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Constr({}, {}) >< {}",
-            self.aux_ports[0]
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned()),
-            self.aux_ports[1]
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned()),
-            self.primary_port
-                .as_ref()
-                .and_then(|p| p.try_borrow().ok().map(|s| s.to_string()))
-                .unwrap_or(UNIT_STR.to_owned())
-        )
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Var {
     pub name: Ident,
     pub port: Option<Port>,
-}
-
-impl fmt::Display for Var {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.name)
-    }
 }
