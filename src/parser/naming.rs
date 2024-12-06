@@ -1,33 +1,24 @@
-use std::iter::Iterator;
-
 /// An iterator which generates a sequence of variable identifiers
 #[derive(Default)]
 pub struct NameIter {
-    curr: usize,
+    curr_var: usize,
+    curr_agent: usize,
 }
 
 impl NameIter {
-    pub fn advance_by(&mut self, n: usize) {
-        self.curr += n;
-    }
-
     pub fn next(&mut self) -> String {
-        let ident = self.curr.to_string();
+        let ident = self.curr_var.to_string();
 
-        self.curr += 1;
+        self.curr_var += 1;
 
         ident
     }
-}
 
-impl Iterator for NameIter {
-    type Item = String;
+    pub fn next_id(&mut self) -> usize {
+        let ident = self.curr_agent;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        let ident = self.curr.to_string();
+        self.curr_agent += 1;
 
-        self.curr += 1;
-
-        Some(ident)
+        ident
     }
 }

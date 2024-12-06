@@ -31,6 +31,11 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 }
 
 pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simple<Spanned<Token>>> {
+    pub enum PortValue {
+        Port(Port),
+        Ref(usize),
+    }
+
     let span_just = move |val: Token| {
         filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
             tok.0 == val
@@ -38,27 +43,52 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
     };
     let agent = recursive(|expr| {
         select! {
-            Spanned(Token::Era, span) => Spanned(<Expr as Into<Port>>::into(Expr::Era(Eraser::new())), span),
-	    Spanned(Token::Constr, span) => Spanned(<Expr as Into<Port>>::into(Expr::Constr(Constructor::new())), span),
-	    Spanned(Token::Dup, span) => Spanned(<Expr as Into<Port>>::into(Expr::Dup(Duplicator::new())), span),
+            Spanned(Token::Era, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Era(Eraser::new()))), span),
+	    Spanned(Token::Constr, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Constr(Constructor::new()))), span),
+	    Spanned(Token::Dup, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Dup(Duplicator::new()))), span),
         }
+        .then_ignore(span_just(Token::LeftBracket))
+        .then_ignore(span_just(Token::At))
+        .then(select!{
+	    Spanned(Token::Digit(d), s) => Spanned(d, s)
+	})
+        .then_ignore(span_just(Token::RightBracket))
         .then_ignore(span_just(Token::LeftParen))
         .then(
             choice((
                 expr,
-                select! {Spanned(Token::Ident(s), span) => Spanned(<Expr as Into<Port>>::into(Expr::Var(Var {name: Ident(s), port: None})), span)}
+                select! {Spanned(Token::Ident(s), span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Var(Var {name: Ident(s), port: None}))), span)},
+		select! {
+		    Spanned(Token::Digit(d), span) => Spanned(PortValue::Ref(d), span)
+		}
             ))
-            .separated_by(span_just(Token::Comma)).exactly(2)
+            .separated_by(span_just(Token::Comma))
         )
         .then_ignore(span_just(Token::RightParen))
-        .map(|(expr, mut ports): (Spanned<Port>, Vec<Spanned<Port>>)| -> Spanned<Port> {
-            Spanned(
-                {
-		    expr.0.borrow_mut().set_aux_ports([Some(ports.remove(0).0), Some(ports.remove(0).0)]);
-		    expr.0
-		},
-		expr.1
-            )
+        .map(|((expr, pos), mut ports): ((Spanned<Port>, Spanned<usize>), Vec<Spanned<Port>>)| -> Spanned<Port> {
+	    ports.iter().for_each(|p| {
+		if p.0.borrow().is_var() {
+		    p.0.borrow_mut().set_primary_port(Some(expr.0.clone()));
+		}
+	    });
+
+	    let is_era = if let Expr::Era(_) = &*expr.0.borrow() {
+		true
+	    } else {
+		false
+	    };
+
+	    if is_era {
+		expr
+	    } else {
+                Spanned(
+		    {
+	                expr.0.borrow_mut().set_aux_ports([Some(ports.remove(0).0), Some(ports.remove(0).0)]);
+                        expr.0
+                    },
+                    expr.1
+                )
+	    }
         })
     });
     let net = agent

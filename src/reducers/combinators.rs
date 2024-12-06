@@ -229,6 +229,7 @@ fn make_constr_era_commutation_net(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::parser::ast_combinators::port_to_string;
 
     #[test]
     fn test_reduce_commute_dup_constr() {
@@ -238,8 +239,11 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(&top);
-        assert!(res.is_some());
+        let res = reduce_dyn(&top).unwrap();
+        assert_eq!(
+            port_to_string(&res[0]),
+            "Dup[@0](c, Constr[@2](a, @0, Dup[@4](d, @2, Constr[@6](b, @0, @4))), @6)"
+        );
     }
 
     #[test]
@@ -250,8 +254,9 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(&top);
-        assert!(res.is_some());
+        let res = reduce_dyn(&top).unwrap();
+        assert_eq!(port_to_string(&res[0]), "Era[@0](a)");
+        assert_eq!(port_to_string(&res[1]), "Era[@0](b)");
     }
 
     #[test]
@@ -262,8 +267,9 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(&top);
-        assert!(res.is_some());
+        let res = reduce_dyn(&top).unwrap();
+        assert_eq!(port_to_string(&res[0]), "Era[@0](a)");
+        assert_eq!(port_to_string(&res[1]), "Era[@0](b)");
     }
 
     #[test]

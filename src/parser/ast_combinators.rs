@@ -1,13 +1,210 @@
 use crate::{
-    parser::{
-        ast_lafont::{Agent, Ident, Port as LafontPort},
-        naming::NameIter,
-    },
-    NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
+    parser::{ast_lafont::Ident, naming::NameIter},
+    UNIT_STR,
 };
-use std::{cell::RefCell, fmt, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, fmt, ops::Deref, rc::Rc};
 
-pub type Port = Rc<RefCell<Expr>>;
+#[derive(Debug, Clone)]
+pub struct Port {
+    pub e: Rc<RefCell<Expr>>,
+    pub id: usize,
+}
+
+impl Deref for Port {
+    type Target = Rc<RefCell<Expr>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.e
+    }
+}
+
+impl fmt::Display for Port {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut seen: HashSet<usize> = Default::default();
+
+        fn fmt_expr_ports(seen: &mut HashSet<usize>, e: &Port, ports: Vec<Port>) -> Option<String> {
+            if seen.contains(&e.id) {
+                return Some(format!("@{}", e.id));
+            }
+
+            seen.insert(e.id);
+
+            Some(match &*e.borrow() {
+                Expr::Era(_) => format!(
+                    "Era[@{}]({})",
+                    e.id,
+                    ports
+                        .iter()
+                        .map(|p| {
+                            fmt_expr_ports(
+                                seen,
+                                p,
+                                [p.borrow().primary_port().cloned()]
+                                    .into_iter()
+                                    .chain(p.borrow().aux_ports().into_iter().cloned())
+                                    .filter_map(|x| x)
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .filter_map(|x| x)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                Expr::Dup(_) => format!(
+                    "Dup[@{}]({})",
+                    e.id,
+                    ports
+                        .iter()
+                        .map(|p| fmt_expr_ports(
+                            seen,
+                            p,
+                            [p.borrow().primary_port().cloned()]
+                                .into_iter()
+                                .chain(p.borrow().aux_ports().into_iter().cloned())
+                                .filter_map(|x| x)
+                                .collect::<Vec<_>>(),
+                        ))
+                        .filter_map(|x| x)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                Expr::Constr(_) => format!(
+                    "Constr[@{}]({})",
+                    e.id,
+                    ports
+                        .iter()
+                        .map(|p| fmt_expr_ports(
+                            seen,
+                            p,
+                            [p.borrow().primary_port().cloned()]
+                                .into_iter()
+                                .chain(p.borrow().aux_ports().into_iter().cloned())
+                                .filter_map(|x| x)
+                                .collect::<Vec<_>>(),
+                        ))
+                        .filter_map(|x| x)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                Expr::Var(v) => format!("{}", v.name),
+            })
+        }
+
+        if let Some((_, rhs)) = self.try_as_active_pair() {
+            write!(
+                f,
+                "{} >< {}",
+                fmt_expr_ports(
+                    &mut seen,
+                    self,
+                    self.borrow()
+                        .aux_ports()
+                        .into_iter()
+                        .filter_map(|x| x.as_ref())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                )
+                .unwrap_or(UNIT_STR.to_owned()),
+                fmt_expr_ports(
+                    &mut seen,
+                    &rhs,
+                    rhs.borrow()
+                        .aux_ports()
+                        .into_iter()
+                        .filter_map(|x| x.as_ref())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                )
+                .unwrap_or(UNIT_STR.to_owned())
+            )
+        } else {
+            write!(
+                f,
+                "{}",
+                fmt_expr_ports(
+                    &mut seen,
+                    self,
+                    [self.borrow().primary_port().cloned()]
+                        .into_iter()
+                        .chain(self.borrow().aux_ports().into_iter().cloned())
+                        .filter_map(|x| x)
+                        .collect::<Vec<_>>()
+                )
+                .unwrap_or(UNIT_STR.to_owned())
+            )
+        }
+    }
+}
+
+impl Port {
+    pub fn try_as_active_pair(&self) -> Option<(Port, Port)> {
+        let self_port = self.borrow();
+        let primary_port = self_port.primary_port()?;
+        let port = primary_port.try_borrow().ok()?;
+
+        match &*port {
+            Expr::Var(v) => {
+                if v.port
+                    .as_ref()
+                    .map(|p| Rc::ptr_eq(self, &p))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.clone()))
+                } else {
+                    None
+                }
+            }
+            Expr::Constr(c) => {
+                if c.primary_port
+                    .as_ref()
+                    .map(|p| Rc::ptr_eq(self, &p))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.clone()))
+                } else {
+                    None
+                }
+            }
+            Expr::Dup(d) => {
+                if d.primary_port
+                    .as_ref()
+                    .map(|p| Rc::ptr_eq(self, &p))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.clone()))
+                } else {
+                    None
+                }
+            }
+            Expr::Era(e) => {
+                if e.primary_port
+                    .as_ref()
+                    .map(|p| Rc::ptr_eq(self, &p))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.clone()))
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// Sets all free ports to new vars
+    pub fn fill_aux_vars(&self, names: &mut NameIter) {
+        let n_ports = self.borrow().aux_ports().len();
+
+        for _ in 0..n_ports {
+            let v: Port = Expr::Var(Var {
+                name: Ident(names.next()),
+                port: Some(self.clone()),
+            })
+            .into_port(names);
+
+            self.borrow_mut().push_aux_port(Some(v));
+        }
+    }
+}
 
 const EMPTY_AUX_PORTS: [Option<Port>; 2] = [None, None];
 
@@ -20,7 +217,11 @@ pub enum Token {
     ActivePair,
     LeftParen,
     RightParen,
+    At,
+    LeftBracket,
+    RightBracket,
     Comma,
+    Digit(usize),
 }
 
 impl fmt::Display for Token {
@@ -33,7 +234,11 @@ impl fmt::Display for Token {
             Self::ActivePair => write!(f, "><"),
             Self::LeftParen => write!(f, "("),
             Self::RightParen => write!(f, ")"),
+            Self::At => write!(f, "@"),
+            Self::LeftBracket => write!(f, "["),
+            Self::RightBracket => write!(f, "]"),
             Self::Comma => write!(f, ","),
+            Self::Digit(d) => write!(f, "{}", d),
         }
     }
 }
@@ -57,47 +262,14 @@ impl Expr {
     }
 }
 
-impl TryFrom<Agent> for Port {
-    type Error = ();
-
-    fn try_from(a: Agent) -> Result<Self, Self::Error> {
-        let agent: Port = match a.name.0.as_ref() {
-            NAME_CONSTR_AGENT => Ok::<Port, _>(Expr::Constr(Constructor::new()).into()),
-            NAME_ERA_AGENT => Ok::<Port, _>(Expr::Era(Eraser::new()).into()),
-            NAME_DUP_AGENT => Ok::<Port, _>(Expr::Dup(Duplicator::new()).into()),
-            _ => Err(()),
-        }?
-        .into();
-
-        agent.try_borrow_mut().map_err(|_| ())?.set_aux_ports(
-            a.ports
-                .into_iter()
-                .map(|p| match p {
-                    LafontPort::Var(v) => Some(
-                        Expr::Var(Var {
-                            port: Some(agent.clone()),
-                            name: Ident(v.0),
-                        })
-                        .into(),
-                    ),
-                    LafontPort::Agent(a) => Self::try_from(a.clone()).ok(),
-                })
-                .collect::<Vec<_>>()
-                .try_into()
-                .map_err(|_| ())?,
-        );
-
-        Ok(agent)
-    }
-}
-
-impl From<Expr> for Rc<RefCell<Expr>> {
-    fn from(e: Expr) -> Self {
-        Self::new(RefCell::new(e))
-    }
-}
-
 impl Expr {
+    pub fn into_port(self, namer: &mut NameIter) -> Port {
+        Port {
+            e: Rc::new(RefCell::new(self)),
+            id: namer.next_id(),
+        }
+    }
+
     pub fn set_aux_ports(&mut self, ports: [Option<Port>; 2]) {
         match self {
             Self::Era(_) => {}
@@ -241,178 +413,6 @@ impl Expr {
         }
 
         let _ = swap_conn_maybe(self, initial, new);
-    }
-}
-
-/// Sets all free ports to new vars
-pub fn fill_port_aux_vars(slf: &Port, names: &mut NameIter) {
-    let n_ports = slf.borrow().aux_ports().len();
-
-    for _ in 0..n_ports {
-        let v: Port = Expr::Var(Var {
-            name: Ident(names.next()),
-            port: Some(slf.clone()),
-        })
-        .into();
-
-        slf.borrow_mut().push_aux_port(Some(v));
-    }
-}
-
-pub fn try_as_active_pair(slf: &Port) -> Option<(Port, Port)> {
-    let slf_port = slf.try_borrow().ok()?;
-    let primary_port = slf_port.primary_port()?;
-    let port = primary_port.try_borrow().ok()?;
-
-    match &*port {
-        Expr::Var(_) => None,
-        Expr::Constr(c) => {
-            if c.primary_port
-                .as_ref()
-                .map(|p| Rc::ptr_eq(slf, &p))
-                .unwrap_or_default()
-            {
-                Some((slf.clone(), primary_port.clone()))
-            } else {
-                None
-            }
-        }
-        Expr::Dup(d) => {
-            if d.primary_port
-                .as_ref()
-                .map(|p| Rc::ptr_eq(slf, &p))
-                .unwrap_or_default()
-            {
-                Some((slf.clone(), primary_port.clone()))
-            } else {
-                None
-            }
-        }
-        Expr::Era(e) => {
-            if e.primary_port
-                .as_ref()
-                .map(|p| Rc::ptr_eq(slf, &p))
-                .unwrap_or_default()
-            {
-                Some((slf.clone(), primary_port.clone()))
-            } else {
-                None
-            }
-        }
-    }
-}
-
-pub fn port_to_string(slf: &Port) -> String {
-    let mut seen: Vec<*mut Expr> = Default::default();
-
-    fn fmt_expr_ports(seen: &mut Vec<*mut Expr>, e: &Port, ports: Vec<Port>) -> Option<String> {
-        if let Some(idx) = seen.iter().position(|x| *x == e.as_ptr()) {
-            return Some(format!("@{}", idx));
-        }
-
-        seen.push(e.as_ptr());
-
-        Some(match &*e.borrow() {
-            Expr::Era(_) => format!(
-                "Era[@{}]({})",
-                seen.len() - 1,
-                ports
-                    .iter()
-                    .map(|p| {
-                        fmt_expr_ports(
-                            seen,
-                            p,
-                            [p.borrow().primary_port().cloned()]
-                                .into_iter()
-                                .chain(p.borrow().aux_ports().into_iter().cloned())
-                                .filter_map(|x| x)
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .filter_map(|x| x)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-            Expr::Dup(_) => format!(
-                "Dup[@{}]({})",
-                seen.len() - 1,
-                ports
-                    .iter()
-                    .map(|p| fmt_expr_ports(
-                        seen,
-                        p,
-                        [p.borrow().primary_port().cloned()]
-                            .into_iter()
-                            .chain(p.borrow().aux_ports().into_iter().cloned())
-                            .filter_map(|x| x)
-                            .collect::<Vec<_>>(),
-                    ))
-                    .filter_map(|x| x)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-            Expr::Constr(_) => format!(
-                "Constr[@{}]({})",
-                seen.len() - 1,
-                ports
-                    .iter()
-                    .map(|p| fmt_expr_ports(
-                        seen,
-                        p,
-                        [p.borrow().primary_port().cloned()]
-                            .into_iter()
-                            .chain(p.borrow().aux_ports().into_iter().cloned())
-                            .filter_map(|x| x)
-                            .collect::<Vec<_>>(),
-                    ))
-                    .filter_map(|x| x)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ),
-            Expr::Var(v) => format!("{}", v.name),
-        })
-    }
-
-    if let Some((_, rhs)) = try_as_active_pair(slf) {
-        format!(
-            "{} >< {}",
-            fmt_expr_ports(
-                &mut seen,
-                slf,
-                slf.borrow()
-                    .aux_ports()
-                    .into_iter()
-                    .filter_map(|x| x.as_ref())
-                    .cloned()
-                    .collect::<Vec<_>>()
-            )
-            .unwrap_or(UNIT_STR.to_owned()),
-            fmt_expr_ports(
-                &mut seen,
-                &rhs,
-                rhs.borrow()
-                    .aux_ports()
-                    .into_iter()
-                    .filter_map(|x| x.as_ref())
-                    .cloned()
-                    .collect::<Vec<_>>()
-            )
-            .unwrap_or(UNIT_STR.to_owned())
-        )
-    } else {
-        format!(
-            "{}",
-            fmt_expr_ports(
-                &mut seen,
-                slf,
-                [slf.borrow().primary_port().cloned()]
-                    .into_iter()
-                    .chain(slf.borrow().aux_ports().into_iter().cloned())
-                    .filter_map(|x| x)
-                    .collect::<Vec<_>>()
-            )
-            .unwrap_or(UNIT_STR.to_owned())
-        )
     }
 }
 
