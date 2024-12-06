@@ -1,50 +1,12 @@
-use crate::{
-    heuristics::TypedProgram,
-    parser::{
-        ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
-        ast_lafont::Ident,
-        naming::NameIter,
-    },
+use crate::parser::{
+    ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
+    ast_lafont::Ident,
+    naming::NameIter,
 };
 
 #[derive(Debug, Clone)]
 pub struct CombinatedProgram {
     pub nets: Vec<Port>,
-    pub original: TypedProgram,
-}
-
-impl CombinatedProgram {
-    /// Converts a general program into a program
-    /// made with the era, dup, constr combinators
-    pub fn compile(program: TypedProgram) -> Self {
-        let combinator_nets = program
-            .nets
-            .iter()
-            .filter_map(|n| match (&n.lhs, &n.rhs) {
-                (Some(a), None) | (None, Some(a)) => Some(vec![Port::try_from(a.clone()).ok()?]),
-                (Some(a), Some(b)) => {
-                    let lhs = Port::try_from(a.clone()).ok()?;
-                    let rhs = Port::try_from(b.clone()).ok()?;
-
-                    lhs.try_borrow_mut()
-                        .ok()?
-                        .set_primary_port(Some(rhs.clone()));
-                    rhs.try_borrow_mut()
-                        .ok()?
-                        .set_primary_port(Some(lhs.clone()));
-
-                    Some(vec![lhs, rhs])
-                }
-                (None, None) => None,
-            })
-            .flatten()
-            .collect::<Vec<_>>();
-
-        Self {
-            nets: combinator_nets,
-            original: program,
-        }
-    }
 }
 
 /// Inserts a new value in the free var at the specified index in the multiplexor

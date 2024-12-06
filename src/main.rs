@@ -1,5 +1,5 @@
 use clap::Command;
-use inetlib::bytecode::{self, vm::Executor};
+use inetlib::{parser::ast_combinators::port_to_string, reducers::combinators::reduce_dyn};
 
 mod cli;
 
@@ -27,16 +27,10 @@ fn main() {
     match arg_matches.subcommand() {
         Some(("eval", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
-                let bytecode = bytecode::compile(program);
+                let res = reduce_dyn(&program.nets[0]).expect("failed to reduce net");
 
-                let mut exec = Executor::new(bytecode);
-                exec.step_to_end();
-
-                let res = exec.readback();
-
-                res.nets
-                    .iter()
-                    .map(|n| n.to_string())
+                res.iter()
+                    .map(|n| port_to_string(&n))
                     .collect::<Vec<_>>()
                     .join("\n")
                     .into_bytes()

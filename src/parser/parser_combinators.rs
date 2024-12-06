@@ -3,7 +3,7 @@ use super::{
     ast_lafont::Ident,
     parser_lafont::{Span, Spanned},
 };
-use chumsky::{prelude::*, text::Character};
+use chumsky::prelude::*;
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let era = just("Era").map(|_| Token::Era);
@@ -14,7 +14,6 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let right_paren = just(")").map(|_| Token::RightParen);
     let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
     let active_pair = just("><").map(|_| Token::ActivePair);
-    let inline_space = filter(Character::is_inline_whitespace);
 
     let token = choice((
         comma,
@@ -25,7 +24,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     ));
 
     token
-        .padded_by(inline_space.repeated().or_not())
+        .padded_by(text::whitespace())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
         .then_ignore(end())

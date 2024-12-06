@@ -2,7 +2,7 @@ use crate::parser::ast_combinators::{
     try_as_active_pair, Constructor, Duplicator, Eraser, Expr, Port,
 };
 
-pub fn reduce_dyn(e: Port) -> Option<Vec<Port>> {
+pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
     let (e, e2) = try_as_active_pair(&e)?;
     let (lhs, rhs) = (e.try_borrow().ok()?, e2.try_borrow().ok()?);
 
@@ -238,7 +238,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.is_some());
     }
 
@@ -250,7 +250,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.is_some());
     }
 
@@ -262,7 +262,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.is_some());
     }
 
@@ -274,7 +274,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.is_some());
     }
 
@@ -286,7 +286,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.is_some());
     }
 
@@ -298,7 +298,7 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-        let res = reduce_dyn(top);
+        let res = reduce_dyn(&top);
         assert!(res.unwrap().is_empty());
     }
 }

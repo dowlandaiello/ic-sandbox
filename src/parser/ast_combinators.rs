@@ -5,7 +5,7 @@ use crate::{
     },
     NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
 };
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, fmt, rc::Rc};
 
 pub type Port = Rc<RefCell<Expr>>;
 
@@ -21,6 +21,21 @@ pub enum Token {
     LeftParen,
     RightParen,
     Comma,
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Era => write!(f, "Era"),
+            Self::Constr => write!(f, "Constr"),
+            Self::Dup => write!(f, "Dup"),
+            Self::Ident(i) => write!(f, "{}", i),
+            Self::ActivePair => write!(f, "><"),
+            Self::LeftParen => write!(f, "("),
+            Self::RightParen => write!(f, ")"),
+            Self::Comma => write!(f, ","),
+        }
+    }
 }
 
 /// Represents any interaction combinator net

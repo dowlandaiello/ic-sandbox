@@ -5,8 +5,8 @@ use chumsky::{
 };
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
-    heuristics::{self, TypedProgram},
-    parser::parser_lafont::{self},
+    bytecode::combinated::CombinatedProgram,
+    parser::parser_combinators::{self},
     preprocessor, BYTECODE_EXTENSION,
 };
 use std::{
@@ -15,7 +15,7 @@ use std::{
     path::PathBuf,
 };
 
-pub fn compile(args: &ArgMatches, transformer: impl Fn(TypedProgram) -> Vec<u8>) {
+pub fn compile(args: &ArgMatches, transformer: impl Fn(CombinatedProgram) -> Vec<u8>) {
     let input_fname = args
         .get_one::<String>("source")
         .expect("missing source file name");
@@ -27,7 +27,7 @@ pub fn compile(args: &ArgMatches, transformer: impl Fn(TypedProgram) -> Vec<u8>)
 
 pub fn transform_input_to_output_cli(
     args: &ArgMatches,
-    transformer: impl Fn(TypedProgram) -> Vec<u8>,
+    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
 ) {
     let out_fname = args
         .get_one::<String>("out")
@@ -39,7 +39,7 @@ pub fn transform_input_to_output_cli(
     transform_input_to_output(input_fname, out_fname, transformer)
 }
 
-pub fn read_program(in_fname: &str) -> TypedProgram {
+pub fn read_program(in_fname: &str) -> CombinatedProgram {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -50,7 +50,7 @@ pub fn read_program(in_fname: &str) -> TypedProgram {
 
     let input_path = PathBuf::from(in_fname);
 
-    let parsed: TypedProgram = assert_parse_ok(
+    let parsed: CombinatedProgram = assert_parse_ok(
         input_path.clone(),
         input_path
             .ancestors()
@@ -66,7 +66,7 @@ pub fn read_program(in_fname: &str) -> TypedProgram {
 pub fn transform_input_to_output(
     in_fname: &str,
     out_fname: &str,
-    transformer: impl Fn(TypedProgram) -> Vec<u8>,
+    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
 ) {
     let parsed = read_program(in_fname);
     let out = transformer(parsed);
@@ -104,10 +104,10 @@ pub fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedProgram {
+pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> CombinatedProgram {
     let input = preprocessor::parser(working_dir, input);
 
-    let errs: Vec<Simple<char>> = match parser_lafont::lexer()
+    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
         .parse(input.as_str())
         .map_err(|e| {
             e.into_iter()
@@ -115,43 +115,22 @@ pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Typ
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
-            parser_lafont::parser()
-                .parse(res.into_iter().flatten().collect::<Vec<_>>())
-                .map_err(|e| {
-                    e.into_iter()
-                        .map(|e| {
-                            Simple::<char>::custom(
-                                e.found().unwrap().1.clone(),
-                                format!("{}", e.map(|x| x.0)),
-                            )
-                            .with_label("parsing error")
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .and_then(|res| {
-                    let (output, errors) = heuristics::parse_typed_program(res);
-
-                    if !errors.is_empty() {
-                        Err(errors
-                            .into_iter()
-                            .map(|e| {
-                                Simple::<char>::custom(
-                                    e.span(),
-                                    match e.reason() {
-                                        SimpleReason::Custom(s) => s.to_string(),
-                                        _ => unreachable!(),
-                                    },
-                                )
-                                .with_label("typing error")
-                            })
-                            .collect::<Vec<_>>())
-                    } else {
-                        Ok(output)
-                    }
-                })
+            parser_combinators::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(
+                            e.found().unwrap().1.clone(),
+                            format!("{}", e.map(|x| x.0)),
+                        )
+                        .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
         }) {
         Ok(v) => {
-            return v;
+            return CombinatedProgram {
+                nets: v.into_iter().map(|x| x.0).collect(),
+            };
         }
         Err(e) => e,
     };
