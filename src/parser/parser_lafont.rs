@@ -79,7 +79,6 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simpl
             **tok == val
         })
     };
-    let unit = span_just(Token::LeftParen).then(span_just(Token::RightParen));
     let type_declarations = span_just(Token::Keyword(Keyword::Type))
         .ignored()
         .then(

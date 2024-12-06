@@ -11,6 +11,18 @@ pub type Port = Rc<RefCell<Expr>>;
 
 const EMPTY_AUX_PORTS: [Option<Port>; 2] = [None, None];
 
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+pub enum Token {
+    Era,
+    Constr,
+    Dup,
+    Ident(String),
+    ActivePair,
+    LeftParen,
+    RightParen,
+    Comma,
+}
+
 /// Represents any interaction combinator net
 #[derive(Debug, Clone)]
 pub enum Expr {
