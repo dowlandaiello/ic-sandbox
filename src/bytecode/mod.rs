@@ -10,7 +10,6 @@ use std::{
 };
 
 pub mod combinated;
-pub mod naming;
 pub mod vm;
 
 pub type Ptr = usize;

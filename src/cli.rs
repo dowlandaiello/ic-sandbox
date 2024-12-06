@@ -39,11 +39,7 @@ pub fn transform_input_to_output_cli(
     transform_input_to_output(input_fname, out_fname, transformer)
 }
 
-pub fn transform_input_to_output(
-    in_fname: &str,
-    out_fname: &str,
-    transformer: impl Fn(TypedProgram) -> Vec<u8>,
-) {
+pub fn read_program(in_fname: &str) -> TypedProgram {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -63,6 +59,16 @@ pub fn transform_input_to_output(
             .to_path_buf(),
         input.trim(),
     );
+
+    parsed
+}
+
+pub fn transform_input_to_output(
+    in_fname: &str,
+    out_fname: &str,
+    transformer: impl Fn(TypedProgram) -> Vec<u8>,
+) {
+    let parsed = read_program(in_fname);
     let out = transformer(parsed);
 
     match out_fname {

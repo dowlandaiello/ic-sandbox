@@ -1,5 +1,8 @@
 use crate::{
-    parser::ast_lafont::{Agent, Ident, Port as LafontPort},
+    parser::{
+        ast_lafont::{Agent, Ident, Port as LafontPort},
+        naming::NameIter,
+    },
     NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
 };
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
@@ -211,6 +214,21 @@ impl Expr {
         }
 
         let _ = swap_conn_maybe(self, initial, new);
+    }
+}
+
+/// Sets all free ports to new vars
+pub fn fill_port_aux_vars(slf: &Port, names: &mut NameIter) {
+    let n_ports = slf.borrow().aux_ports().len();
+
+    for _ in 0..n_ports {
+        let v: Port = Expr::Var(Var {
+            name: Ident(names.next()),
+            port: Some(slf.clone()),
+        })
+        .into();
+
+        slf.borrow_mut().push_aux_port(Some(v));
     }
 }
 

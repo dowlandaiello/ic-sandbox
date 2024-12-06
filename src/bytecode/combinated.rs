@@ -1,9 +1,9 @@
-use super::naming::NameIter;
 use crate::{
     heuristics::TypedProgram,
     parser::{
-        ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
-        ast_lafont::Ident,
+        ast_combinators::{fill_port_aux_vars, Constructor, Duplicator, Eraser, Expr, Port, Var},
+        ast_lafont::{Ident, Net},
+        naming::NameIter,
     },
 };
 
@@ -14,6 +14,129 @@ pub struct CombinatedProgram {
 }
 
 impl CombinatedProgram {
+    /// Creates a net formed of combinators if the net is
+    /// beta normally identical (i.e., same permutation
+    /// of variables, but with different types)
+    pub fn compile_beta_normal(net: Net) -> Option<Vec<Port>> {
+        let (lhs, rhs) = net.lhs.zip(net.rhs)?;
+        let mut names = NamesIter::default();
+
+        match (lhs.ports.len(), rhs.ports.len()) {
+            // Could be dup >< constr, or constr >< constr, or dup >< dup
+            (2, 2) => {
+                // Commutation of constr >< dup
+                let comm_alpha_alpha = || -> Option<Vec<Port>> {
+                    let (dup_a_rhs, dup_b_rhs) =
+                        (rhs.ports.get(0)?.as_agent()?, rhs.ports.get(1)?.as_agent()?);
+                    let (constr_a_lhs, constr_b_lhs) =
+                        (lhs.ports.get(0)?.as_agent()?, lhs.ports.get(1)?.as_agent()?);
+
+                    if constr_a_lhs.ports.get(0)?.as_var()? == dup_a_rhs.ports.get(0)?.as_var()?
+                        && constr_a_lhs.ports.get(1)?.as_var()?
+                            == dup_b_rhs.ports.get(0)?.as_var()?
+                        && constr_b_lhs.ports.get(0)?.as_var()?
+                            == dup_a_rhs.ports.get(1)?.as_var()?
+                        && constr_b_lhs.ports.get(1)?.as_var()?
+                            == dup_b_rhs.ports.get(1)?.as_var()?
+                    {
+                        let top: Port = Expr::Constr(Constructor::new()).into();
+                        let bot: Port = Expr::Constr(Constructor::new()).into();
+
+                        fill_port_aux_vars(&top, &mut names);
+                        fill_port_aux_vars(&bot, &mut names);
+
+                        top.borrow_mut().set_primary_port(Some(bot));
+                        bot.borrow_mut().set_primary_port(Some(top));
+
+                        Some(vec![top])
+
+                        // Annihilation of constr >< constr
+                    } else {
+                        None
+                    }
+                };
+
+                let annihilate_constr_constr = || -> Option<Vec<Port>> {
+                    if lhs.ports.get(0)?.as_var() == rhs.ports.get(0)?.as_var()
+                        && lhs.ports.get(1)?.as_var() == rhs.ports.get(1)?.as_var()
+                    {
+                        let top: Port = Expr::Constr(Constructor::new()).into();
+                        let bot: Port = Expr::Constr(Constructor::new()).into();
+
+                        fill_port_aux_vars(&top, &mut names);
+                        fill_port_aux_vars(&bot, &mut names);
+
+                        top.borrow_mut().set_primary_port(Some(bot));
+                        bot.borrow_mut().set_primary_port(Some(top));
+
+                        Some(vec![top])
+                    } else {
+                        None
+                    }
+                };
+
+                let annihilate_dup_dup = || -> Option<Vec<Port>> {
+                    if lhs.ports.get(0)?.as_var() == rhs.ports.get(1)?.as_var()
+                        && lhs.ports.get(1)?.as_var() == rhs.ports.get(0)?.as_var()
+                    {
+                        let top: Port = Expr::Dup(Duplicator::new()).into();
+                        let bot: Port = Expr::Dup(Duplicator::new()).into();
+
+                        fill_port_aux_vars(&top, &mut names);
+                        fill_port_aux_vars(&bot, &mut names);
+
+                        top.borrow_mut().set_primary_port(Some(bot));
+                        bot.borrow_mut().set_primary_port(Some(top));
+
+                        Some(vec![top])
+                    } else {
+                        None
+                    }
+                };
+
+                comm_constr_dup()
+                    .or_else(annihilate_constr_constr)
+                    .or_else(annihilate_dup_dup)
+            }
+
+            // Is era >< era (annihilation)
+            (0, 0) => {
+                let era_a: Port = Expr::Era(Eraser::new()).into();
+                let era_b: Port = Expr::Era(Eraser {
+                    primary_port: Some(era_a),
+                })
+                .into();
+
+                era_a.borrow_mut().set_primary_port(Some(era_b));
+
+                Some(vec![era_a])
+            }
+
+            // Could be era >< constr or dup >< era
+            (2, 1) | (1, 2) => {
+                // This is the same for
+                let comm_era_constr = || -> Option<Vec<Port>> {
+                    if rhs.ports.get(0)?.as_agent()?.ports.is_empty()
+                        && rhs.ports.get(1)?.as_agent()?.ports.is_empty()
+                    {
+                        let top: Port = Expr::Dup(Duplicator::new()).into();
+                        let bot: Port = Expr::Dup(Duplicator::new()).into();
+
+                        fill_port_aux_vars(&top, &mut names);
+                        fill_port_aux_vars(&bot, &mut names);
+
+                        top.borrow_mut().set_primary_port(Some(bot));
+                        bot.borrow_mut().set_primary_port(Some(top));
+
+                        Some(vec![top])
+                    } else {
+                        None
+                    }
+                };
+            }
+        }
+    }
+
     /// Converts a general program into a program
     /// made with the era, dup, constr combinators
     pub fn compile(program: TypedProgram) -> Self {
