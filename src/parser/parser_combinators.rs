@@ -65,7 +65,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .clone()
         .then_ignore(span_just(Token::ActivePair))
         .then(agent)
-        .map(|(lhs, rhs): (Spanned<Port>, Spanned<Port>)| vec![lhs, rhs]);
+        .map(|(lhs, rhs): (Spanned<Port>, Spanned<Port>)| {
+            lhs.0.borrow_mut().set_primary_port(Some(rhs.0.clone()));
+            rhs.0.borrow_mut().set_primary_port(Some(lhs.0.clone()));
+
+            vec![lhs]
+        });
 
     net.then_ignore(end())
 }

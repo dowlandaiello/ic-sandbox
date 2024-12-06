@@ -5,7 +5,7 @@ use crate::{
     },
     NAME_CONSTR_AGENT, NAME_DUP_AGENT, NAME_ERA_AGENT, UNIT_STR,
 };
-use std::{cell::RefCell, collections::HashSet, fmt, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 pub type Port = Rc<RefCell<Expr>>;
 
@@ -303,18 +303,19 @@ pub fn try_as_active_pair(slf: &Port) -> Option<(Port, Port)> {
 }
 
 pub fn port_to_string(slf: &Port) -> String {
-    let mut seen: HashSet<*mut Expr> = Default::default();
+    let mut seen: Vec<*mut Expr> = Default::default();
 
-    fn fmt_expr_ports(seen: &mut HashSet<*mut Expr>, e: &Port, ports: Vec<Port>) -> Option<String> {
-        if seen.contains(&e.as_ptr()) {
-            return None;
+    fn fmt_expr_ports(seen: &mut Vec<*mut Expr>, e: &Port, ports: Vec<Port>) -> Option<String> {
+        if let Some(idx) = seen.iter().position(|x| *x == e.as_ptr()) {
+            return Some(format!("@{}", idx));
         }
 
-        seen.insert(e.as_ptr());
+        seen.push(e.as_ptr());
 
         Some(match &*e.borrow() {
             Expr::Era(_) => format!(
-                "Era({})",
+                "Era[@{}]({})",
+                seen.len() - 1,
                 ports
                     .iter()
                     .map(|p| {
@@ -333,7 +334,8 @@ pub fn port_to_string(slf: &Port) -> String {
                     .join(", "),
             ),
             Expr::Dup(_) => format!(
-                "Dup({})",
+                "Dup[@{}]({})",
+                seen.len() - 1,
                 ports
                     .iter()
                     .map(|p| fmt_expr_ports(
@@ -350,7 +352,8 @@ pub fn port_to_string(slf: &Port) -> String {
                     .join(", "),
             ),
             Expr::Constr(_) => format!(
-                "Constr({})",
+                "Constr[@{}]({})",
+                seen.len() - 1,
                 ports
                     .iter()
                     .map(|p| fmt_expr_ports(
