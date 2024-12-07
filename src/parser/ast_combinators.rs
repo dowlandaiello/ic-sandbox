@@ -23,11 +23,13 @@ impl fmt::Display for Port {
         let mut seen: HashSet<usize> = Default::default();
 
         fn fmt_expr_ports(seen: &mut HashSet<usize>, e: &Port, ports: Vec<Port>) -> Option<String> {
-            if seen.contains(&e.id) {
-                return Some(format!("@{}", e.id));
-            }
+            if !e.borrow().is_var() {
+                if seen.contains(&e.id) {
+                    return Some(format!("@{}", e.id));
+                }
 
-            seen.insert(e.id);
+                seen.insert(e.id);
+            }
 
             Some(match &*e.borrow() {
                 Expr::Era(_) => format!(

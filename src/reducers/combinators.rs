@@ -276,37 +276,48 @@ mod test {
             .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
 
         let res = reduce_dyn(&top).unwrap();
-        assert_eq!(res[0].to_string(), "Dup[@0](0, @2, Constr");
+        assert_eq!(
+            res[0].to_string(),
+            "Dup[@0](0, Constr[@2](2, @0, Dup[@1](1, @2, Constr[@3](3, @0, @1))), @3)"
+        );
     }
 
     #[test]
-    fn test_reduce_commute_dup_era() {
-        let mut names_iter = NameIter::default();
+    fn test_reduce_commute_symmetric_era() {
+        let cases = [
+            (Expr::Constr(Constructor::new()), Expr::Era(Eraser::new())),
+            (Expr::Dup(Duplicator::new()), Expr::Era(Eraser::new())),
+        ];
 
-        let top: Port = Expr::Dup(Duplicator::new()).into_port(&mut names_iter);
-        let bottom: Port = Expr::Era(Eraser::new()).into_port(&mut names_iter);
+        for (top_expr, bottom_expr) in cases {
+            let mut names_iter = NameIter::default();
 
-        top.borrow_mut().set_primary_port(Some(bottom.clone()));
-        bottom.borrow_mut().set_primary_port(Some(top.clone()));
+            let top: Port = top_expr.into_port(&mut names_iter);
+            let bottom: Port = bottom_expr.into_port(&mut names_iter);
 
-        let res = reduce_dyn(&top).unwrap();
-        assert_eq!(res[0].to_string(), "Era[@0](a)");
-        assert_eq!(res[1].to_string(), "Era[@0](b)");
-    }
+            top.borrow_mut().set_primary_port(Some(bottom.clone()));
+            bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-    #[test]
-    fn test_reduce_commute_constr_era() {
-        let mut names_iter = NameIter::default();
+            let vars = [
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+            ];
 
-        let top: Port = Expr::Constr(Constructor::new()).into_port(&mut names_iter);
-        let bottom: Port = Expr::Era(Eraser::new()).into_port(&mut names_iter);
+            top.borrow_mut()
+                .set_aux_ports([Some(vars[0].clone()), Some(vars[1].clone())]);
 
-        top.borrow_mut().set_primary_port(Some(bottom.clone()));
-        bottom.borrow_mut().set_primary_port(Some(top.clone()));
-
-        let res = reduce_dyn(&top).unwrap();
-        assert_eq!(res[0].to_string(), "Era[@0](a)");
-        assert_eq!(res[1].to_string(), "Era[@0](b)");
+            let res = reduce_dyn(&top).unwrap();
+            assert_eq!(res[0].to_string(), "Era[@0](0)");
+            assert_eq!(res[1].to_string(), "Era[@1](1)");
+        }
     }
 
     #[test]
