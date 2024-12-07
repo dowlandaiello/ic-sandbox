@@ -1,9 +1,11 @@
 use super::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Token, Var},
     ast_lafont::Ident,
+    naming::NameIter,
     parser_lafont::{Span, Spanned},
 };
 use chumsky::prelude::*;
+use std::collections::{BTreeMap, VecDeque};
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let era = just("Era").map(|_| Token::Era);
@@ -31,11 +33,6 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 }
 
 pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simple<Spanned<Token>>> {
-    pub enum PortValue {
-        Port(Port),
-        Ref(usize),
-    }
-
     let span_just = move |val: Token| {
         filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
             tok.0 == val
@@ -43,9 +40,9 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
     };
     let agent = recursive(|expr| {
         select! {
-            Spanned(Token::Era, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Era(Eraser::new()))), span),
-	    Spanned(Token::Constr, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Constr(Constructor::new()))), span),
-	    Spanned(Token::Dup, span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Dup(Duplicator::new()))), span),
+            Spanned(Token::Era, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Era(Eraser::new()), name: 0, conns: Vec::new() }, span),
+	    Spanned(Token::Constr, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Constr(Constructor::new()), name: 0, conns: Vec::new() }, span),
+	    Spanned(Token::Dup, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Dup(Duplicator::new()), name: 0, conns: Vec::new()}, span),
         }
         .then_ignore(span_just(Token::LeftBracket))
         .then_ignore(span_just(Token::At))
@@ -57,52 +54,182 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .then(
             choice((
                 expr,
-                select! {Spanned(Token::Ident(s), span) => Spanned(PortValue::Port(<Expr as Into<Port>>::into(Expr::Var(Var {name: Ident(s), port: None}))), span)},
+                select! {Spanned(Token::Ident(s), span) => Spanned(AgentBuilder::Expr {
+		    phrase: Expr::Var(Var { name: Ident(s), port: None}),
+		    name: 0,
+		    conns: Vec::new()
+		}, span)},
 		select! {
-		    Spanned(Token::Digit(d), span) => Spanned(PortValue::Ref(d), span)
+		    Spanned(Token::Digit(d), span) => Spanned(AgentBuilder::Ref(d), span)
 		}
             ))
             .separated_by(span_just(Token::Comma))
         )
         .then_ignore(span_just(Token::RightParen))
-        .map(|((expr, pos), mut ports): ((Spanned<Port>, Spanned<usize>), Vec<Spanned<Port>>)| -> Spanned<Port> {
-	    ports.iter().for_each(|p| {
-		if p.0.borrow().is_var() {
-		    p.0.borrow_mut().set_primary_port(Some(expr.0.clone()));
-		}
-	    });
-
-	    let is_era = if let Expr::Era(_) = &*expr.0.borrow() {
-		true
-	    } else {
-		false
-	    };
-
-	    if is_era {
-		expr
-	    } else {
-                Spanned(
-		    {
-	                expr.0.borrow_mut().set_aux_ports([Some(ports.remove(0).0), Some(ports.remove(0).0)]);
-                        expr.0
-                    },
-                    expr.1
-                )
-	    }
-        })
+        .map(|((expr, name), children)| {
+	    Spanned(expr.0.with_children(children.into_iter().map(|x| x.0).collect()).with_name(name.0), expr.1)
+	})
     });
     let net = agent
         .clone()
         .then_ignore(span_just(Token::ActivePair))
         .then(agent)
-        .map(|(lhs, rhs): (Spanned<Port>, Spanned<Port>)| {
-            lhs.0.borrow_mut().set_primary_port(Some(rhs.0.clone()));
-            rhs.0.borrow_mut().set_primary_port(Some(lhs.0.clone()));
-
-            vec![lhs]
-        });
+        .map(
+            |(lhs, rhs): (Spanned<AgentBuilder>, Spanned<AgentBuilder>)| build_net(vec![lhs, rhs]),
+        );
 
     net.then_ignore(end())
+}
+
+#[derive(Debug, Clone)]
+pub enum AgentBuilder {
+    Expr {
+        phrase: Expr,
+        name: usize,
+        conns: Vec<AgentBuilder>,
+    },
+    Ref(usize),
+}
+
+impl AgentBuilder {
+    pub fn with_children(self, c: Vec<AgentBuilder>) -> Self {
+        match self {
+            Self::Expr { phrase, name, .. } => Self::Expr {
+                phrase,
+                name,
+                conns: c,
+            },
+            c => c,
+        }
+    }
+
+    pub fn with_name(self, name: usize) -> Self {
+        match self {
+            Self::Expr { phrase, conns, .. } => Self::Expr {
+                phrase,
+                conns,
+                name,
+            },
+            c => c,
+        }
+    }
+
+    pub fn is_agent(&self) -> bool {
+        match self {
+            AgentBuilder::Expr { phrase, .. } => phrase.is_agent(),
+            _ => false,
+        }
+    }
+
+    pub fn into_agent(self) -> Option<(Expr, usize, Vec<AgentBuilder>)> {
+        match self {
+            AgentBuilder::Expr {
+                phrase,
+                name,
+                conns,
+            } => {
+                if phrase.is_agent() {
+                    Some((phrase, name, conns))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn as_agent(&self) -> Option<(&Expr, &usize, &Vec<AgentBuilder>)> {
+        match &self {
+            AgentBuilder::Expr {
+                phrase,
+                name,
+                conns,
+            } => {
+                if phrase.is_agent() {
+                    Some((phrase, name, conns))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn into_expr(self) -> Option<(Expr, usize, Vec<AgentBuilder>)> {
+        match self {
+            AgentBuilder::Expr {
+                phrase,
+                name,
+                conns,
+            } => Some((phrase, name, conns)),
+            _ => None,
+        }
+    }
+}
+
+pub fn build_net(top_agents: Vec<Spanned<AgentBuilder>>) -> Vec<Spanned<Port>> {
+    let mut built_agents: BTreeMap<usize, Spanned<Port>> = Default::default();
+    let mut to_build: VecDeque<Spanned<AgentBuilder>> =
+        VecDeque::from_iter(top_agents.clone().into_iter());
+    let mut var_namer = NameIter::default();
+
+    // First pass: build all agents
+    // This will create ports for every expr that is not
+    // a var, but will not connect refs, since
+    // these may be circular
+    for i in 0..(to_build.len()) {
+        let Spanned(builder, span) = to_build[i].clone();
+
+        let (phrase, name, conns) = if let Some(x) = builder.as_agent() {
+            x
+        } else {
+            continue;
+        };
+
+        let agent = phrase.clone().into_port_named(*name);
+        built_agents.insert(*name, Spanned(agent, span.clone()));
+
+        // Expression children will not be inserted inline
+        // but we will make the ports
+        for child in conns.into_iter().filter(|x| x.is_agent()) {
+            to_build.push_back(Spanned(child.clone(), span.clone()));
+        }
+    }
+
+    // Second pass: wire all agents
+    // Also create all vars in place, since
+    // they cannot be connected to more than one agent
+    while let Some((_, name, children)) = to_build.pop_front().and_then(|x| x.0.into_agent()) {
+        let Spanned(agent_port, span) = &built_agents[&name];
+
+        for child in children.into_iter() {
+            let to_insert = match child {
+                // We already have ports for agents, so we can
+                // look them up and connect them
+                AgentBuilder::Expr { phrase, name, .. } => {
+                    if phrase.is_agent() {
+                        built_agents[&name].clone()
+                    } else {
+                        Spanned(phrase.into_port_named(var_namer.next_var()), span.clone())
+                    }
+                }
+                AgentBuilder::Ref(id) => built_agents[&id].clone(),
+            };
+
+            // Insert in the next available port
+            if agent_port.borrow().primary_port().is_none() {
+                agent_port.borrow_mut().set_primary_port(Some(to_insert.0));
+            } else {
+                agent_port.borrow_mut().push_aux_port(Some(to_insert.0));
+            }
+        }
+    }
+
+    top_agents
+        .into_iter()
+        .filter_map(|Spanned(x, span)| Some(Spanned(x.into_agent()?, span)))
+        .filter_map(|Spanned((_, name, _), _)| built_agents.remove(&name))
+        .collect()
 }
 
 #[cfg(test)]

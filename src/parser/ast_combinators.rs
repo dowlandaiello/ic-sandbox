@@ -270,6 +270,13 @@ impl Expr {
         }
     }
 
+    pub fn into_port_named(self, id: usize) -> Port {
+        Port {
+            e: Rc::new(RefCell::new(self)),
+            id,
+        }
+    }
+
     pub fn set_aux_ports(&mut self, ports: [Option<Port>; 2]) {
         match self {
             Self::Era(_) => {}

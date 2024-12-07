@@ -14,6 +14,14 @@ impl NameIter {
         ident
     }
 
+    pub fn next_var(&mut self) -> usize {
+        let ident = self.curr_var;
+
+        self.curr_var += 1;
+
+        ident
+    }
+
     pub fn next_id(&mut self) -> usize {
         let ident = self.curr_agent;
 
