@@ -255,12 +255,15 @@ mod test {
     #[test]
     fn test_make_autodual_multiplexor() {
         let cases = [
-            (0, "Era(0)"),
+            (0, "Era[@0](0)"),
             (1, "0"),
-            (2, "Dup(0, 1, 2)"),
-            (3, "Dup(0, 1, Dup(3, 4))"),
-            (4, "Dup(0, 1, Dup(3, Dup(5, 6)))"),
-            (5, "Dup(0, 1, Dup(3, Dup(5, Dup(7, 8))))"),
+            (2, "Dup[@0](0, 1, 2)"),
+            (3, "Dup[@0](0, 1, Dup[@6](@0, 3, 4))"),
+            (4, "Dup[@0](0, 1, Dup[@6](@0, 3, Dup[@9](@6, 5, 6)))"),
+            (
+                5,
+                "Dup[@0](0, 1, Dup[@6](@0, 3, Dup[@9](@6, 5, Dup[@12](@9, 7, 8))))",
+            ),
         ];
 
         for (case, expected) in cases {
@@ -273,12 +276,18 @@ mod test {
     #[test]
     fn test_make_multiplexor() {
         let cases = [
-            (0, "Era(0)"),
+            (0, "Era[@0](0)"),
             (1, "0"),
-            (2, "Constr(0, 1, 2)"),
-            (3, "Constr(0, 1, Constr(3, 4))"),
-            (4, "Constr(0, 1, Constr(3, Constr(5, 6)))"),
-            (5, "Constr(0, 1, Constr(3, Constr(5, Constr(7, 8))))"),
+            (2, "Constr[@0](0, 1, 2)"),
+            (3, "Constr[@0](0, 1, Constr[@6](@0, 3, 4))"),
+            (
+                4,
+                "Constr[@0](0, 1, Constr[@6](@0, 3, Constr[@9](@6, 5, 6)))",
+            ),
+            (
+                5,
+                "Constr[@0](0, 1, Constr[@6](@0, 3, Constr[@9](@6, 5, Constr[@12](@9, 7, 8))))",
+            ),
         ];
 
         for (case, expected) in cases {
@@ -291,11 +300,19 @@ mod test {
     #[test]
     fn test_make_transpositor() {
         let cases = [
-            (0, 0, "Era(0)"),
+            (0, 0, "Era[@0](0)"),
             (1, 0, "0"),
-            (2, 0, "Dup(0, Constr(5, 6), Constr(3, 4))"),
-            (2, 1, "Dup(0, Constr(3, 4), Dup(3, Constr(5, 6)))"),
-            (1, 1, "Dup(0, 1, Constr(3, 4))"),
+            (
+                2,
+                0,
+                "Dup[@0](0, Constr[@7](@0, 5, 6), Constr[@4](@0, 3, 4))",
+            ),
+            (
+                2,
+                1,
+                "Dup[@0](0, Constr[@7](@0, 3, 4), Dup[@6](@0, 3, Constr[@10](@6, 5, 6)))",
+            ),
+            (1, 1, "Dup[@0](0, 1, Constr[@4](@0, 3, 4))"),
         ];
 
         for (p, q, expected) in cases {

@@ -234,6 +234,7 @@ fn make_constr_era_commutation_net(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::parser::{ast_combinators::Var, ast_lafont::Ident};
 
     #[test]
     fn test_reduce_commute_dup_constr() {
@@ -245,11 +246,37 @@ mod test {
         top.borrow_mut().set_primary_port(Some(bottom.clone()));
         bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
+        let vars = [
+            Expr::Var(Var {
+                name: Ident(names_iter.next()),
+                port: Some(top.clone()),
+            })
+            .into_port(&mut names_iter),
+            Expr::Var(Var {
+                name: Ident(names_iter.next()),
+                port: Some(top.clone()),
+            })
+            .into_port(&mut names_iter),
+            Expr::Var(Var {
+                name: Ident(names_iter.next()),
+                port: Some(bottom.clone()),
+            })
+            .into_port(&mut names_iter),
+            Expr::Var(Var {
+                name: Ident(names_iter.next()),
+                port: Some(bottom.clone()),
+            })
+            .into_port(&mut names_iter),
+        ];
+
+        top.borrow_mut()
+            .set_aux_ports([Some(vars[0].clone()), Some(vars[1].clone())]);
+        bottom
+            .borrow_mut()
+            .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
+
         let res = reduce_dyn(&top).unwrap();
-        assert_eq!(
-            res[0].to_string(),
-            "Dup[@0](c, Constr[@2](a, @0, Dup[@4](d, @2, Constr[@6](b, @0, @4))), @6)"
-        );
+        assert_eq!(res[0].to_string(), "Dup[@0](0, @2, Constr");
     }
 
     #[test]
@@ -283,31 +310,56 @@ mod test {
     }
 
     #[test]
-    fn test_reduce_annihilate_constr_constr() {
-        let mut names_iter = NameIter::default();
+    fn test_reduce_annihilate_symmetric() {
+        let cases = [
+            (
+                Expr::Constr(Constructor::new()),
+                Expr::Constr(Constructor::new()),
+            ),
+            (Expr::Dup(Duplicator::new()), Expr::Dup(Duplicator::new())),
+        ];
 
-        let top: Port = Expr::Constr(Constructor::new()).into_port(&mut names_iter);
-        let bottom: Port = Expr::Constr(Constructor::new()).into_port(&mut names_iter);
+        for (top_expr, bottom_expr) in cases {
+            let mut names_iter = NameIter::default();
 
-        top.borrow_mut().set_primary_port(Some(bottom.clone()));
-        bottom.borrow_mut().set_primary_port(Some(top.clone()));
+            let top: Port = top_expr.into_port(&mut names_iter);
+            let bottom: Port = bottom_expr.into_port(&mut names_iter);
 
-        let res = reduce_dyn(&top);
-        assert!(res.is_some());
-    }
+            top.borrow_mut().set_primary_port(Some(bottom.clone()));
+            bottom.borrow_mut().set_primary_port(Some(top.clone()));
 
-    #[test]
-    fn test_reduce_annihilate_dup_dup() {
-        let mut names_iter = NameIter::default();
+            let vars = [
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(bottom.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(bottom.clone()),
+                })
+                .into_port(&mut names_iter),
+            ];
 
-        let top: Port = Expr::Dup(Duplicator::new()).into_port(&mut names_iter);
-        let bottom: Port = Expr::Dup(Duplicator::new()).into_port(&mut names_iter);
+            top.borrow_mut()
+                .set_aux_ports([Some(vars[0].clone()), Some(vars[1].clone())]);
+            bottom
+                .borrow_mut()
+                .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
 
-        top.borrow_mut().set_primary_port(Some(bottom.clone()));
-        bottom.borrow_mut().set_primary_port(Some(top.clone()));
-
-        let res = reduce_dyn(&top);
-        assert!(res.is_some());
+            let res = reduce_dyn(&top);
+            assert!(res.is_some());
+        }
     }
 
     #[test]

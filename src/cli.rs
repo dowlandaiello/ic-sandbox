@@ -7,23 +7,13 @@ use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
     bytecode::combinated::CombinatedProgram,
     parser::parser_combinators::{self},
-    preprocessor, BYTECODE_EXTENSION,
+    preprocessor,
 };
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
 };
-
-pub fn compile(args: &ArgMatches, transformer: impl Fn(CombinatedProgram) -> Vec<u8>) {
-    let input_fname = args
-        .get_one::<String>("source")
-        .expect("missing source file name");
-    let mut out_fname = input_fname.split_terminator(".d").collect::<String>();
-    out_fname.push_str(BYTECODE_EXTENSION);
-
-    transform_input_to_output(input_fname, &out_fname, transformer)
-}
 
 pub fn transform_input_to_output_cli(
     args: &ArgMatches,

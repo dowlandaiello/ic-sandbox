@@ -86,7 +86,9 @@ impl fmt::Display for Port {
                         .collect::<Vec<_>>()
                         .join(", "),
                 ),
-                Expr::Var(v) => format!("{}", v.name),
+                Expr::Var(v) => {
+                    format!("{}", v.name)
+                }
             })
         }
 
@@ -143,17 +145,7 @@ impl Port {
         let port = primary_port.try_borrow().ok()?;
 
         match &*port {
-            Expr::Var(v) => {
-                if v.port
-                    .as_ref()
-                    .map(|p| Rc::ptr_eq(self, &p))
-                    .unwrap_or_default()
-                {
-                    Some((self.clone(), primary_port.clone()))
-                } else {
-                    None
-                }
-            }
+            Expr::Var(_) => None,
             Expr::Constr(c) => {
                 if c.primary_port
                     .as_ref()
