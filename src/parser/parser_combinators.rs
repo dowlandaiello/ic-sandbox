@@ -249,7 +249,10 @@ pub fn build_net(lhs: Spanned<AgentBuilder>, rhs: Spanned<AgentBuilder>) -> Vec<
                     if phrase.is_agent() {
                         built_agents[&name].clone()
                     } else {
-                        Spanned(phrase.into_port_named(var_namer.next_var()), span.clone())
+                        let var = phrase.into_port_named(var_namer.next_var());
+                        var.borrow_mut().set_primary_port(Some(agent_port.clone()));
+
+                        Spanned(var, span.clone())
                     }
                 }
                 AgentBuilder::Ref(id) => built_agents[&id].clone(),
