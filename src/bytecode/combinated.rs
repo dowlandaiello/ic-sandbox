@@ -53,18 +53,18 @@ pub fn make_transpositor(p: usize, q: usize, names: &mut NameIter) -> Port {
 
     // Create 2p dup inputs
     for _ in 0..p {
-        let agent: Port = Expr::Constr(Constructor::new()).into();
+        let agent: Port = Expr::Constr(Constructor::new()).into_port(names);
 
         let a_var: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(agent.clone()),
         })
-        .into();
+        .into_port(names);
         let b_var: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(agent.clone()),
         })
-        .into();
+        .into_port(names);
 
         agent.borrow_mut().set_aux_ports([Some(a_var), Some(b_var)]);
 
@@ -79,12 +79,12 @@ pub fn make_transpositor(p: usize, q: usize, names: &mut NameIter) -> Port {
 
 pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
     if arity == 0 {
-        let e: Port = Expr::Era(Eraser::new()).into();
+        let e: Port = Expr::Era(Eraser::new()).into_port(names);
         let var_a: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(e.clone()),
         })
-        .into();
+        .into_port(names);
 
         e.borrow_mut().set_primary_port(Some(var_a));
 
@@ -96,12 +96,12 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
         let var_b: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(var_a.clone()),
         })
-        .into();
+        .into_port(names);
 
         var_a.borrow_mut().set_primary_port(Some(var_b));
 
@@ -109,23 +109,23 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
     }
 
     let init: Port = {
-        let e: Port = Expr::Dup(Duplicator::new()).into();
+        let e: Port = Expr::Dup(Duplicator::new()).into_port(names);
 
         let var_a: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(e.clone()),
         })
-        .into();
+        .into_port(names);
         let var_b: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
         let var_c: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
 
         e.borrow_mut().set_primary_port(Some(var_a));
         e.borrow_mut().set_aux_ports([Some(var_b), Some(var_c)]);
@@ -141,15 +141,15 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
                 name: Ident((prev_var + 1).to_string()),
                 port: None,
             })
-            .into();
+            .into_port(names);
             let var_b: Port = Expr::Var(Var {
                 name: Ident((prev_var + 2).to_string()),
                 port: None,
             })
-            .into();
+            .into_port(names);
 
             // Append an incremented var and append new node to previous node
-            let new_e: Port = Expr::Dup(Duplicator::new()).into();
+            let new_e: Port = Expr::Dup(Duplicator::new()).into_port(names);
             new_e.borrow_mut().set_primary_port(Some(acc.clone()));
             new_e.borrow_mut().set_aux_ports([Some(var_a), Some(var_b)]);
 
@@ -164,12 +164,12 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
 
 pub fn make_multiplexor(arity: usize, names: &mut NameIter) -> Port {
     if arity == 0 {
-        let e: Port = Expr::Era(Eraser::new()).into();
+        let e: Port = Expr::Era(Eraser::new()).into_port(names);
         let var_a: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(e.clone()),
         })
-        .into();
+        .into_port(names);
 
         e.borrow_mut().set_primary_port(Some(var_a));
 
@@ -181,12 +181,12 @@ pub fn make_multiplexor(arity: usize, names: &mut NameIter) -> Port {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
         let var_b: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(var_a.clone()),
         })
-        .into();
+        .into_port(names);
 
         var_a.borrow_mut().set_primary_port(Some(var_b));
 
@@ -194,23 +194,23 @@ pub fn make_multiplexor(arity: usize, names: &mut NameIter) -> Port {
     }
 
     let init: Port = {
-        let e: Port = Expr::Constr(Constructor::new()).into();
+        let e: Port = Expr::Constr(Constructor::new()).into_port(names);
 
         let var_a: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: Some(e.clone()),
         })
-        .into();
+        .into_port(names);
         let var_b: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
         let var_c: Port = Expr::Var(Var {
             name: Ident(names.next()),
             port: None,
         })
-        .into();
+        .into_port(names);
 
         e.borrow_mut().set_primary_port(Some(var_a));
         e.borrow_mut().set_aux_ports([Some(var_b), Some(var_c)]);
@@ -226,15 +226,15 @@ pub fn make_multiplexor(arity: usize, names: &mut NameIter) -> Port {
                 name: Ident((prev_var + 1).to_string()),
                 port: None,
             })
-            .into();
+            .into_port(names);
             let var_b: Port = Expr::Var(Var {
                 name: Ident((prev_var + 2).to_string()),
                 port: None,
             })
-            .into();
+            .into_port(names);
 
             // Append an incremented var and append new node to previous node
-            let new_e: Port = Expr::Constr(Constructor::new()).into();
+            let new_e: Port = Expr::Constr(Constructor::new()).into_port(names);
             new_e.borrow_mut().set_primary_port(Some(acc.clone()));
             new_e.borrow_mut().set_aux_ports([Some(var_a), Some(var_b)]);
 
@@ -250,7 +250,6 @@ pub fn make_multiplexor(arity: usize, names: &mut NameIter) -> Port {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::parser::ast_combinators::port_to_string;
     use test_log::test;
 
     #[test]
@@ -267,7 +266,7 @@ mod test {
         for (case, expected) in cases {
             let found = make_autodual_multiplexor(case, &mut Default::default());
 
-            assert_eq!(port_to_string(&found), expected);
+            assert_eq!(found.to_string(), expected);
         }
     }
 
@@ -285,7 +284,7 @@ mod test {
         for (case, expected) in cases {
             let found = make_multiplexor(case, &mut Default::default());
 
-            assert_eq!(port_to_string(&found), expected);
+            assert_eq!(found.to_string(), expected);
         }
     }
 
@@ -302,7 +301,7 @@ mod test {
         for (p, q, expected) in cases {
             let found = make_transpositor(p, q, &mut Default::default());
 
-            assert_eq!(port_to_string(&found), expected);
+            assert_eq!(found.to_string(), expected);
         }
     }
 }

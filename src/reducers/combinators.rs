@@ -4,7 +4,7 @@ use crate::parser::{
 };
 
 pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
-    let names = NamesIter::default();
+    let mut names = NameIter::default();
 
     let (e, e2) = e.try_as_active_pair()?;
     let (lhs, rhs) = (e.try_borrow().ok()?, e2.try_borrow().ok()?);

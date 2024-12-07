@@ -1,5 +1,5 @@
 use clap::Command;
-use inetlib::{parser::ast_combinators::port_to_string, reducers::combinators::reduce_dyn};
+use inetlib::reducers::combinators::reduce_dyn;
 
 mod cli;
 
@@ -30,7 +30,7 @@ fn main() {
                 let res = reduce_dyn(&program.nets[0]).expect("failed to reduce net");
 
                 res.iter()
-                    .map(|n| port_to_string(&n))
+                    .map(|n| n.to_string())
                     .collect::<Vec<_>>()
                     .join("\n")
                     .into_bytes()
