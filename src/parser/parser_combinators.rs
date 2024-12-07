@@ -87,9 +87,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .clone()
         .then_ignore(span_just(Token::ActivePair))
         .then(agent)
-        .map(
-            |(lhs, rhs): (Spanned<AgentBuilder>, Spanned<AgentBuilder>)| build_net(vec![lhs, rhs]),
-        );
+        .map(|(lhs, rhs): (Spanned<AgentBuilder>, Spanned<AgentBuilder>)| build_net(lhs, rhs));
 
     net.then_ignore(end())
 }
@@ -180,10 +178,10 @@ impl AgentBuilder {
     }
 }
 
-pub fn build_net(top_agents: Vec<Spanned<AgentBuilder>>) -> Vec<Spanned<Port>> {
+pub fn build_net(lhs: Spanned<AgentBuilder>, rhs: Spanned<AgentBuilder>) -> Vec<Spanned<Port>> {
     let mut built_agents: BTreeMap<usize, Spanned<Port>> = Default::default();
     let mut to_build: VecDeque<Spanned<AgentBuilder>> =
-        VecDeque::from_iter(top_agents.clone().into_iter());
+        VecDeque::from_iter([lhs.clone(), rhs.clone()].into_iter());
     let mut var_namer = NameIter::default();
 
     // First pass: build all agents
@@ -238,11 +236,35 @@ pub fn build_net(top_agents: Vec<Spanned<AgentBuilder>>) -> Vec<Spanned<Port>> {
         }
     }
 
-    top_agents
+    let mut built_redex: Vec<Spanned<Port>> = [lhs.clone(), rhs.clone()]
         .into_iter()
         .filter_map(|Spanned(x, span)| Some(Spanned(x.into_agent()?, span)))
         .filter_map(|Spanned((_, name, _), _)| built_agents.remove(&name))
-        .collect()
+        .collect();
+
+    match (built_redex.remove(0), built_redex.remove(0)) {
+        (lhs, rhs) => {
+            // Shift down primary port to aux port
+            let (mut aux_port_lhs, mut aux_port_rhs) = (
+                lhs.borrow().aux_ports().iter().cloned().collect::<Vec<_>>(),
+                rhs.borrow().aux_ports().iter().cloned().collect::<Vec<_>>(),
+            );
+            let (primary_port_lhs, primary_port_rhs) = (
+                lhs.borrow_mut().primary_port().cloned(),
+                rhs.borrow_mut().primary_port().cloned(),
+            );
+
+            lhs.borrow_mut()
+                .set_aux_ports([primary_port_lhs, aux_port_lhs.remove(0)]);
+            rhs.borrow_mut()
+                .set_aux_ports([primary_port_rhs, aux_port_rhs.remove(0)]);
+
+            lhs.borrow_mut().set_primary_port(Some(rhs.0.clone()));
+            rhs.borrow_mut().set_primary_port(Some(lhs.0.clone()));
+
+            vec![lhs]
+        }
+    }
 }
 
 #[cfg(test)]

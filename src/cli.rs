@@ -8,6 +8,7 @@ use inetlib::{
     bytecode::combinated::CombinatedProgram,
     parser::parser_combinators::{self},
     preprocessor,
+    reducers::combinators::reduce_dyn,
 };
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
@@ -28,7 +29,7 @@ pub fn repl() {
 
                 loop {
                     let cmd = rl.readline(&format!(
-                        "[{}] (print|exit) >> ",
+                        "[{}...] (reduce|print|exit) >> ",
                         &parsed.to_string()[0..10]
                     ));
 
@@ -38,6 +39,17 @@ pub fn repl() {
                         }
                         Ok("print") => {
                             println!("{}", parsed);
+                        }
+                        Ok("reduce") => {
+                            let res = reduce_dyn(&parsed.nets[0]).expect("failed to reduce net");
+
+                            println!(
+                                "{}",
+                                res.iter()
+                                    .map(|n| n.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            );
                         }
                         Err(ReadlineError::Interrupted) => {
                             return;
