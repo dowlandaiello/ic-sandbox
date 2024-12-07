@@ -17,6 +17,10 @@ fn main() {
             .arg(arg_in_file())
             .arg(arg_out_file_default("STDOUT".into())))
         .subcommand(
+            Command::new("dev")
+            .about("Debugging / prototyping tools for Interaction Combinator expressions")
+        )
+        .subcommand(
             Command::new("check")
             .about("Parses an input .d file, checking the file for type and syntax correctness")
             .arg(arg_in_file())
@@ -25,6 +29,7 @@ fn main() {
 
     let arg_matches = cmd.get_matches();
     match arg_matches.subcommand() {
+        Some(("dev", _)) => repl(),
         Some(("eval", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
                 let res = reduce_dyn(&program.nets[0]).expect("failed to reduce net");

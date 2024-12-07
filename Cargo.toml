@@ -20,3 +20,4 @@ ariadne = "0.5.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 test-log = { version = "0.2.16", features = ["trace"] }
+rustyline = "15.0.0"

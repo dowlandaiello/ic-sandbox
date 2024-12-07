@@ -3,10 +3,25 @@ use crate::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
+use std::fmt;
 
 #[derive(Debug, Clone)]
 pub struct CombinatedProgram {
     pub nets: Vec<Port>,
+}
+
+impl fmt::Display for CombinatedProgram {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.nets
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
 }
 
 /// Inserts a new value in the free var at the specified index in the multiplexor

@@ -12,15 +12,28 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let constr = just("Constr").map(|_| Token::Constr);
     let dup = just("Dup").map(|_| Token::Dup);
     let comma = just(",").map(|_| Token::Comma);
+    let left_bracket = just("[").map(|_| Token::LeftBracket);
+    let right_bracket = just("]").map(|_| Token::RightBracket);
+    let at = just("@").map(|_| Token::At);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
+    let digits = text::digits(10).try_map(|d: String, span| {
+        Ok(Token::Digit(
+            d.parse::<usize>()
+                .map_err(|e| Simple::custom(span, e.to_string()))?,
+        ))
+    });
     let active_pair = just("><").map(|_| Token::ActivePair);
 
     let token = choice((
         comma,
         left_paren,
         right_paren,
+        at,
+        digits,
+        left_bracket,
+        right_bracket,
         choice((era, constr, dup)).or(ident),
         active_pair,
     ));

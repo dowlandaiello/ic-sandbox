@@ -9,11 +9,57 @@ use inetlib::{
     parser::parser_combinators::{self},
     preprocessor,
 };
+use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
 };
+
+pub fn repl() {
+    let mut rl = DefaultEditor::new().expect("failed to get readline editor");
+
+    loop {
+        let readline = rl.readline(">> ");
+
+        match readline {
+            Ok(line) => {
+                let parsed = assert_parse_literal_ok(line.as_str());
+
+                loop {
+                    let cmd = rl.readline(&format!(
+                        "[{}] (print|exit) >> ",
+                        &parsed.to_string()[0..10]
+                    ));
+
+                    match cmd.as_ref().map(|s| s.as_str()) {
+                        Ok("exit") | Err(ReadlineError::Eof) => {
+                            break;
+                        }
+                        Ok("print") => {
+                            println!("{}", parsed);
+                        }
+                        Err(ReadlineError::Interrupted) => {
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                return;
+            }
+            Err(ReadlineError::Eof) => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+
+                return;
+            }
+        }
+    }
+}
 
 pub fn transform_input_to_output_cli(
     args: &ArgMatches,
@@ -92,6 +138,65 @@ pub fn arg_out_file_default(default: OsStr) -> Arg {
         .require_equals(true)
         .default_value(default)
         .action(ArgAction::Set)
+}
+
+fn assert_parse_literal_ok(input: &str) -> CombinatedProgram {
+    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
+        .parse(input)
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| e.with_label("lexing error"))
+                .collect::<Vec<_>>()
+        })
+        .and_then(|res| {
+            parser_combinators::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(
+                            e.found().unwrap().1.clone(),
+                            format!("{}", e.map(|x| x.0)),
+                        )
+                        .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }) {
+        Ok(v) => {
+            return CombinatedProgram {
+                nets: v.into_iter().map(|x| x.0).collect(),
+            };
+        }
+        Err(e) => e,
+    };
+
+    let fname = "<repl>";
+
+    for err in errs {
+        Report::build(ReportKind::Error, (fname, err.span().clone()))
+            .with_message(err.to_string().clone())
+            .with_label(
+                Label::new((fname, err.span()))
+                    .with_message(if let Some(label) = err.label() {
+                        format!(
+                            "{}: {}",
+                            label,
+                            if let SimpleReason::Custom(s) = err.reason() {
+                                s.to_string()
+                            } else {
+                                err.to_string()
+                            }
+                        )
+                    } else {
+                        err.to_string()
+                    })
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((fname, Source::from(input)))
+            .unwrap();
+    }
+
+    panic!()
 }
 
 pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> CombinatedProgram {
