@@ -276,7 +276,7 @@ pub fn build_net(lhs: Spanned<AgentBuilder>, rhs: Spanned<AgentBuilder>) -> Vec<
     match (built_redex.remove(0), built_redex.remove(0)) {
         (lhs, rhs) => {
             // Shift down primary port to aux port
-            let (mut aux_port_lhs, mut aux_port_rhs) = (
+            let (aux_port_lhs, aux_port_rhs) = (
                 lhs.borrow().aux_ports().iter().cloned().collect::<Vec<_>>(),
                 rhs.borrow().aux_ports().iter().cloned().collect::<Vec<_>>(),
             );
@@ -285,10 +285,14 @@ pub fn build_net(lhs: Spanned<AgentBuilder>, rhs: Spanned<AgentBuilder>) -> Vec<
                 rhs.borrow_mut().primary_port().cloned(),
             );
 
-            lhs.borrow_mut()
-                .set_aux_ports([primary_port_lhs, aux_port_lhs.remove(0)]);
-            rhs.borrow_mut()
-                .set_aux_ports([primary_port_rhs, aux_port_rhs.remove(0)]);
+            lhs.borrow_mut().set_aux_ports([
+                primary_port_lhs,
+                aux_port_lhs.get(0).map(|x| x.as_ref()).flatten().cloned(),
+            ]);
+            rhs.borrow_mut().set_aux_ports([
+                primary_port_rhs,
+                aux_port_rhs.get(0).map(|x| x.as_ref()).flatten().cloned(),
+            ]);
 
             lhs.borrow_mut().set_primary_port(Some(rhs.0.clone()));
             rhs.borrow_mut().set_primary_port(Some(lhs.0.clone()));
