@@ -271,7 +271,7 @@ mod test {
     fn test_make_autodual_multiplexor() {
         let cases = [
             (0, "Era[@0](0)"),
-            (1, "0"),
+            (1, "0 ~ 1"),
             (2, "Dup[@0](0, 1, 2)"),
             (3, "Dup[@0](0, 1, Dup[@6](@0, 3, 4))"),
             (4, "Dup[@0](0, 1, Dup[@6](@0, 3, Dup[@9](@6, 5, 6)))"),
@@ -292,7 +292,7 @@ mod test {
     fn test_make_multiplexor() {
         let cases = [
             (0, "Era[@0](0)"),
-            (1, "0"),
+            (1, "0 ~ 1"),
             (2, "Constr[@0](0, 1, 2)"),
             (3, "Constr[@0](0, 1, Constr[@6](@0, 3, 4))"),
             (
@@ -316,7 +316,7 @@ mod test {
     fn test_make_transpositor() {
         let cases = [
             (0, 0, "Era[@0](0)"),
-            (1, 0, "0"),
+            (1, 0, "0 ~ 1"),
             (
                 2,
                 0,

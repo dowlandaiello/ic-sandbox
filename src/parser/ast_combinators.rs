@@ -121,6 +121,13 @@ impl fmt::Display for Port {
                 )
                 .unwrap_or(UNIT_STR.to_owned())
             )
+        } else if let Some((_, rhs)) = self.try_as_wired_vars() {
+            write!(
+                f,
+                "{} ~ {}",
+                fmt_expr_ports(&mut seen, self, Vec::new()).unwrap_or(UNIT_STR.to_owned()),
+                fmt_expr_ports(&mut seen, &rhs, Vec::new()).unwrap_or(UNIT_STR.to_owned())
+            )
         } else {
             write!(
                 f,
@@ -141,6 +148,31 @@ impl fmt::Display for Port {
 }
 
 impl Port {
+    pub fn try_as_wired_vars(&self) -> Option<(Port, Port)> {
+        let self_port = self.borrow();
+        let primary_port = self_port.primary_port()?;
+        let port = primary_port.try_borrow().ok()?;
+
+        if !primary_port.borrow().is_var() || !self_port.is_var() {
+            return None;
+        }
+
+        match &*port {
+            Expr::Var(v) => {
+                if v.port
+                    .as_ref()
+                    .map(|p| Rc::ptr_eq(self, &p))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.clone()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn try_as_active_pair(&self) -> Option<(Port, Port)> {
         let self_port = self.borrow();
         let primary_port = self_port.primary_port()?;

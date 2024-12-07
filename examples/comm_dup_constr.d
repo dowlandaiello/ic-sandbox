@@ -1,1 +1,0 @@
-Dup[@0](a, b) >< Constr[@1](c, d)

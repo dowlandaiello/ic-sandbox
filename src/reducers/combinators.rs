@@ -75,23 +75,29 @@ pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
             if let Some(p) = original_ports[2].as_ref() {
                 p.try_borrow_mut()
                     .ok()?
-                    .swap_conn(&e, original_ports[2].clone());
+                    .swap_conn(&e, original_ports[3].clone());
             }
-            if let Some(p) = original_ports[2].as_ref() {
+            if let Some(p) = original_ports[3].as_ref() {
                 p.try_borrow_mut()
                     .ok()?
-                    .swap_conn(&e2, original_ports[3].clone());
+                    .swap_conn(&e2, original_ports[2].clone());
             }
 
-            Some(original_ports.into_iter().filter_map(|x| x).collect())
+            Some(
+                [&original_ports[0], &original_ports[2]]
+                    .into_iter()
+                    .filter_map(|x| x.as_ref())
+                    .cloned()
+                    .collect(),
+            )
         }
-        // Anihilation of dupl
+        // Annihiliation of Constr
         (&Expr::Dup(ref c), &Expr::Dup(ref d)) => {
             let original_ports = [
                 c.aux_ports[0].clone(),
-                d.aux_ports[1].clone(),
-                c.aux_ports[1].clone(),
                 d.aux_ports[0].clone(),
+                c.aux_ports[1].clone(),
+                d.aux_ports[1].clone(),
             ];
 
             if let Some(p) = original_ports[0].as_ref() {
@@ -107,15 +113,21 @@ pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
             if let Some(p) = original_ports[2].as_ref() {
                 p.try_borrow_mut()
                     .ok()?
-                    .swap_conn(&e, original_ports[2].clone());
+                    .swap_conn(&e, original_ports[3].clone());
             }
-            if let Some(p) = original_ports[2].as_ref() {
+            if let Some(p) = original_ports[3].as_ref() {
                 p.try_borrow_mut()
                     .ok()?
-                    .swap_conn(&e2, original_ports[3].clone());
+                    .swap_conn(&e2, original_ports[2].clone());
             }
 
-            Some(original_ports.into_iter().filter_map(|x| x).collect())
+            Some(
+                [&original_ports[0], &original_ports[2]]
+                    .into_iter()
+                    .filter_map(|x| x.as_ref())
+                    .cloned()
+                    .collect(),
+            )
         }
         // Anihilation of era
         (&Expr::Era(_), &Expr::Era(_)) => Some(Vec::new()),
@@ -368,8 +380,9 @@ mod test {
                 .borrow_mut()
                 .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
 
-            let res = reduce_dyn(&top);
-            assert!(res.is_some());
+            let res = reduce_dyn(&top).unwrap();
+            assert_eq!(res[0].to_string(), "0 ~ 2");
+            assert_eq!(res[1].to_string(), "1 ~ 3");
         }
     }
 
