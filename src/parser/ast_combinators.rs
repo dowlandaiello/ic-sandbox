@@ -248,6 +248,7 @@ pub enum Token {
     RightBracket,
     Comma,
     Digit(usize),
+    Tilde,
 }
 
 impl fmt::Display for Token {
@@ -265,6 +266,7 @@ impl fmt::Display for Token {
             Self::RightBracket => write!(f, "]"),
             Self::Comma => write!(f, ","),
             Self::Digit(d) => write!(f, "{}", d),
+            Self::Tilde => write!(f, "~"),
         }
     }
 }

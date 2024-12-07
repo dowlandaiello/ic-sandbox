@@ -30,7 +30,7 @@ pub fn repl() {
                 loop {
                     let cmd = rl.readline(&format!(
                         "[{}...] (reduce|print|exit) >> ",
-                        &parsed.to_string()[0..10]
+                        &parsed.to_string().chars().take(10).collect::<String>()
                     ));
 
                     match cmd.as_ref().map(|s| s.as_str()) {

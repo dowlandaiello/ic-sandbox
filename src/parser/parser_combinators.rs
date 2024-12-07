@@ -17,6 +17,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let at = just("@").map(|_| Token::At);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
+    let tilde = just("~").map(|_| Token::Tilde);
     let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
     let digits = text::digits(10).try_map(|d: String, span| {
         Ok(Token::Digit(
@@ -36,6 +37,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         right_bracket,
         choice((era, constr, dup)).or(ident),
         active_pair,
+        tilde,
     ));
 
     token
@@ -89,7 +91,33 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .then(agent)
         .map(|(lhs, rhs): (Spanned<AgentBuilder>, Spanned<AgentBuilder>)| build_net(lhs, rhs));
 
-    net.then_ignore(end())
+    let var = select! {
+    Spanned(Token::Ident(a), span) => Spanned(a, span)
+    };
+    let wiring = var
+        .then_ignore(span_just(Token::Tilde))
+        .then(var)
+        .map(|(lhs, rhs)| {
+            let mut names = NameIter::default();
+
+            let lhs_var = Expr::Var(Var {
+                name: Ident(lhs.0),
+                port: None,
+            })
+            .into_port(&mut names);
+            let rhs_var = Expr::Var(Var {
+                name: Ident(rhs.0),
+                port: None,
+            })
+            .into_port(&mut names);
+
+            lhs_var.borrow_mut().set_primary_port(Some(rhs_var.clone()));
+            rhs_var.borrow_mut().set_primary_port(Some(lhs_var.clone()));
+
+            vec![Spanned(lhs_var, lhs.1)]
+        });
+
+    net.or(wiring).then_ignore(end())
 }
 
 #[derive(Debug, Clone)]
