@@ -1,8 +1,9 @@
 use crate::{
     bytecode::{self, vm::Executor, Program},
     heuristics::{self, TypedProgram},
-    parser::parser_lafont::{self, Spanned},
+    parser::parser_lafont,
 };
+use ast_ext::Spanned;
 use chumsky::{prelude::*, Stream};
 
 pub fn with_typed(program: &str) -> TypedProgram {

@@ -14,7 +14,20 @@ impl fmt::Display for Expr {
         match self {
             Self::Id(s) => write!(f, "{}", s),
             Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
-            Self::Application { lhs, rhs } => write!(f, "({})({})", lhs, rhs),
+            Self::Application { lhs, rhs } => {
+                let lhs_repr = match lhs.as_ref() {
+                    e @ &Self::Id(_) => e.to_string(),
+                    e @ &Self::Abstraction { .. } => format!("({})", e),
+                    e @ &Self::Application { .. } => e.to_string(),
+                };
+                let rhs_repr = match rhs.as_ref() {
+                    e @ &Self::Id(_) => e.to_string(),
+                    e @ &Self::Abstraction { .. } => format!("({})", e),
+                    e @ &Self::Application { .. } => e.to_string(),
+                };
+
+                write!(f, "{}{}", lhs_repr, rhs_repr)
+            }
         }
     }
 }
@@ -81,19 +94,50 @@ pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spa
                     bind_id.1,
                 )
             });
-        let app_member = span_just(Token::LeftParen)
-            .ignore_then(expr.clone())
-            .then_ignore(span_just(Token::RightParen));
-        let application = app_member.clone().then(app_member).map(|(lhs, rhs)| {
-            Spanned(
-                Expr::Application {
-                    lhs: Box::new(lhs.0),
-                    rhs: Box::new(rhs.0),
-                },
-                lhs.1,
-            )
-        });
+        let app_member = expr
+            .clone()
+            .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen));
+        let application = app_member
+            .clone()
+            .then(app_member.clone().repeated().at_least(1))
+            .foldl(|a: Spanned<Expr>, b: Spanned<Expr>| {
+                Spanned(
+                    Expr::Application {
+                        lhs: Box::new(a.0),
+                        rhs: Box::new(b.0),
+                    },
+                    a.1,
+                )
+            });
 
-        choice((id, abstraction, application))
+        choice((application, id, abstraction))
     })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_ok() {
+        let cases = [
+            ("a", "a"),
+            ("(a)(b)", "ab"),
+            ("\\a.a", "\\a.a"),
+            ("\\f.x", "\\f.x"),
+            ("(\\a.a)(a)", "(\\a.a)a"),
+            ("(\\a.\\b.a)(c)(d)", "(\\a.\\b.a)cd"),
+        ];
+
+        for (case, expected) in cases {
+            println!("{}", case);
+            assert_eq!(
+                parser()
+                    .parse(lexer().parse(case).unwrap())
+                    .unwrap()
+                    .to_string(),
+                expected
+            );
+        }
+    }
 }
