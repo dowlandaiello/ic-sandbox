@@ -19,7 +19,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Token {
     LeftParen,
     RightParen,
@@ -54,5 +54,46 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Expr>>, Error = Simple<Spanned<Token>>> {
+pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spanned<Token>>> {
+    let span_just = move |val: Token| {
+        filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
+            tok.0 == val
+        })
+    };
+
+    let id = select! {
+    Spanned(Token::Ident(i), s) => Spanned(Expr::Id(i), s),
+    };
+
+    recursive(|expr| {
+        let abstraction = span_just(Token::Lambda)
+            .ignore_then(select! {
+            Spanned(Token::Ident(i), s) => Spanned(i, s)
+            })
+            .then_ignore(span_just(Token::Dot))
+            .then(expr.clone())
+            .map(|(bind_id, body): (Spanned<String>, Spanned<Expr>)| {
+                Spanned(
+                    Expr::Abstraction {
+                        bind_id: bind_id.0,
+                        body: Box::new(body.0),
+                    },
+                    bind_id.1,
+                )
+            });
+        let app_member = span_just(Token::LeftParen)
+            .ignore_then(expr.clone())
+            .then_ignore(span_just(Token::RightParen));
+        let application = app_member.clone().then(app_member).map(|(lhs, rhs)| {
+            Spanned(
+                Expr::Application {
+                    lhs: Box::new(lhs.0),
+                    rhs: Box::new(rhs.0),
+                },
+                lhs.1,
+            )
+        });
+
+        choice((id, abstraction, application))
+    })
 }

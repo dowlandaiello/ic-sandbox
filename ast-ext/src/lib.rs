@@ -1,6 +1,5 @@
-use chumsky::{prelude::*, primitive::Filter};
 use std::{
-    fmt, hash,
+    fmt,
     ops::{Deref, Range},
 };
 
@@ -15,10 +14,4 @@ impl<T: fmt::Debug> Deref for Spanned<T> {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-}
-
-pub fn span_just<TToken: fmt::Debug + Eq + hash::Hash>(
-    val: TToken,
-) -> Filter<impl Fn(&Spanned<TToken>) -> bool, Simple<Spanned<TToken>>> {
-    filter::<Spanned<TToken>, _, Simple<Spanned<TToken>>>(move |tok: &Spanned<TToken>| **tok == val)
 }
