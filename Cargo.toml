@@ -1,6 +1,11 @@
 [workspace]
 members = [
+    "ast-ext",
     "icc",
-    "toyfp"
+    "toyfp",
 ]
 resolver = "2"
+
+[workspace.dependencies]
+chumsky = "0.9.3"
+ast-ext = { path = "ast-ext" }

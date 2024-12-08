@@ -2,28 +2,12 @@ use super::ast_lafont::{
     Agent, Expr, Ident, Keyword, Net, Port, PortGrouping, PortKind, Token, Type,
 };
 use crate::COMMENT_STR;
+use ast_ext::{Span, Spanned};
 use chumsky::{
     error::Simple,
     prelude::*,
     text::{self, Character},
 };
-use std::{
-    fmt,
-    ops::{Deref, Range},
-};
-
-pub type Span = Range<usize>;
-
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct Spanned<T: fmt::Debug>(pub T, pub Range<usize>);
-
-impl<T: fmt::Debug> Deref for Spanned<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<char>> {
     let keyword = just::<char, _, _>("type")

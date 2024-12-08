@@ -1,7 +1,5 @@
-use super::parser::{
-    ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type},
-    parser_lafont::Spanned,
-};
+use super::parser::ast_lafont::{Agent, Expr, Ident, Net, Port, PortGrouping, PortKind, Type};
+use ast_ext::Spanned;
 use chumsky::error::Simple;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 

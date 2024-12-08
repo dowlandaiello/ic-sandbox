@@ -1,6 +1,6 @@
 # DVM
 
-Low-level intermediary representation "language" for the symetric interaction combinators. Includes a single-threaded reducer, `icc` for prototyping and proving purposes, in addition to an implementation of optimal lambda calculus reduction using the combinators.
+Dowland's Virtual Machine: an interpreter based on a low-level intermediary representation "language" for the symetric interaction combinators. Includes a reducer, `icc` for prototyping and proving purposes, in addition to an implementation of optimal lambda calculus reduction using the combinators.
 
 ## `icc` Usage
 

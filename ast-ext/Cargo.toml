@@ -1,0 +1,11 @@
+[package]
+name = "ast-ext"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ast_ext"
+path = "src/lib.rs"
+
+[dependencies]
+chumsky = { workspace = true }

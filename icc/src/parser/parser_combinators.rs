@@ -2,8 +2,8 @@ use super::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Token, Var},
     ast_lafont::Ident,
     naming::NameIter,
-    parser_lafont::{Span, Spanned},
 };
+use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
 use std::collections::{BTreeMap, VecDeque};
 
