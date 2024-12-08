@@ -2,16 +2,84 @@ use crate::{
     parser::{ast_lafont::Ident, naming::NameIter},
     UNIT_STR,
 };
-use std::{cell::RefCell, collections::HashSet, fmt, ops::Deref, rc::Rc};
+use std::{collections::HashSet, fmt, ops::Deref};
+
+#[cfg(feature = "threadpool")]
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+#[cfg(not(feature = "threadpool"))]
+use std::{
+    borrow::Borrow,
+    cell::{Ref, RefCell},
+    rc::Rc,
+};
 
 #[derive(Debug, Clone)]
 pub struct Port {
+    #[cfg(not(feature = "threadpool"))]
     pub e: Rc<RefCell<Expr>>,
+
+    #[cfg(feature = "threadpool")]
+    pub e: Arc<RwLock<Expr>>,
+
     pub id: usize,
 }
 
+impl Port {
+    #[cfg(not(feature = "threadpool"))]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.e, &other.e)
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.e, &other.e)
+    }
+
+    #[cfg(not(feature = "threadpool"))]
+    pub fn new(e: Expr, id: usize) -> Self {
+        Self {
+            e: Rc::new(RefCell::new(e)),
+            id,
+        }
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub fn new(e: Expr, id: usize) -> Self {
+        Self {
+            e: Arc::new(RwLock::new(e)),
+            id,
+        }
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub fn borrow(&self) -> RwLockReadGuard<'_, Expr> {
+        self.e.read().unwrap()
+    }
+
+    #[cfg(not(feature = "threadpool"))]
+    pub fn borrow(&self) -> Ref<'_, Expr> {
+        <Rc<_> as Borrow<RefCell<_>>>::borrow(&self.e).borrow()
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub fn borrow_mut(&self) -> RwLockWriteGuard<'_, Expr> {
+        self.e.write().unwrap()
+    }
+}
+
+#[cfg(not(feature = "threadpool"))]
 impl Deref for Port {
     type Target = Rc<RefCell<Expr>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.e
+    }
+}
+
+#[cfg(feature = "threadpool")]
+impl Deref for Port {
+    type Target = Arc<RwLock<Expr>>;
 
     fn deref(&self) -> &Self::Target {
         &self.e
@@ -148,10 +216,49 @@ impl fmt::Display for Port {
 }
 
 impl Port {
+    /// Creatse a new copy of the graph.
+    pub fn deep_clone_tree(&self) -> Self {
+        match &*self.borrow() {
+            Expr::Var(v) => {
+                let mut cloned_phrase = v.clone();
+                cloned_phrase.port = cloned_phrase.port.map(|p| p.deep_clone_tree());
+
+                Self::new(Expr::Var(cloned_phrase), self.id)
+            }
+            Expr::Constr(c) => {
+                let mut cloned_phrase = c.clone();
+                cloned_phrase.primary_port =
+                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
+                cloned_phrase.aux_ports.iter_mut().for_each(|p| {
+                    *p = p.as_ref().map(|p| p.deep_clone_tree());
+                });
+
+                Self::new(Expr::Constr(cloned_phrase), self.id)
+            }
+            Expr::Dup(c) => {
+                let mut cloned_phrase = c.clone();
+                cloned_phrase.primary_port =
+                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
+                cloned_phrase.aux_ports.iter_mut().for_each(|p| {
+                    *p = p.as_ref().map(|p| p.deep_clone_tree());
+                });
+
+                Self::new(Expr::Dup(cloned_phrase), self.id)
+            }
+            Expr::Era(c) => {
+                let mut cloned_phrase = c.clone();
+                cloned_phrase.primary_port =
+                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
+
+                Self::new(Expr::Era(cloned_phrase), self.id)
+            }
+        }
+    }
+
     pub fn try_as_wired_vars(&self) -> Option<(Port, Port)> {
         let self_port = self.borrow();
         let primary_port = self_port.primary_port()?;
-        let port = primary_port.try_borrow().ok()?;
+        let port = primary_port.borrow();
 
         if !primary_port.borrow().is_var() || !self_port.is_var() {
             return None;
@@ -159,11 +266,7 @@ impl Port {
 
         match &*port {
             Expr::Var(v) => {
-                if v.port
-                    .as_ref()
-                    .map(|p| Rc::ptr_eq(self, &p))
-                    .unwrap_or_default()
-                {
+                if v.port.as_ref().map(|p| self.ptr_eq(&p)).unwrap_or_default() {
                     Some((self.clone(), primary_port.clone()))
                 } else {
                     None
@@ -176,14 +279,14 @@ impl Port {
     pub fn try_as_active_pair(&self) -> Option<(Port, Port)> {
         let self_port = self.borrow();
         let primary_port = self_port.primary_port()?;
-        let port = primary_port.try_borrow().ok()?;
+        let port = primary_port.borrow();
 
         match &*port {
             Expr::Var(_) => None,
             Expr::Constr(c) => {
                 if c.primary_port
                     .as_ref()
-                    .map(|p| Rc::ptr_eq(self, &p))
+                    .map(|p| self.ptr_eq(&p))
                     .unwrap_or_default()
                 {
                     Some((self.clone(), primary_port.clone()))
@@ -194,7 +297,7 @@ impl Port {
             Expr::Dup(d) => {
                 if d.primary_port
                     .as_ref()
-                    .map(|p| Rc::ptr_eq(self, &p))
+                    .map(|p| self.ptr_eq(&p))
                     .unwrap_or_default()
                 {
                     Some((self.clone(), primary_port.clone()))
@@ -205,7 +308,7 @@ impl Port {
             Expr::Era(e) => {
                 if e.primary_port
                     .as_ref()
-                    .map(|p| Rc::ptr_eq(self, &p))
+                    .map(|p| self.ptr_eq(p))
                     .unwrap_or_default()
                 {
                     Some((self.clone(), primary_port.clone()))
@@ -292,17 +395,11 @@ impl Expr {
 
 impl Expr {
     pub fn into_port(self, namer: &mut NameIter) -> Port {
-        Port {
-            e: Rc::new(RefCell::new(self)),
-            id: namer.next_id(),
-        }
+        Port::new(self, namer.next_id())
     }
 
     pub fn into_port_named(self, id: usize) -> Port {
-        Port {
-            e: Rc::new(RefCell::new(self)),
-            id,
-        }
+        Port::new(self, id)
     }
 
     pub fn set_aux_ports(&mut self, ports: [Option<Port>; 2]) {
@@ -393,12 +490,12 @@ impl Expr {
         fn swap_conn_maybe(slf: &mut Expr, initial: &Port, new: Option<Port>) -> Option<()> {
             match slf {
                 Expr::Era(e) => {
-                    if Rc::ptr_eq(e.primary_port.as_ref()?, &initial) {
+                    if e.primary_port.as_ref()?.ptr_eq(&initial) {
                         e.primary_port = new;
                     }
                 }
                 Expr::Constr(c) => {
-                    if Rc::ptr_eq(c.primary_port.as_ref()?, &initial) {
+                    if c.primary_port.as_ref()?.ptr_eq(&initial) {
                         c.primary_port = new.clone();
                     }
 
@@ -407,7 +504,7 @@ impl Expr {
                         .iter()
                         .cloned()
                         .map(|p| {
-                            if Rc::ptr_eq(p.as_ref()?, &initial) {
+                            if p.as_ref()?.ptr_eq(&initial) {
                                 new.clone()
                             } else {
                                 p
@@ -418,7 +515,7 @@ impl Expr {
                         .unwrap_or([None, None]);
                 }
                 Expr::Dup(d) => {
-                    if Rc::ptr_eq(d.primary_port.as_ref()?, &initial) {
+                    if d.primary_port.as_ref()?.ptr_eq(&initial) {
                         d.primary_port = new.clone();
                     }
 
@@ -427,7 +524,7 @@ impl Expr {
                         .iter()
                         .cloned()
                         .map(|p| {
-                            if Rc::ptr_eq(p.as_ref()?, &initial) {
+                            if p.as_ref()?.ptr_eq(&initial) {
                                 new.clone()
                             } else {
                                 p
@@ -438,7 +535,7 @@ impl Expr {
                         .unwrap_or([None, None]);
                 }
                 Expr::Var(v) => {
-                    if Rc::ptr_eq(v.port.as_ref()?, &initial) {
+                    if v.port.as_ref()?.ptr_eq(&initial) {
                         v.port = new;
                     }
                 }

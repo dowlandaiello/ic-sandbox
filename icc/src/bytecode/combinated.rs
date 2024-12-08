@@ -142,8 +142,11 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
         })
         .into_port(names);
 
-        e.borrow_mut().set_primary_port(Some(var_a));
-        e.borrow_mut().set_aux_ports([Some(var_b), Some(var_c)]);
+        {
+            let mut e_borrow = e.borrow_mut();
+            e_borrow.set_primary_port(Some(var_a));
+            e_borrow.set_aux_ports([Some(var_b), Some(var_c)]);
+        }
 
         e
     };
@@ -165,8 +168,12 @@ pub fn make_autodual_multiplexor(arity: usize, names: &mut NameIter) -> Port {
 
             // Append an incremented var and append new node to previous node
             let new_e: Port = Expr::Dup(Duplicator::new()).into_port(names);
-            new_e.borrow_mut().set_primary_port(Some(acc.clone()));
-            new_e.borrow_mut().set_aux_ports([Some(var_a), Some(var_b)]);
+
+            {
+                let mut e_borrow = new_e.borrow_mut();
+                e_borrow.set_primary_port(Some(acc.clone()));
+                e_borrow.set_aux_ports([Some(var_a), Some(var_b)]);
+            }
 
             acc.borrow_mut().push_aux_port(Some(new_e.clone()));
 
