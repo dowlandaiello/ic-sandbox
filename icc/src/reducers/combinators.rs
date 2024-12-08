@@ -7,7 +7,7 @@ use crate::parser::{
 pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
     let reduced = reduce_step_dyn(e)?;
 
-    if reduced.len() == 1 {
+    if reduced.len() <= 1 {
         Some(reduced)
     } else {
         Some(
@@ -26,7 +26,7 @@ pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
 
     let reduced = reduce_step_dyn(e)?;
 
-    if reduced.len() == 1 {
+    if reduced.len() <= 1 {
         Some(reduced)
     } else {
         Some(
@@ -42,7 +42,12 @@ pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
 pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
     let mut names = NameIter::default();
 
-    let (e, e2) = e.try_as_active_pair()?;
+    let (e, e2) = if let Some(active_pair) = e.try_as_active_pair() {
+        active_pair
+    } else {
+        return Some(vec![e.clone()]);
+    };
+
     let (lhs, rhs) = (e.borrow(), e2.borrow());
 
     match (&*lhs, &*rhs) {
