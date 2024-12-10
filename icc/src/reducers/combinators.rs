@@ -98,9 +98,9 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
         (&Expr::Constr(ref c), &Expr::Constr(ref d)) => {
             let original_ports = [
                 c.aux_ports[0].clone(),
-                d.aux_ports[0].clone(),
-                c.aux_ports[1].clone(),
                 d.aux_ports[1].clone(),
+                c.aux_ports[1].clone(),
+                d.aux_ports[0].clone(),
             ];
 
             if let Some(p) = original_ports[0].as_ref() {
@@ -128,9 +128,9 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
         (&Expr::Dup(ref c), &Expr::Dup(ref d)) => {
             let original_ports = [
                 c.aux_ports[0].clone(),
-                d.aux_ports[0].clone(),
-                c.aux_ports[1].clone(),
                 d.aux_ports[1].clone(),
+                c.aux_ports[1].clone(),
+                d.aux_ports[0].clone(),
             ];
 
             if let Some(p) = original_ports[0].as_ref() {
@@ -388,8 +388,8 @@ mod test {
                 .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
 
             let res = reduce_dyn(&top).unwrap();
-            assert_eq!(res[0].to_string(), "0 ~ 2");
-            assert_eq!(res[1].to_string(), "1 ~ 3");
+            assert_eq!(res[0].to_string(), "0 ~ 3");
+            assert_eq!(res[1].to_string(), "1 ~ 2");
         }
     }
 

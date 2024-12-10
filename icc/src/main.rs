@@ -8,7 +8,7 @@ use cli::*;
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let cmd = clap::Command::new("dcc")
+    let cmd = clap::Command::new("icc")
         .bin_name("icc")
         .subcommand_required(true)
         .subcommand(

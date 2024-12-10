@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 chumsky = { workspace = true }
 ast-ext = { workspace = true }
+icc = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+ariadne = { workspace = true }
+rustyline = { workspace = true }

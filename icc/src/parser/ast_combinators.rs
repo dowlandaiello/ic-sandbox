@@ -391,6 +391,20 @@ impl Expr {
     pub fn is_agent(&self) -> bool {
         !self.is_var()
     }
+
+    pub fn as_var(&self) -> Option<&Var> {
+        match &self {
+            Self::Var(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_constr(&self) -> Option<&Constructor> {
+        match &self {
+            Self::Constr(c) => Some(c),
+            _ => None,
+        }
+    }
 }
 
 impl Expr {

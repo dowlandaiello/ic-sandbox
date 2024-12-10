@@ -1,0 +1,198 @@
+use super::{
+    compiler,
+    parser::{self, Expr},
+};
+use ariadne::{Color, Label, Report, ReportKind, Source};
+use chumsky::{error::SimpleReason, prelude::*};
+use clap::{builder::OsStr, Arg, ArgAction};
+use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
+use rustyline::{error::ReadlineError, DefaultEditor};
+use std::{fs::OpenOptions, io::Read, path::PathBuf};
+
+pub fn arg_in_file() -> Arg {
+    Arg::new("source")
+        .value_name("SOURCE")
+        .require_equals(true)
+        .action(ArgAction::Set)
+}
+
+pub fn arg_out_file() -> Arg {
+    Arg::new("out")
+        .value_name("OUT")
+        .require_equals(false)
+        .action(ArgAction::Set)
+}
+
+pub fn arg_out_file_default(default: OsStr) -> Arg {
+    Arg::new("out")
+        .short('o')
+        .long("out")
+        .value_name("OUT")
+        .require_equals(true)
+        .default_value(default)
+        .action(ArgAction::Set)
+}
+
+pub fn read_program(in_fname: &str) -> Expr {
+    let mut input = String::new();
+    OpenOptions::new()
+        .read(true)
+        .open(in_fname)
+        .expect("failed to open input file")
+        .read_to_string(&mut input)
+        .expect("failed to read input file");
+
+    let input_path = PathBuf::from(in_fname);
+
+    let parsed: Expr = assert_parse_ok(input_path.clone(), input.trim());
+
+    parsed
+}
+
+pub fn repl() {
+    let mut rl = DefaultEditor::new().expect("failed to get readline editor");
+
+    loop {
+        let readline = rl.readline(">> ");
+
+        match readline {
+            Ok(line) => {
+                let parsed = assert_parse_literal_ok(line.as_str());
+                let combinated = super::compiler::compile(parsed.clone(), &mut NameIter::default());
+
+                if let Some(reduced) =
+                    reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))
+                {
+                    println!("{}", reduced);
+                } else {
+                    println!("{}", parsed);
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                return;
+            }
+            Err(ReadlineError::Eof) => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+
+                return;
+            }
+        }
+    }
+}
+
+pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
+    let errs: Vec<Simple<char>> = match parser::lexer()
+        .parse(input)
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| e.with_label("lexing error"))
+                .collect::<Vec<_>>()
+        })
+        .and_then(|res| {
+            parser::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(
+                            e.found().unwrap().1.clone(),
+                            format!("{}", e.map(|x| x.0)),
+                        )
+                        .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }) {
+        Ok(v) => {
+            return v.0;
+        }
+        Err(e) => e,
+    };
+
+    let fname = fpath
+        .file_name()
+        .and_then(|fname| fname.to_str())
+        .unwrap_or("");
+
+    for err in errs {
+        Report::build(ReportKind::Error, (fname, err.span().clone()))
+            .with_message(err.to_string().clone())
+            .with_label(
+                Label::new((fname, err.span()))
+                    .with_message(if let Some(label) = err.label() {
+                        format!(
+                            "{}: {}",
+                            label,
+                            if let SimpleReason::Custom(s) = err.reason() {
+                                s.to_string()
+                            } else {
+                                err.to_string()
+                            }
+                        )
+                    } else {
+                        err.to_string()
+                    })
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((fname, Source::from(input)))
+            .unwrap();
+    }
+
+    panic!()
+}
+
+pub fn assert_parse_literal_ok(input: &str) -> Expr {
+    let errs: Vec<Simple<char>> = match parser::lexer()
+        .parse(input)
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| e.with_label("lexing error"))
+                .collect::<Vec<_>>()
+        })
+        .and_then(|res| {
+            parser::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(e.span(), format!("{}", e.map(|x| x.0)))
+                            .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }) {
+        Ok(v) => {
+            return v.0;
+        }
+        Err(e) => e,
+    };
+
+    let fname = "<STDIN>";
+
+    for err in errs {
+        Report::build(ReportKind::Error, (fname, err.span().clone()))
+            .with_message(err.to_string().clone())
+            .with_label(
+                Label::new((fname, err.span()))
+                    .with_message(if let Some(label) = err.label() {
+                        format!(
+                            "{}: {}",
+                            label,
+                            if let SimpleReason::Custom(s) = err.reason() {
+                                s.to_string()
+                            } else {
+                                err.to_string()
+                            }
+                        )
+                    } else {
+                        err.to_string()
+                    })
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((fname, Source::from(input)))
+            .unwrap();
+    }
+
+    panic!()
+}

@@ -10,15 +10,74 @@ use inetlib::{
     preprocessor,
     reducers::combinators::reduce_dyn,
 };
-use rustyline::{error::ReadlineError, DefaultEditor};
+use rustyline::{
+    completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
+    Editor, Helper, Highlighter, Validator,
+};
 use std::{
+    collections::BTreeSet,
+    default,
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
 };
 
+#[derive(Helper, Validator, Highlighter)]
+pub struct KeywordCompleter {
+    hints: BTreeSet<&'static str>,
+}
+
+impl default::Default for KeywordCompleter {
+    fn default() -> Self {
+        Self {
+            hints: BTreeSet::from_iter(["Constr[", "Era[", "Dup["]),
+        }
+    }
+}
+
+impl Completer for KeywordCompleter {
+    type Candidate = String;
+}
+
+impl Hinter for KeywordCompleter {
+    type Hint = String;
+
+    fn hint(&self, line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if line.trim().ends_with(")") && !line.contains("><") {
+            if line.ends_with(" ") {
+                return Some(">< ".into());
+            } else {
+                return Some(" >< ".into());
+            }
+        }
+
+        let digits = line
+            .rfind("[@")
+            .and_then(|w_pos| Some((w_pos, line[w_pos..].rfind("]")?)))
+            .map(|(w_start, w_end)| &line[w_start..(w_start + w_end)])
+            .map(|w| w[2..].parse::<usize>().ok())
+            .unwrap_or_default();
+        let last_word: &str = line.split(" ").last().unwrap_or_default();
+
+        self.hints
+            .iter()
+            .filter(|hint| hint.starts_with(last_word) && !last_word.is_empty())
+            .map(|h| &h[last_word.len()..])
+            .next()
+            .map(|h| {
+                format!(
+                    "{}@{}](",
+                    h,
+                    (digits.iter().max().unwrap_or(&0) + 1) as usize
+                )
+            })
+    }
+}
+
 pub fn repl() {
-    let mut rl = DefaultEditor::new().expect("failed to get readline editor");
+    let mut rl =
+        Editor::<KeywordCompleter, DefaultHistory>::new().expect("failed to get readline editor");
+    rl.set_helper(Some(KeywordCompleter::default()));
 
     loop {
         let readline = rl.readline(">> ");
