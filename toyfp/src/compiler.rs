@@ -1,6 +1,6 @@
 use super::parser::Expr;
 use inetlib::parser::{
-    ast_combinators::{self as ast_icc, Constructor, Duplicator, Port, Var},
+    ast_combinators::{self as ast_icc, Constructor, Duplicator, Eraser, Port, Var},
     ast_lafont::Ident,
     naming::NameIter,
     parser_combinators,
@@ -187,6 +187,29 @@ pub fn make_d_comb(names: &mut NameIter) -> Port {
     z
 }
 
+pub fn make_k_comb(names: &mut NameIter) -> Port {
+    let z = make_z_comb(3, names);
+    let d = make_d_comb(names);
+
+    // This should not fail
+    let aux_port_port = z.borrow().aux_ports()[0].clone().unwrap();
+
+    d.borrow_mut().push_aux_port(Some(aux_port_port.clone()));
+    d.borrow_mut().set_primary_port(Some(z.clone()));
+
+    let era = ast_icc::Expr::Era(Eraser::new()).into_port(names);
+    era.borrow_mut()
+        .set_primary_port(Some(aux_port_port.clone()));
+
+    aux_port_port
+        .borrow_mut()
+        .set_aux_ports([Some(d.clone()), Some(era.clone())]);
+
+    z.borrow_mut().push_aux_port(Some(d.clone()));
+
+    z
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -217,6 +240,14 @@ mod test {
         assert_eq!(
             make_d_comb(&mut NameIter::default()).to_string(),
             "Constr[@6](v7, Constr[@3](@6, Constr[@0](@3, Dup[@9](@3, @0, @0), @9), @9), v6)"
+        );
+    }
+
+    #[test]
+    fn test_make_k_comb() {
+        assert_eq!(
+            make_k_comb(&mut NameIter::default()).to_string(),
+            "Constr[@3](v5, Constr[@0](@3, Constr[@12](@3, Constr[@9](@12, Constr[@6](@9, Dup[@15](@9, @6, @6), @15), @15), @0), Era[@16](@0)), @12)"
         );
     }
 }
