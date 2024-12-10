@@ -1,6 +1,6 @@
 use super::parser::Expr;
 use inetlib::parser::{
-    ast_combinators::{self as ast_icc, Constructor, Port, Var},
+    ast_combinators::{self as ast_icc, Constructor, Duplicator, Port, Var},
     ast_lafont::Ident,
     naming::NameIter,
     parser_combinators,
@@ -161,6 +161,32 @@ pub fn make_z_comb(i: usize, names: &mut NameIter) -> Port {
     }
 }
 
+pub fn make_d_comb(names: &mut NameIter) -> Port {
+    let z = make_z_comb(4, names);
+
+    // Insert a dup connected to first two left ports
+    let dup = ast_icc::Expr::Dup(Duplicator::new()).into_port(names);
+
+    // This should not fail
+    let aux_port_port_3 = z.borrow().aux_ports()[0].clone().unwrap();
+    let aux_port_port_2 = aux_port_port_3.borrow().aux_ports()[0].clone().unwrap();
+
+    dup.borrow_mut()
+        .set_primary_port(Some(aux_port_port_3.clone()));
+    aux_port_port_3.borrow_mut().push_aux_port(Some(z.clone()));
+    dup.borrow_mut()
+        .set_aux_ports([Some(aux_port_port_2.clone()), Some(aux_port_port_2.clone())]);
+
+    aux_port_port_2
+        .borrow_mut()
+        .set_aux_ports([Some(dup.clone()), Some(dup.clone())]);
+    aux_port_port_3
+        .borrow_mut()
+        .push_aux_port(Some(dup.clone()));
+
+    z
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -184,5 +210,13 @@ mod test {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn test_make_d_comb() {
+        assert_eq!(
+            make_d_comb(&mut NameIter::default()).to_string(),
+            "Constr[@6](v7, Constr[@3](@6, Constr[@0](@3, Dup[@9](@3, @0, @0), @9), @9), v6)"
+        );
     }
 }
