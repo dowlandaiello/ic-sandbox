@@ -210,6 +210,180 @@ pub fn make_k_comb(names: &mut NameIter) -> Port {
     z
 }
 
+/// Inserts in the specified port index in the Z agent
+fn insert_z_4_aux_port(z: &Port, i: usize, val: Port) -> Option<Port> {
+    let aux_port_port_3 = z.borrow().aux_ports()[0].clone().unwrap();
+    let aux_port_port_2 = aux_port_port_3.borrow().aux_ports()[0].clone().unwrap();
+
+    match i {
+        0 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_2)
+        }
+        1 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_2)
+        }
+        2 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_3)
+        }
+        3 => {
+            z.borrow_mut().push_aux_port(Some(val));
+
+            Some(z.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Returns the port which the value was inserted into.
+/// Pushes into the next port with no value
+fn push_z_4_aux_port(z: &Port, val: Port) -> Port {
+    let aux_port_port_3 = z.borrow().aux_ports()[0].clone().unwrap();
+    let aux_port_port_2 = aux_port_port_3.borrow().aux_ports()[0].clone().unwrap();
+
+    if aux_port_port_2.borrow().aux_ports()[0]
+        .as_ref()
+        .map(|p| p.borrow().is_var())
+        .unwrap_or_default()
+    {
+        aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+        aux_port_port_2
+    } else if aux_port_port_2.borrow().aux_ports()[1]
+        .as_ref()
+        .map(|p| p.borrow().is_var())
+        .unwrap_or_default()
+    {
+        aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+        aux_port_port_2
+    } else if aux_port_port_3.borrow().aux_ports()[1]
+        .as_ref()
+        .map(|p| p.borrow().is_var())
+        .unwrap_or_default()
+    {
+        aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+        aux_port_port_3
+    } else {
+        z.borrow_mut().push_aux_port(Some(val));
+
+        z.clone()
+    }
+}
+
+pub fn nth_z_4_aux_Port(z: &Port, i: usize) -> Option<Port> {
+    match i {
+        0 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_2)
+        }
+        1 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_2)
+        }
+        2 => {
+            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
+
+            Some(aux_port_port_3)
+        }
+        3 => {
+            z.borrow_mut().push_aux_port(Some(val));
+
+            Some(z.clone())
+        }
+        _ => None,
+    }
+}
+
+pub fn make_s_comb(names: &mut NameIter) -> Port {
+    let z_bottom_right = make_z_comb(4, names);
+
+    let z_top_left = make_z_comb(4, names);
+    let constr_left_z_bottom = ast_icc::Expr::Constr(Constructor::new()).into_port(names);
+    let dup_middle_z_bottom = ast_icc::Expr::Dup(Duplicator::new()).into_port(names);
+    let d_right_z_bottom = make_d_comb(names);
+
+    let cl = constr_left_z_bottom.clone();
+    constr_left_z_bottom
+        .borrow_mut()
+        .set_aux_ports([None, Some(push_z_4_aux_port(&z_bottom_right, cl))]);
+    let dz = dup_middle_z_bottom.clone();
+    dup_middle_z_bottom
+        .borrow_mut()
+        .set_primary_port(Some(push_z_4_aux_port(&z_bottom_right, dz)));
+    z_top_left
+        .borrow_mut()
+        .set_primary_port(Some(push_z_4_aux_port(&z_bottom_right, z_top_left.clone())));
+    d_right_z_bottom
+        .borrow_mut()
+        .set_primary_port(Some(push_z_4_aux_port(
+            &z_bottom_right,
+            d_right_z_bottom.clone(),
+        )));
+
+    let d_constr = ast_icc::Expr::Constr(Constructor::new()).into_port(names);
+    d_right_z_bottom
+        .borrow_mut()
+        .push_aux_port(Some(d_constr.clone()));
+    d_constr
+        .borrow_mut()
+        .set_primary_port(Some(d_right_z_bottom.clone()));
+
+    let d_sub_constr = constr_left_z_bottom;
+    d_constr.borrow_mut().set_aux_ports([
+        Some(dup_middle_z_bottom.clone()),
+        Some(d_sub_constr.clone()),
+    ]);
+    d_sub_constr
+        .borrow_mut()
+        .set_primary_port(Some(d_constr.clone()));
+
+    dup_middle_z_bottom
+        .borrow_mut()
+        .set_aux_ports([None, Some(d_constr.clone())]);
+
+    let z_middle = make_z_comb(4, names);
+    z_middle
+        .borrow_mut()
+        .set_primary_port(Some(d_sub_constr.clone()));
+    d_sub_constr
+        .borrow_mut()
+        .set_aux_ports([Some(z_middle.clone()), Some(z_bottom_right.clone())]);
+
+    let middle_constr = ast_icc::Expr::Constr(Constructor::new()).into_port(names);
+    let mc = middle_constr.clone();
+    middle_constr
+        .borrow_mut()
+        .set_primary_port(Some(push_z_4_aux_port(&z_middle, mc.clone())));
+
+    let top_l_z_last_port = nth_z_4_aux_Port(&z_top_left, 3).unwrap();
+    push_z_4_aux_port(&z_top_left, top_l_z_last_port);
+    let _ = insert_z_4_aux_port(&z_top_left, 3, z_top_left.clone());
+
+    let z_middle_middle_ports = nth_z_4_aux_Port(&z_middle, 1)
+        .zip(nth_z_4_aux_Port(&z_middle, 2))
+        .unwrap();
+    let z_top_left_middle_left_port = push_z_4_aux_port(&z_top_left, z_middle_middle_ports.1);
+    let z_top_left_middle_right_port = push_z_4_aux_port(&z_top_left, z_middle_middle_ports.0);
+
+    push_z_4_aux_port(&z_middle, z_top_left_middle_right_port);
+    push_z_4_aux_port(&z_middle, z_top_left_middle_left_port);
+    middle_constr.borrow_mut().set_aux_ports([
+        Some(dup_middle_z_bottom),
+        Some(push_z_4_aux_port(&z_middle, mc.clone())),
+    ]);
+
+    z_bottom_right
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
