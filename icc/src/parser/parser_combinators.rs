@@ -74,9 +74,9 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 		    name: 0,
 		    conns: Vec::new()
 		}, span)},
-		select! {
+		span_just(Token::At).ignore_then(select! {
 		    Spanned(Token::Digit(d), span) => Spanned(AgentBuilder::Ref(d), span)
-		}
+		})
             ))
             .separated_by(span_just(Token::Comma))
         )
@@ -222,14 +222,15 @@ impl AgentBuilder {
 pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
     let mut built_agents: BTreeMap<usize, Spanned<Port>> = Default::default();
     let mut to_build: VecDeque<Spanned<AgentBuilder>> = VecDeque::from_iter([agent.clone()]);
+    let mut to_build_later: VecDeque<Spanned<AgentBuilder>> = Default::default();
     let mut var_namer = NameIter::default();
 
     // First pass: build all agents
     // This will create ports for every expr that is not
     // a var, but will not connect refs, since
     // these may be circular
-    for i in 0..(to_build.len()) {
-        let Spanned(builder, span) = to_build[i].clone();
+    while let Some(Spanned(builder, span)) = to_build.pop_front() {
+        to_build_later.push_back(Spanned(builder.clone(), span.clone()));
 
         let (phrase, name, conns) = if let Some(x) = builder.as_agent() {
             x
@@ -250,7 +251,8 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
     // Second pass: wire all agents
     // Also create all vars in place, since
     // they cannot be connected to more than one agent
-    while let Some((_, name, children)) = to_build.pop_front().and_then(|x| x.0.into_agent()) {
+    while let Some((_, name, children)) = to_build_later.pop_front().and_then(|x| x.0.into_agent())
+    {
         let Spanned(agent_port, span) = &built_agents[&name];
 
         for child in children.into_iter() {

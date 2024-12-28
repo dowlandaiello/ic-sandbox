@@ -278,27 +278,14 @@ fn push_z_4_aux_port(z: &Port, val: Port) -> Port {
 }
 
 pub fn nth_z_4_aux_Port(z: &Port, i: usize) -> Option<Port> {
+    let aux_port_port_3 = z.borrow().aux_ports()[0].clone().unwrap();
+    let aux_port_port_2 = aux_port_port_3.borrow().aux_ports()[0].clone().unwrap();
+
     match i {
-        0 => {
-            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
-
-            Some(aux_port_port_2)
-        }
-        1 => {
-            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
-
-            Some(aux_port_port_2)
-        }
-        2 => {
-            aux_port_port_2.borrow_mut().push_aux_port(Some(val));
-
-            Some(aux_port_port_3)
-        }
-        3 => {
-            z.borrow_mut().push_aux_port(Some(val));
-
-            Some(z.clone())
-        }
+        0 => Some(aux_port_port_2),
+        1 => Some(aux_port_port_2),
+        2 => Some(aux_port_port_3),
+        3 => Some(z.clone()),
         _ => None,
     }
 }
@@ -346,10 +333,6 @@ pub fn make_s_comb(names: &mut NameIter) -> Port {
         .borrow_mut()
         .set_primary_port(Some(d_constr.clone()));
 
-    dup_middle_z_bottom
-        .borrow_mut()
-        .set_aux_ports([None, Some(d_constr.clone())]);
-
     let z_middle = make_z_comb(4, names);
     z_middle
         .borrow_mut()
@@ -377,9 +360,13 @@ pub fn make_s_comb(names: &mut NameIter) -> Port {
     push_z_4_aux_port(&z_middle, z_top_left_middle_right_port);
     push_z_4_aux_port(&z_middle, z_top_left_middle_left_port);
     middle_constr.borrow_mut().set_aux_ports([
-        Some(dup_middle_z_bottom),
+        Some(dup_middle_z_bottom.clone()),
         Some(push_z_4_aux_port(&z_middle, mc.clone())),
     ]);
+
+    dup_middle_z_bottom
+        .borrow_mut()
+        .set_aux_ports([Some(middle_constr.clone()), Some(d_constr.clone())]);
 
     z_bottom_right
 }
@@ -423,5 +410,12 @@ mod test {
             make_k_comb(&mut NameIter::default()).to_string(),
             "Constr[@3](v5, Constr[@0](@3, Constr[@12](@3, Constr[@9](@12, Constr[@6](@9, Dup[@15](@9, @6, @6), @15), @15), @0), Era[@16](@0)), @12)"
         );
+    }
+
+    #[test]
+    fn test_make_s_comb() {
+        let s = make_s_comb(&mut NameIter::default());
+
+        println!("{}", s);
     }
 }

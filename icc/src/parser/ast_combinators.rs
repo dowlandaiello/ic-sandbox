@@ -2,7 +2,11 @@ use crate::{
     parser::{ast_lafont::Ident, naming::NameIter},
     UNIT_STR,
 };
-use std::{collections::HashSet, fmt, ops::Deref};
+use std::{
+    collections::{HashSet, VecDeque},
+    fmt,
+    ops::Deref,
+};
 
 #[cfg(feature = "threadpool")]
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -26,6 +30,16 @@ pub struct Port {
 }
 
 impl Port {
+    #[cfg(not(feature = "threadpool"))]
+    pub fn as_ptr(&self) -> *const RefCell<Expr> {
+        Rc::as_ptr(&self.e)
+    }
+
+    #[cfg(feature = "threadpool")]
+    pub fn as_ptr(&self) -> *const RwLock<Expr> {
+        Arc::as_ptr(&self.e)
+    }
+
     #[cfg(not(feature = "threadpool"))]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.e, &other.e)
@@ -216,6 +230,19 @@ impl fmt::Display for Port {
 }
 
 impl Port {
+    pub fn iter_ports(&self) -> impl IntoIterator<Item = Port> {
+        [self.borrow().primary_port()]
+            .into_iter()
+            .chain(self.borrow().aux_ports().into_iter().map(|x| x.as_ref()))
+            .filter_map(|x| x)
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    pub fn iter_tree(&self) -> impl Iterator<Item = Port> {
+        PortTreeWalker::new([self.clone()])
+    }
+
     /// Creatse a new copy of the graph.
     pub fn deep_clone_tree(&self) -> Self {
         match &*self.borrow() {
@@ -273,6 +300,61 @@ impl Port {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Gets the index of the wire in the ports of the agent, where primary port = 0,
+    /// aux ports are 1..n
+    pub fn wire_position(&self, other: &Port) -> Option<usize> {
+        match &*self.borrow() {
+            Expr::Constr(c) => {
+                if c.primary_port
+                    .as_ref()
+                    .map(|p| p.ptr_eq(other))
+                    .unwrap_or_default()
+                {
+                    return Some(0);
+                }
+
+                c.aux_ports
+                    .iter()
+                    .filter_map(|x| x.as_ref())
+                    .position(|p| p.ptr_eq(other))
+                    .map(|p| p + 1)
+            }
+            Expr::Era(e) => {
+                if e.primary_port
+                    .as_ref()
+                    .map(|p| p.ptr_eq(other))
+                    .unwrap_or_default()
+                {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+            Expr::Dup(d) => {
+                if d.primary_port
+                    .as_ref()
+                    .map(|p| p.ptr_eq(other))
+                    .unwrap_or_default()
+                {
+                    return Some(0);
+                }
+
+                d.aux_ports
+                    .iter()
+                    .filter_map(|x| x.as_ref())
+                    .position(|p| p.ptr_eq(other))
+                    .map(|p| p + 1)
+            }
+            Expr::Var(v) => {
+                if v.port.as_ref().map(|p| p.ptr_eq(other)).unwrap_or_default() {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -335,6 +417,47 @@ impl Port {
     }
 }
 
+pub struct PortTreeWalker {
+    #[cfg(not(feature = "threadpool"))]
+    seen: HashSet<*const RefCell<Expr>>,
+    #[cfg(feature = "threadpool")]
+    seen: HashSet<*const RwLock<Expr>>,
+
+    to_visit: VecDeque<Port>,
+}
+
+impl PortTreeWalker {
+    pub fn new(i: impl IntoIterator<Item = Port>) -> Self {
+        Self {
+            seen: Default::default(),
+            to_visit: i.into_iter().collect(),
+        }
+    }
+}
+
+impl Iterator for PortTreeWalker {
+    type Item = Port;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.to_visit = self
+            .to_visit
+            .drain(..)
+            .skip_while(|n| !n.borrow().is_var() && self.seen.contains(&n.as_ptr()))
+            .collect();
+        let next = self.to_visit.pop_front()?;
+
+        self.seen.insert(next.as_ptr());
+
+        self.to_visit.extend(
+            next.iter_ports()
+                .into_iter()
+                .filter(|p| p.borrow().is_var() || !self.seen.contains(&p.as_ptr())),
+        );
+
+        Some(next)
+    }
+}
+
 const EMPTY_AUX_PORTS: [Option<Port>; 2] = [None, None];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
@@ -384,6 +507,15 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn name(&self) -> String {
+        match self {
+            Self::Era(_) => String::from("Era"),
+            Self::Dup(_) => String::from("Dup"),
+            Self::Constr(_) => String::from("Constr"),
+            Self::Var(v) => v.name.0.clone(),
+        }
+    }
+
     pub fn is_var(&self) -> bool {
         matches!(self, Self::Var(_))
     }
