@@ -1,4 +1,5 @@
 pub mod bytecode;
+pub mod bytecode2;
 pub mod heuristics;
 pub mod parser;
 pub mod preprocessor;

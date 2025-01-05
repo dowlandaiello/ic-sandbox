@@ -14,6 +14,12 @@ impl fmt::Display for Ident {
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Type(pub String);
 
+impl Into<Type> for String {
+    fn into(self) -> Type {
+        Type(self)
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -177,6 +183,13 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn new(name: impl Into<Type>) -> Self {
+        Self {
+            name: name.into(),
+            ports: Default::default(),
+        }
+    }
+
     pub fn replace_name(mut self, name: &Ident, val: &Port) -> Self {
         self.ports = self
             .ports
@@ -281,6 +294,15 @@ pub enum PortKind {
 }
 
 impl PortKind {
+    pub fn is_complement(&self, other: &PortKind) -> bool {
+        match (self, other) {
+            (Self::Input(ty_a), Self::Output(ty_b)) | (Self::Output(ty_b), Self::Input(ty_a)) => {
+                ty_a == ty_b
+            }
+            _ => false,
+        }
+    }
+
     pub fn as_output(&self) -> Option<&Type> {
         match &self {
             Self::Input(_) => None,
