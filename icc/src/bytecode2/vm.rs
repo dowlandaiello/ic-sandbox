@@ -1,4 +1,4 @@
-use super::{Agent, AgentPtr, GlobalPtr, Op, Ptr, StackElem};
+use super::{Agent, AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -31,11 +31,19 @@ impl error::Error for Error {}
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub pos: Ptr,
-    pub stack: Vec<StackElem>,
+    pub stack: Program,
     pub types: BTreeMap<Type, Vec<PortKind>>,
 }
 
 impl State {
+    pub fn new(program: Program, types: BTreeMap<Type, Vec<PortKind>>) -> Self {
+        Self {
+            pos: Default::default(),
+            stack: program,
+            types,
+        }
+    }
+
     pub fn iter_deref<'a>(&'a self, p: GlobalPtr) -> impl Iterator<Item = StackElem> + 'a {
         DerefVisitor::new(self, p)
     }
@@ -69,9 +77,7 @@ impl State {
     ) -> Option<impl Iterator<Item = GlobalPtr> + 'a> {
         Some(TreeVisitor::new(self, stack_ptr))
     }
-}
 
-impl State {
     pub fn readback(&self, p: GlobalPtr) -> Option<Expr> {
         let pointers = self.iter_tree(p)?.collect::<Vec<_>>();
 
@@ -205,7 +211,7 @@ impl State {
             StackElem::Ident(_)
             | StackElem::Agent { .. }
             | StackElem::Ptr(_)
-            | StackElem::Var(_) => Err(Error::CouldNotAdvance),
+            | StackElem::Var(_) => Ok(None),
             StackElem::Instr(op) => match op.as_ref() {
                 &Op::PushRes(p) => Ok(self.readback(p)),
                 &Op::PushStackElem(ref e) => {
@@ -219,6 +225,18 @@ impl State {
         self.pos += 1;
 
         res
+    }
+
+    pub fn step_to_end(&mut self) -> Result<Vec<Expr>, Error> {
+        let mut results = Vec::default();
+
+        while self.pos < self.stack.len() {
+            if let Some(res) = self.step()? {
+                results.push(res);
+            }
+        }
+
+        Ok(results)
     }
 }
 

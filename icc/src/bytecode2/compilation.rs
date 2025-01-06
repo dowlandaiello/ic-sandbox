@@ -1,4 +1,4 @@
-use super::{GlobalPtr, Op, Ptr, StackElem};
+use super::{GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::{
     bytecode2 as bc,
     heuristics::TypedProgram,
@@ -36,7 +36,7 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
-pub fn compile(p: TypedProgram) -> Result<Vec<StackElem>, Error> {
+pub fn compile(p: TypedProgram) -> Result<Program, Error> {
     let mut out: Vec<StackElem> = Default::default();
 
     let nets_by_active_pair = p
@@ -113,7 +113,7 @@ pub fn compile(p: TypedProgram) -> Result<Vec<StackElem>, Error> {
         }
     }
 
-    Ok(out)
+    Ok(Program(out))
 }
 
 fn compile_literal(program: &mut Vec<StackElem>, lhs_ptr: GlobalPtr) {
@@ -284,7 +284,40 @@ mod test {
             let (typed, _) = heur::parse_typed_program(parsed);
 
             let program = compile(typed).unwrap();
-            assert_eq!(program, expected);
+            assert_eq!(program, Program(expected));
+        }
+    }
+
+    #[test]
+    fn test_readback() {
+        use super::super::vm;
+
+        let cases = [(
+            "type atom
+             symbol Void: atom+
+             symbol Id: atom-, atom+
+             Void() >< Id(Void())",
+            "Void() >< Id(Void())",
+        )];
+
+        for (case, expected) in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let program = compile(typed.clone()).unwrap();
+
+            let mut results = vm::State::new(program, typed.symbol_declarations_for)
+                .step_to_end()
+                .unwrap();
+
+            assert_eq!(results.remove(0).to_string(), expected);
         }
     }
 }
