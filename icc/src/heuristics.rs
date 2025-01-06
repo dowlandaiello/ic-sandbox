@@ -11,6 +11,21 @@ pub struct TypedProgram {
 }
 
 impl TypedProgram {
+    pub fn try_get_redex<'a>(&'a self, a: &'a Agent) -> Option<(&'a Agent, &'a Agent)> {
+        let b = a.ports.get(0)?.as_agent()?;
+
+        if !self
+            .symbol_declarations_for
+            .get(&a.name)?
+            .get(0)?
+            .is_complement(self.symbol_declarations_for.get(&b.name)?.get(0)?)
+        {
+            return None;
+        }
+
+        Some((a, b))
+    }
+
     /// Determines whether this agent can match the other agent.
     /// That is, is values are matching up to terminal values.
     ///

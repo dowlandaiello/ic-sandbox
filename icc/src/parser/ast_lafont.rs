@@ -1,6 +1,9 @@
 use crate::UNIT_STR;
 use serde::{Deserialize, Serialize};
-use std::{collections::VecDeque, fmt};
+use std::{
+    collections::{BTreeSet, VecDeque},
+    fmt, ptr,
+};
 
 #[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Ident(pub String);
@@ -190,6 +193,10 @@ impl Agent {
         }
     }
 
+    pub fn iter_child_agents<'a>(&'a self) -> impl Iterator<Item = &Agent> + 'a {
+        PortWalker::new(self)
+    }
+
     pub fn replace_name(mut self, name: &Ident, val: &Port) -> Self {
         self.ports = self
             .ports
@@ -242,6 +249,39 @@ impl fmt::Display for Agent {
                 .collect::<Vec<_>>()
                 .join(", ")
         )
+    }
+}
+
+pub struct PortWalker<'a> {
+    to_visit: VecDeque<&'a Agent>,
+    seen: BTreeSet<*const Agent>,
+}
+
+impl<'a> PortWalker<'a> {
+    pub fn new(start: &'a Agent) -> Self {
+        Self {
+            to_visit: VecDeque::from_iter([start]),
+            seen: Default::default(),
+        }
+    }
+}
+
+impl<'a> Iterator for PortWalker<'a> {
+    type Item = &'a Agent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let curr_ptr = *self
+            .to_visit
+            .iter()
+            .skip_while(|x| self.seen.contains(&ptr::addr_of!(***x)))
+            .next()?;
+
+        self.seen.insert(ptr::addr_of!(*curr_ptr));
+
+        self.to_visit
+            .extend(curr_ptr.ports.iter().filter_map(|elem| elem.as_agent()));
+
+        Some(curr_ptr)
     }
 }
 

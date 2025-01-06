@@ -1,12 +1,38 @@
-use super::{Agent, AgentPtr, Error, GlobalPtr, Op, Ptr, StackElem};
+use super::{Agent, AgentPtr, GlobalPtr, Op, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{error, fmt};
+
+#[derive(Copy, Clone, Debug)]
+pub enum Error {
+    /// There are no instructions left to advance the machine with.
+    NothingToAdvance,
+
+    /// The machine failed to advance
+    CouldNotAdvance,
+
+    /// Ptr to a location that does not exist
+    InvalidPtr,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingToAdvance => write!(f, "nothing to advance"),
+            Self::CouldNotAdvance => write!(f, "failed to advance"),
+            Self::InvalidPtr => write!(f, "ptr out of bounds"),
+        }
+    }
+}
+
+impl error::Error for Error {}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub pos: Ptr,
     pub stack: Vec<StackElem>,
+    pub types: BTreeMap<Type, Vec<PortKind>>,
 }
 
 impl State {
@@ -46,7 +72,7 @@ impl State {
 }
 
 impl State {
-    pub fn readback(&self, p: GlobalPtr, types: BTreeMap<Type, Vec<PortKind>>) -> Option<Expr> {
+    pub fn readback(&self, p: GlobalPtr) -> Option<Expr> {
         let pointers = self.iter_tree(p)?.collect::<Vec<_>>();
 
         let typed_agents = pointers
@@ -57,7 +83,7 @@ impl State {
 
                 Some((
                     ptr.as_stack_ptr()?,
-                    types.get(&Type(name.as_ident()?.to_owned()))?.clone(),
+                    self.types.get(&Type(name.as_ident()?.to_owned()))?.clone(),
                 ))
             })
             .collect::<Option<BTreeMap<Ptr, Vec<PortKind>>>>()?;
@@ -175,22 +201,24 @@ impl State {
     pub fn step(&mut self) -> Result<Option<Expr>, Error> {
         let next_elem = self.stack.get(self.pos).ok_or(Error::NothingToAdvance)?;
 
-        match next_elem {
+        let res = match next_elem {
             StackElem::Ident(_)
             | StackElem::Agent { .. }
             | StackElem::Ptr(_)
-            | StackElem::Var(_) => {}
+            | StackElem::Var(_) => Err(Error::CouldNotAdvance),
             StackElem::Instr(op) => match op.as_ref() {
-                &Op::Return(_) => todo!(),
+                &Op::PushRes(p) => Ok(self.readback(p)),
                 &Op::PushStackElem(ref e) => {
                     self.stack.push(e.clone());
+
+                    Ok(None)
                 }
             },
-        }
+        };
 
         self.pos += 1;
 
-        todo!()
+        res
     }
 }
 
@@ -269,7 +297,7 @@ impl Iterator for TreeVisitor<'_> {
         let curr_ptr = self
             .to_visit
             .iter()
-            .take_while(|x| self.seen.contains(x))
+            .skip_while(|x| self.seen.contains(x))
             .next()
             .copied()?;
 

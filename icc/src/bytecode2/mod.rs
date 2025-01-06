@@ -1,33 +1,9 @@
 use serde::{Deserialize, Serialize};
-use std::{error, fmt};
 
+pub mod compilation;
 pub mod vm;
 
 pub type Ptr = usize;
-
-#[derive(Copy, Clone, Debug)]
-pub enum Error {
-    /// There are no instructions left to advance the machine with.
-    NothingToAdvance,
-
-    /// The machine failed to advance
-    CouldNotAdvance,
-
-    /// Ptr to a location that does not exist
-    InvalidPtr,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NothingToAdvance => write!(f, "nothing to advance"),
-            Self::CouldNotAdvance => write!(f, "failed to advance"),
-            Self::InvalidPtr => write!(f, "ptr out of bounds"),
-        }
-    }
-}
-
-impl error::Error for Error {}
 
 #[derive(Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum GlobalPtr {
@@ -50,7 +26,7 @@ pub struct AgentPtr {
     pub port: Ptr,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Ord, PartialEq, PartialOrd, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum StackElem {
     Ident(String),
     Agent(Agent),
@@ -60,6 +36,13 @@ pub enum StackElem {
 }
 
 impl StackElem {
+    pub fn as_agent_mut(&mut self) -> Option<&mut Agent> {
+        match self {
+            Self::Agent(a) => Some(a),
+            _ => None,
+        }
+    }
+
     pub fn as_agent(&self) -> Option<&Agent> {
         match &self {
             Self::Agent(a) => Some(a),
@@ -81,8 +64,14 @@ pub struct Agent {
     pub ports: Vec<GlobalPtr>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+impl Agent {
+    pub fn push_port(&mut self, p: GlobalPtr) {
+        self.ports.push(p)
+    }
+}
+
+#[derive(Ord, PartialEq, PartialOrd, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
     PushStackElem(StackElem),
-    Return(GlobalPtr),
+    PushRes(GlobalPtr),
 }
