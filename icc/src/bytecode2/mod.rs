@@ -37,7 +37,7 @@ impl fmt::Display for Program {
     }
 }
 
-#[derive(Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum GlobalPtr {
     StackPtr(Ptr),
     AgentPtr(AgentPtr),
@@ -61,7 +61,7 @@ impl GlobalPtr {
     }
 }
 
-#[derive(Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct AgentPtr {
     pub stack_pos: Ptr,
     pub port: Ptr,

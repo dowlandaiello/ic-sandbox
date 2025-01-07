@@ -1,5 +1,6 @@
 use super::{Agent, AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{error, fmt};
@@ -79,7 +80,7 @@ impl State {
     }
 
     pub fn readback(&self, p: GlobalPtr) -> Option<Expr> {
-        let pointers = self.iter_tree(p)?.collect::<Vec<_>>();
+        let pointers = self.iter_tree(p)?.unique().collect::<Vec<_>>();
 
         let typed_agents = pointers
             .iter()
@@ -93,10 +94,9 @@ impl State {
                 ))
             })
             .collect::<Option<BTreeMap<Ptr, Vec<PortKind>>>>()?;
-        let mut converted_agents: BTreeMap<Ptr, ast::Agent> = Default::default();
 
         // Find first redex
-        let ((lhs_elem, lhs_ptr), (rhs_elem, rhs_ptr)): ((Agent, Ptr), (Agent, Ptr)) = pointers
+        let (lhs_elem, rhs_elem): (Agent, Agent) = pointers
             .iter()
             .map(|x| {
                 pointers
@@ -115,9 +115,10 @@ impl State {
                         .and_then(|x| Some(x.as_agent()?.clone()))?,
                 );
                 let (a_raw_ptr, b_raw_ptr) = (a.as_stack_ptr()?, b.as_stack_ptr()?);
+
                 let (port_b, port_a) = (
-                    a_elem.ports.iter().position(|elem| *elem == *a)?,
-                    b_elem.ports.iter().position(|elem| *elem == *b)?,
+                    a_elem.ports.iter().position(|elem| *elem == *b)?,
+                    b_elem.ports.iter().position(|elem| *elem == *a)?,
                 );
                 let (a_ty, b_ty) = (typed_agents.get(&a_raw_ptr)?, typed_agents.get(&b_raw_ptr)?);
 
@@ -130,9 +131,10 @@ impl State {
                     return None;
                 }
 
-                Some(((a_elem.clone(), a_raw_ptr), (b_elem.clone(), b_raw_ptr)))
+                Some((a_elem.clone(), b_elem.clone()))
             })
             .next()?;
+
         let (lhs_name, rhs_name) = (
             self.iter_deref(lhs_elem.name)
                 .last()
@@ -142,66 +144,62 @@ impl State {
                 .and_then(|elem| Some(elem.as_ident()?.to_owned()))?,
         );
 
-        // Assume that ports are in the same order in buffer representation
-        // as in expression representation, except for redexes
-        let mut to_insert: VecDeque<(Ptr, GlobalPtr)> = VecDeque::from_iter(
-            lhs_elem
-                .ports
-                .iter()
-                .map(|p| (lhs_ptr, *p))
-                .chain(rhs_elem.ports.iter().map(|p| (rhs_ptr, *p))),
-        );
-
-        // Insert the redex members themselves as "roots:"
-        // - they have no parents
-        converted_agents.insert(lhs_ptr, ast::Agent::new(lhs_name));
-        converted_agents.insert(rhs_ptr, ast::Agent::new(rhs_name));
-
-        // Insert each child in the next available
-        // port in its parent
-        //
-        // Its parent expression can be found in the converted_agents map
-        // Vars do not have children, so they do not need to be looked up
-        while let Some((parent_ptr, ins)) = to_insert.pop_front() {
-            let elem = self.iter_deref(ins).last()?;
-
-            let build: Port = match elem {
-                StackElem::Var(v) => {
-                    let name = self
-                        .iter_deref(GlobalPtr::StackPtr(v))
-                        .last()?
-                        .as_ident()?
-                        .to_owned();
-
-                    Some(Port::Var(Ident(name)))
-                }
-                StackElem::Agent(a) => {
-                    let name = self.iter_deref(a.name).last()?.as_ident()?.to_owned();
-
-                    to_insert.extend(
-                        a.ports
-                            .iter()
-                            .copied()
-                            .map(|ptr| Some((ins.as_stack_ptr()?, ptr)))
-                            .collect::<Option<Vec<_>>>()?,
-                    );
-
-                    Some(Port::Agent(ast::Agent {
-                        name: Type(name),
-                        ports: Default::default(),
-                    }))
-                }
-                _ => None,
-            }?;
-
-            let parent = converted_agents.get_mut(&parent_ptr)?;
-            parent.ports.push(build);
-        }
+        let (mut lhs_agent, mut rhs_agent) = (ast::Agent::new(lhs_name), ast::Agent::new(rhs_name));
+        lhs_agent.ports = lhs_elem
+            .ports
+            .iter()
+            .skip(1)
+            .filter_map(|p| self.readback_elem(*p, &mut Default::default()))
+            .collect();
+        rhs_agent.ports = rhs_elem
+            .ports
+            .iter()
+            .skip(1)
+            .filter_map(|p| self.readback_elem(*p, &mut Default::default()))
+            .collect();
 
         Some(Expr::Net(Net {
-            lhs: Some(converted_agents.remove(&lhs_ptr)?),
-            rhs: Some(converted_agents.remove(&rhs_ptr)?),
+            lhs: Some(lhs_agent),
+            rhs: Some(rhs_agent),
         }))
+    }
+
+    pub fn readback_elem(&self, p: GlobalPtr, seen: &mut BTreeSet<GlobalPtr>) -> Option<Port> {
+        if seen.contains(&p) {
+            return None;
+        }
+
+        seen.insert(p);
+
+        let elem = self.iter_deref(p).last()?;
+
+        let build: Port = match elem {
+            StackElem::Var(v) => {
+                let name = self
+                    .iter_deref(GlobalPtr::StackPtr(v))
+                    .last()?
+                    .as_ident()?
+                    .to_owned();
+
+                Some(Port::Var(Ident(name)))
+            }
+            StackElem::Agent(a) => {
+                let name = self.iter_deref(a.name).last()?.as_ident()?.to_owned();
+
+                Some(Port::Agent(ast::Agent {
+                    name: Type(name),
+                    ports: a
+                        .ports
+                        .iter()
+                        .skip(1)
+                        .filter_map(|p| self.readback_elem(*p, seen))
+                        .collect::<Vec<_>>(),
+                }))
+            }
+            _ => None,
+        }?;
+
+        Some(build)
     }
 
     pub fn step(&mut self) -> Result<Option<Expr>, Error> {
