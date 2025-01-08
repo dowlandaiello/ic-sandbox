@@ -1,5 +1,5 @@
 use clap::Command;
-use inetlib::bytecode::{self, vm::Executor};
+use inetlib::bytecode2::{compilation as cc, vm::State};
 
 mod cli;
 
@@ -30,25 +30,25 @@ fn main() {
     match arg_matches.subcommand() {
         Some(("compile", arg_matches)) => {
             compile(arg_matches, |program| {
-                bincode::serialize(&bytecode::compile(program))
+                bincode::serialize(&cc::compile(program).unwrap())
                     .expect("failed to serialize compiled program")
             });
         }
         Some(("dump-compiled", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
-                bytecode::compile(program).to_string().into_bytes()
+                serde_json::to_string_pretty(&cc::compile(program).unwrap())
+                    .unwrap()
+                    .into_bytes()
             });
         }
         Some(("eval", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
-                let bytecode = bytecode::compile(program);
+                let bytecode = cc::compile(program.clone()).unwrap();
 
-                let mut exec = Executor::new(bytecode);
-                exec.step_to_end();
+                let mut exec = State::new(bytecode, program.symbol_declarations_for);
+                let results = exec.step_to_end().unwrap();
 
-                let res = exec.readback();
-
-                res.nets
+                results
                     .iter()
                     .map(|n| n.to_string())
                     .collect::<Vec<_>>()

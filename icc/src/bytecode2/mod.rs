@@ -5,6 +5,7 @@ pub mod compilation;
 pub mod vm;
 
 pub type Ptr = usize;
+pub type Offset = isize;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Program(pub(crate) Vec<StackElem>);
@@ -41,18 +42,33 @@ impl fmt::Display for Program {
 pub enum GlobalPtr {
     StackPtr(Ptr),
     AgentPtr(AgentPtr),
+    Offset(Offset),
 }
 
 impl fmt::Display for GlobalPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StackPtr(p) => write!(f, "PSTACK {}", p),
-            Self::AgentPtr(p) => write!(f, "PAGENT {}", p),
+            Self::StackPtr(p) => write!(f, "*{}", p),
+            Self::AgentPtr(p) => write!(f, "A*{}", p),
+            Self::Offset(o) => write!(f, "+{}", o),
         }
     }
 }
 
 impl GlobalPtr {
+    pub fn add_offset(&self, offset: Offset) -> Option<Self> {
+        Some(match self {
+            Self::AgentPtr(AgentPtr { stack_pos, port }) => Self::AgentPtr(AgentPtr {
+                stack_pos: *stack_pos,
+                port: port
+                    .map(|p| p.checked_add_signed(offset))
+                    .unwrap_or(usize::try_from(offset - 1).ok()),
+            }),
+            Self::StackPtr(abs_ptr) => Self::StackPtr(abs_ptr.checked_add_signed(offset)?),
+            Self::Offset(o) => Self::Offset(o + offset),
+        })
+    }
+
     pub fn as_stack_ptr(&self) -> Option<Ptr> {
         match self {
             Self::StackPtr(p) => Some(*p),
@@ -64,12 +80,19 @@ impl GlobalPtr {
 #[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct AgentPtr {
     pub stack_pos: Ptr,
-    pub port: Ptr,
+    pub port: Option<Ptr>,
 }
 
 impl fmt::Display for AgentPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PSTACK {}, {}", self.stack_pos, self.port)
+        write!(
+            f,
+            "PSTACK {}, {}",
+            self.stack_pos,
+            self.port
+                .map(|p| p.to_string())
+                .unwrap_or(String::from("NULL"))
+        )
     }
 }
 
@@ -80,6 +103,14 @@ pub enum StackElem {
     Var(Ptr),
     Ptr(GlobalPtr),
     Instr(Box<Op>),
+    Bool(bool),
+    None,
+}
+
+impl From<Op> for StackElem {
+    fn from(o: Op) -> Self {
+        Self::Instr(Box::new(o))
+    }
 }
 
 impl fmt::Display for StackElem {
@@ -99,6 +130,8 @@ impl fmt::Display for StackElem {
             Self::Var(p) => write!(f, "VAR {}", p),
             Self::Ptr(p) => write!(f, "PTR {}", p),
             Self::Instr(op) => write!(f, "OP {}", op),
+            Self::Bool(b) => write!(f, "BOOL {}", b),
+            Self::None => write!(f, "NONE"),
         }
     }
 }
@@ -114,6 +147,20 @@ impl StackElem {
     pub fn as_agent(&self) -> Option<&Agent> {
         match &self {
             Self::Agent(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    pub fn as_ptr(&self) -> Option<&GlobalPtr> {
+        match &self {
+            Self::Ptr(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_ptr_mut(&mut self) -> Option<&mut GlobalPtr> {
+        match self {
+            Self::Ptr(p) => Some(p),
             _ => None,
         }
     }
@@ -142,6 +189,14 @@ impl Agent {
 pub enum Op {
     PushStackElem(StackElem),
     PushRes(GlobalPtr),
+    Debug(GlobalPtr),
+    Cmp(GlobalPtr, GlobalPtr),
+    GoTo(Ptr),
+    JumpBy(Offset),
+    Store,
+    Deref,
+    CondExec,
+    IncrPtrBy(Offset),
 }
 
 impl fmt::Display for Op {
@@ -149,6 +204,14 @@ impl fmt::Display for Op {
         match self {
             Self::PushStackElem(elem) => write!(f, "PUSH_ELEM {}", elem),
             Self::PushRes(ptr) => write!(f, "PUSH_RES {}", ptr),
+            Self::Debug(ptr) => write!(f, "DEBUG {}", ptr),
+            Self::Cmp(a, b) => write!(f, "CMP {} {}", a, b),
+            Self::GoTo(pos) => write!(f, "GOTO {}", pos),
+            Self::JumpBy(diff) => write!(f, "JUMP_BY {}", diff),
+            Self::Store => write!(f, "STO"),
+            Self::CondExec => write!(f, "COND_EXEC"),
+            Self::Deref => write!(f, "DEREF"),
+            Self::IncrPtrBy(o) => write!(f, "INCR_PTR_BY {}", o),
         }
     }
 }

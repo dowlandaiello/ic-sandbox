@@ -102,12 +102,14 @@ pub fn compile(p: TypedProgram) -> Result<Program, Error> {
 
         let (_agent_elems, agent_ptrs) = try_compile_nets(&mut out, &lhs, &rhs)?;
 
-        if !requires_substitution {
-            let lhs_ptr = agent_ptrs
+        let lhs_ptr = GlobalPtr::StackPtr(
+            *agent_ptrs
                 .get(&ptr::addr_of!(*lhs))
-                .ok_or(Error::IllFormedNet)?;
+                .ok_or(Error::IllFormedNet)?,
+        );
 
-            compile_literal(&mut out, GlobalPtr::StackPtr(*lhs_ptr));
+        if !requires_substitution {
+            compile_literal(&mut out, lhs_ptr);
 
             continue;
         }
@@ -318,6 +320,63 @@ mod test {
                 .unwrap();
 
             assert_eq!(results.remove(0).to_string(), expected);
+        }
+    }
+
+    #[test_log::test]
+    fn test_bruh() {
+        use super::super::AgentPtr;
+
+        let cases = [(
+            "type atom
+             symbol Void: atom+
+             symbol Id: atom-, atom+
+             Void() >< Id(Void())",
+            vec![
+                StackElem::Ident("Void".to_owned()),
+                StackElem::Ident("Id".to_owned()),
+                StackElem::Agent(bc::Agent {
+                    name: GlobalPtr::StackPtr(0),
+                    ports: vec![GlobalPtr::StackPtr(3)],
+                }),
+                StackElem::Agent(bc::Agent {
+                    name: GlobalPtr::StackPtr(1),
+                    ports: vec![GlobalPtr::StackPtr(2), GlobalPtr::StackPtr(4)],
+                }),
+                StackElem::Agent(bc::Agent {
+                    name: GlobalPtr::StackPtr(0),
+                    ports: vec![GlobalPtr::StackPtr(3)],
+                }),
+                StackElem::Instr(Box::new(Op::PushRes(GlobalPtr::StackPtr(2)))),
+            ],
+        )];
+
+        for (case, expected) in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let mut program = compile(typed.clone()).unwrap();
+
+            program.0.extend([
+                StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
+                    stack_pos: 3,
+                    port: Some(0),
+                })),
+                StackElem::Ptr(GlobalPtr::StackPtr(6)).into(),
+                Op::IncrPtrBy(1).into(),
+                Op::Debug(GlobalPtr::StackPtr(6)).into(),
+                Op::GoTo(6).into(),
+            ]);
+
+            let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
+            state.step_to_end().unwrap();
         }
     }
 }

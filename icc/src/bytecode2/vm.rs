@@ -59,7 +59,15 @@ impl State {
                 .ports
                 .iter()
                 .enumerate()
-                .map(move |(port, port_value)| (AgentPtr { stack_pos, port }, port_value.clone()))
+                .map(move |(port, port_value)| {
+                    (
+                        AgentPtr {
+                            stack_pos,
+                            port: Some(port),
+                        },
+                        port_value.clone(),
+                    )
+                })
                 .collect::<Vec<_>>()
                 .into_iter(),
         )
@@ -203,13 +211,13 @@ impl State {
     }
 
     pub fn step(&mut self) -> Result<Option<Expr>, Error> {
-        let next_elem = self.stack.get(self.pos).ok_or(Error::NothingToAdvance)?;
+        let next_elem = self
+            .stack
+            .get(self.pos)
+            .ok_or(Error::NothingToAdvance)?
+            .clone();
 
         let res = match next_elem {
-            StackElem::Ident(_)
-            | StackElem::Agent { .. }
-            | StackElem::Ptr(_)
-            | StackElem::Var(_) => Ok(None),
             StackElem::Instr(op) => match op.as_ref() {
                 &Op::PushRes(p) => Ok(self.readback(p)),
                 &Op::PushStackElem(ref e) => {
@@ -217,7 +225,153 @@ impl State {
 
                     Ok(None)
                 }
+                &Op::Debug(p) => {
+                    if let Some(elem) = p
+                        .as_stack_ptr()
+                        .and_then(|ptr| self.iter_deref(GlobalPtr::StackPtr(ptr)).last())
+                    {
+                        tracing::debug!("{}", elem);
+                    }
+
+                    Ok(None)
+                }
+                &Op::Cmp(a, b) => {
+                    let (deref_a, deref_b) = (
+                        self.iter_deref(a).last().ok_or(Error::CouldNotAdvance)?,
+                        self.iter_deref(b).last().ok_or(Error::CouldNotAdvance)?,
+                    );
+
+                    self.stack.push(StackElem::Bool(deref_a == deref_b));
+
+                    Ok(None)
+                }
+                &Op::GoTo(pos) => {
+                    self.pos = pos;
+
+                    Ok(None)
+                }
+                &Op::JumpBy(diff) => {
+                    self.pos = self
+                        .pos
+                        .checked_add_signed(diff)
+                        .ok_or(Error::CouldNotAdvance)?;
+
+                    Ok(None)
+                }
+                &Op::Store => {
+                    let recent_elems = self.stack.0[(self.pos - 2)..self.pos]
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    match &recent_elems[..] {
+                        &[StackElem::Ptr(at), ref v] => match at {
+                            GlobalPtr::StackPtr(absolute_pos) => {
+                                *self
+                                    .stack
+                                    .0
+                                    .get_mut(absolute_pos)
+                                    .ok_or(Error::CouldNotAdvance)? = v.clone();
+
+                                Ok(None)
+                            }
+                            GlobalPtr::Offset(o) => {
+                                *self
+                                    .stack
+                                    .0
+                                    .get_mut(
+                                        self.pos
+                                            .checked_add_signed(o)
+                                            .ok_or(Error::CouldNotAdvance)?,
+                                    )
+                                    .ok_or(Error::CouldNotAdvance)? = v.clone();
+
+                                Ok(None)
+                            }
+                            GlobalPtr::AgentPtr(AgentPtr {
+                                stack_pos,
+                                port: Some(port),
+                            }) => {
+                                let v = if let StackElem::Ptr(p) = v {
+                                    p
+                                } else {
+                                    return Err(Error::CouldNotAdvance);
+                                };
+
+                                *self
+                                    .stack
+                                    .0
+                                    .get_mut(stack_pos)
+                                    .and_then(|elem| elem.as_agent_mut())
+                                    .ok_or(Error::CouldNotAdvance)?
+                                    .ports
+                                    .get_mut(port)
+                                    .ok_or(Error::CouldNotAdvance)? = v.clone();
+
+                                Ok(None)
+                            }
+                            GlobalPtr::AgentPtr(AgentPtr {
+                                stack_pos: _,
+                                port: None,
+                            }) => unimplemented!(),
+                        },
+                        _ => Err(Error::CouldNotAdvance),
+                    }
+                }
+                &Op::CondExec => {
+                    let recent_ops = &self.stack.0[(self.pos - 3)..self.pos];
+
+                    match &recent_ops {
+                        &[StackElem::Instr(a), StackElem::Instr(_), StackElem::Bool(true)]
+                        | &[StackElem::Instr(_), StackElem::Instr(a), StackElem::Bool(false)] => {
+                            self.stack.push(StackElem::Instr(a.clone()));
+
+                            Ok(None)
+                        }
+                        _ => Err(Error::CouldNotAdvance),
+                    }
+                }
+                &Op::Deref => {
+                    let recent_ptr = self
+                        .stack
+                        .0
+                        .get(self.pos - 1)
+                        .and_then(|elem| elem.as_ptr())
+                        .ok_or(Error::CouldNotAdvance)?;
+
+                    let deref = self
+                        .iter_deref(*recent_ptr)
+                        .filter(|elem| elem.as_ptr() != Some(recent_ptr))
+                        .last();
+
+                    self.stack.push(deref.unwrap_or(StackElem::None));
+
+                    Ok(None)
+                }
+                Op::IncrPtrBy(offset) => {
+                    let recent_ptr_ptr = self
+                        .stack
+                        .0
+                        .get(self.pos - 1)
+                        .and_then(|elem| elem.as_ptr())
+                        .and_then(|elem| elem.as_stack_ptr())
+                        .ok_or(Error::CouldNotAdvance)?
+                        .clone();
+                    let recent_ptr = self
+                        .stack
+                        .0
+                        .get_mut(recent_ptr_ptr)
+                        .and_then(|elem| elem.as_ptr_mut())
+                        .ok_or(Error::CouldNotAdvance)?;
+
+                    *recent_ptr = recent_ptr
+                        .add_offset(*offset)
+                        .ok_or(Error::CouldNotAdvance)?;
+
+                    Ok(None)
+                }
             },
+            _ => Ok(None),
         };
 
         self.pos += 1;
@@ -260,15 +414,17 @@ impl Iterator for DerefVisitor<'_> {
         let curr = {
             match self.pos? {
                 GlobalPtr::StackPtr(p) => self.view.stack.get(p).cloned(),
+                GlobalPtr::Offset(_) => unimplemented!(),
                 GlobalPtr::AgentPtr(AgentPtr { stack_pos, port }) => {
                     let elem = self.view.stack.get(stack_pos)?;
 
-                    match elem {
-                        StackElem::Agent(a) => {
+                    match (elem, port) {
+                        (StackElem::Agent(a), Some(port)) => {
                             let p = a.ports.get(port)?;
 
                             Some(StackElem::Ptr(*p))
                         }
+                        (StackElem::Agent(a), _) => Some(StackElem::Agent(a.clone())),
                         _ => None,
                     }
                     .clone()
