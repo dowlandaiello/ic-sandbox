@@ -28,4 +28,3 @@ test-log = { version = "0.2.16", features = ["trace"] }
 rustyline = { workspace = true }
 rayon = { version = "1.10.0", optional = true }
 ast-ext = { workspace = true }
-itertools = { workspace = true }

@@ -4,8 +4,10 @@ use crate::{
     heuristics::TypedProgram,
     parser::ast_lafont::{Agent, Net, Port},
 };
-use itertools::Itertools;
-use std::{collections::BTreeMap, error, fmt, ptr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error, fmt, ptr,
+};
 
 #[derive(Copy, Clone, Debug)]
 pub enum Error {
@@ -119,7 +121,10 @@ pub fn compile(p: TypedProgram) -> Result<Program, Error> {
 }
 
 fn compile_literal(program: &mut Vec<StackElem>, lhs_ptr: GlobalPtr) {
-    program.extend([StackElem::Ptr(lhs_ptr), Op::PushRes.into()]);
+    program.extend([
+        Op::PushStack(StackElem::Ptr(lhs_ptr)).into(),
+        Op::PushRes.into(),
+    ]);
 }
 
 fn try_compile_nets(
@@ -137,22 +142,32 @@ fn try_compile_nets(
 
     let start_ptr = program.len();
 
-    let all_agents = || {
-        lhs.iter_child_agents()
-            .chain(rhs.iter_child_agents())
-            .unique_by(|agent| ptr::addr_of!(**agent))
-    };
-    let all_symbols = || {
-        all_agents()
-            .map(|agent| agent.name.0.as_str())
-            .unique()
-            .enumerate()
-            .map(|(fst, snd)| (snd, fst + start_ptr))
-    };
-    let all_symbols_pos = all_symbols().collect::<BTreeMap<_, _>>();
+    let (all_agents, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
+        (Vec::new(), BTreeSet::new()),
+        |(mut agents, mut seen): (Vec<&Agent>, _), agent| {
+            if seen.contains(&ptr::addr_of!(*agent)) {
+                return (agents, seen);
+            }
+
+            agents.push(agent);
+            seen.insert(ptr::addr_of!(*agent));
+
+            (agents, seen)
+        },
+    );
+    let all_symbols = all_agents
+        .iter()
+        .map(|agent| agent.name.0.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .enumerate()
+        .map(|(fst, snd)| (snd, fst + start_ptr))
+        .collect::<Vec<_>>();
+    let all_symbols_pos = all_symbols.iter().cloned().collect::<BTreeMap<_, _>>();
 
     prog.extend(
-        all_symbols()
+        all_symbols
+            .iter()
             .map(|(k, _)| k)
             .map(|key| StackElem::Ident((*key).to_owned())),
     );
@@ -160,7 +175,8 @@ fn try_compile_nets(
     let (mut created_agent_elem, created_agent_pos): (
         BTreeMap<*const Agent, StackElem>,
         BTreeMap<*const Agent, Ptr>,
-    ) = all_agents()
+    ) = all_agents
+        .iter()
         .enumerate()
         .map(|(i, agent)| {
             let ident_ptr = all_symbols_pos.get(agent.name.0.as_str())?;
@@ -171,8 +187,11 @@ fn try_compile_nets(
             });
 
             Some((
-                (ptr::addr_of!(*agent), elem),
-                (ptr::addr_of!(*agent), i + start_ptr + all_symbols_pos.len()),
+                (ptr::addr_of!(**agent), elem),
+                (
+                    ptr::addr_of!(**agent),
+                    i + start_ptr + all_symbols_pos.len(),
+                ),
             ))
         })
         .collect::<Option<_>>()
@@ -199,9 +218,10 @@ fn try_compile_nets(
         ));
 
     // Connect agents
-    all_agents()
+    all_agents
+        .iter()
         .map(|agent| {
-            let agent_elem_ptr = created_agent_pos.get(&ptr::addr_of!(*agent))?;
+            let agent_elem_ptr = created_agent_pos.get(&ptr::addr_of!(**agent))?;
 
             let new_ports = agent
                 .ports
@@ -223,7 +243,7 @@ fn try_compile_nets(
                 .collect::<Option<Vec<_>>>()?;
 
             let agent_elem_mut = created_agent_elem
-                .get_mut(&ptr::addr_of!(*agent))?
+                .get_mut(&ptr::addr_of!(**agent))?
                 .as_agent_mut()?;
 
             agent_elem_mut.ports.extend(new_ports);
@@ -233,7 +253,13 @@ fn try_compile_nets(
         .collect::<Option<()>>()
         .ok_or(Error::CouldNotConnectAgent)?;
 
-    prog.extend(created_agent_elem.iter().map(|(_, x)| x.clone()));
+    prog.extend(
+        all_agents
+            .iter()
+            .map(|a| created_agent_elem.remove(&ptr::addr_of!(**a)))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(Error::IllFormedNet)?,
+    );
     program.extend(prog);
 
     Ok((created_agent_elem, created_agent_pos))
@@ -256,21 +282,21 @@ mod test {
              symbol Id: atom-, atom+
              Void() >< Id(Void())",
             vec![
-                StackElem::Ident("Void".to_owned()),
                 StackElem::Ident("Id".to_owned()),
+                StackElem::Ident("Void".to_owned()),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(0),
+                    name: GlobalPtr::MemPtr(1),
                     ports: vec![GlobalPtr::MemPtr(3)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(1),
+                    name: GlobalPtr::MemPtr(0),
                     ports: vec![GlobalPtr::MemPtr(2), GlobalPtr::MemPtr(4)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(0),
+                    name: GlobalPtr::MemPtr(1),
                     ports: vec![GlobalPtr::MemPtr(3)],
                 }),
-                StackElem::Ptr(GlobalPtr::MemPtr(2)),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(2))).into(),
                 Op::PushRes.into(),
             ],
         )];
@@ -328,32 +354,12 @@ mod test {
     fn test_bruh() {
         use super::super::AgentPtr;
 
-        let cases = [(
-            "type atom
+        let cases = ["type atom
              symbol Void: atom+
              symbol Id: atom-, atom+
-             Void() >< Id(Void())",
-            vec![
-                StackElem::Ident("Void".to_owned()),
-                StackElem::Ident("Id".to_owned()),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(0),
-                    ports: vec![GlobalPtr::MemPtr(3)],
-                }),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(1),
-                    ports: vec![GlobalPtr::MemPtr(2), GlobalPtr::MemPtr(4)],
-                }),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(0),
-                    ports: vec![GlobalPtr::MemPtr(3)],
-                }),
-                StackElem::Ptr(GlobalPtr::MemPtr(2)),
-                Op::PushRes.into(),
-            ],
-        )];
+             Void() >< Id(Void())"];
 
-        for (case, expected) in cases {
+        for case in cases {
             let lexed = lexer()
                 .parse(case)
                 .unwrap()
@@ -366,17 +372,28 @@ mod test {
 
             let mut program = compile(typed.clone()).unwrap();
 
+            tracing::debug!("{}", program);
+
             program.0.extend([
-                StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
+                Op::PushStack(StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
                     mem_pos: 3,
                     port: Some(0),
-                })),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(6))).into(),
+                })))
+                .into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
+                Op::StoreAt.into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
+                Op::Load.into(),
+                Op::PushStack(StackElem::Offset(1)).into(),
                 Op::IncrPtr.into(),
                 Op::Debug.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(6))).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
+                Op::StoreAt.into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(11))).into(),
                 Op::GoTo.into(),
             ]);
+
+            tracing::debug!("{}", program);
 
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
             state.step_to_end().unwrap();

@@ -38,7 +38,7 @@ impl fmt::Display for Program {
     }
 }
 
-#[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum GlobalPtr {
     MemPtr(Ptr),
     AgentPtr(AgentPtr),
@@ -77,7 +77,7 @@ impl GlobalPtr {
     }
 }
 
-#[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct AgentPtr {
     pub mem_pos: Ptr,
     pub port: Option<Ptr>,
@@ -139,6 +139,13 @@ impl fmt::Display for StackElem {
 }
 
 impl StackElem {
+    pub fn into_op(self) -> Option<Op> {
+        match self {
+            Self::Instr(op) => Some(*op),
+            _ => None,
+        }
+    }
+
     pub fn as_agent_mut(&mut self) -> Option<&mut Agent> {
         match self {
             Self::Agent(a) => Some(a),
@@ -216,7 +223,7 @@ pub enum Op {
     Debug,
     Cmp,
     GoTo,
-    Store,
+    StoreAt,
     Deref,
     CondExec,
     IncrPtr,
@@ -231,7 +238,7 @@ impl fmt::Display for Op {
             Self::Debug => write!(f, "DEBUG"),
             Self::Cmp => write!(f, "CMP"),
             Self::GoTo => write!(f, "GOTO"),
-            Self::Store => write!(f, "STO"),
+            Self::StoreAt => write!(f, "STO_AT"),
             Self::CondExec => write!(f, "COND_EXEC"),
             Self::Deref => write!(f, "DEREF"),
             Self::IncrPtr => write!(f, "INCR_PTR"),

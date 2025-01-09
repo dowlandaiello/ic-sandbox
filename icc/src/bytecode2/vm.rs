@@ -1,17 +1,16 @@
 use super::{Agent, AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::{error, fmt};
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub enum Error {
     /// There are no instructions left to advance the machine with.
     NothingToAdvance,
 
     /// The machine failed to advance
-    CouldNotAdvance,
+    CouldNotAdvance { op: Op, args: Vec<StackElem> },
 
     /// Ptr to a location that does not exist
     InvalidPtr,
@@ -21,7 +20,11 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NothingToAdvance => write!(f, "nothing to advance"),
-            Self::CouldNotAdvance => write!(f, "failed to advance"),
+            Self::CouldNotAdvance { op, args } => write!(
+                f,
+                "failed to advance with next step {} and args {:?}",
+                op, args
+            ),
             Self::InvalidPtr => write!(f, "ptr out of bounds"),
         }
     }
@@ -90,7 +93,7 @@ impl State {
     }
 
     pub fn readback(&self, p: GlobalPtr) -> Option<Expr> {
-        let pointers = self.iter_tree(p)?.unique().collect::<Vec<_>>();
+        let pointers = self.iter_tree(p)?.collect::<Vec<_>>();
 
         let typed_agents = pointers
             .iter()
@@ -213,92 +216,89 @@ impl State {
     }
 
     pub fn step(&mut self) -> Result<Option<Expr>, Error> {
-        let next_elem = self
+        let next_elem = if let StackElem::Instr(o) = self
             .src
             .get(self.pos)
+            .cloned()
             .ok_or(Error::NothingToAdvance)?
-            .clone();
+        {
+            o
+        } else {
+            self.pos += 1;
 
-        let res = match next_elem {
-            StackElem::Instr(op) => match op.as_ref() {
+            return Ok(None);
+        };
+
+        let stack_snapshot = self.stack.clone();
+
+        let res = (|| -> Option<Option<Expr>> {
+            let res = match next_elem.as_ref() {
                 &Op::PushStack(ref elem) => {
                     self.stack.push_back(elem.clone());
 
-                    Ok(None)
+                    Some(None)
                 }
                 &Op::Load => {
-                    let elem = self.stack.pop_back().ok_or(Error::CouldNotAdvance)?;
-                    let ptr = elem.as_ptr().ok_or(Error::CouldNotAdvance)?;
-                    let loaded = self.iter_deref(*ptr).last().ok_or(Error::CouldNotAdvance)?;
+                    let elem = self.stack.pop_back()?;
+                    let ptr = elem.as_ptr()?;
+                    let loaded = self.iter_deref(*ptr).last()?;
 
                     self.stack.push_back(loaded);
 
-                    Ok(None)
+                    Some(None)
                 }
-                &Op::Store => {
-                    let to_store = self.stack.pop_back().ok_or(Error::CouldNotAdvance)?;
+                &Op::StoreAt => {
                     let pos = self
                         .stack
                         .pop_back()
                         .as_ref()
-                        .and_then(|elem| elem.as_ptr()?.as_mem_ptr())
-                        .ok_or(Error::CouldNotAdvance)?;
+                        .and_then(|elem| elem.as_ptr()?.as_mem_ptr())?;
+                    let to_store = self.stack.pop_back()?;
 
                     if pos < self.src.len() {
-                        *self.src.0.get_mut(pos).ok_or(Error::CouldNotAdvance)? = to_store;
+                        *self.src.0.get_mut(pos)? = to_store;
                     } else {
                         self.src.push(to_store);
                     }
 
-                    Ok(None)
+                    Some(None)
                 }
                 &Op::PushRes => {
                     let to_push = self
                         .stack
                         .pop_back()
-                        .and_then(|elem| elem.as_ptr().cloned())
-                        .ok_or(Error::CouldNotAdvance)?;
+                        .and_then(|elem| elem.as_ptr().cloned())?;
 
-                    Ok(self.readback(to_push))
+                    Some(Some(self.readback(to_push)?))
                 }
                 &Op::Debug => {
-                    let p = self.stack.pop_back();
+                    let p = self.stack.pop_back()?;
 
-                    if let Some(elem) = p
-                        .ok_or(Error::CouldNotAdvance)?
-                        .as_ptr()
-                        .and_then(|ptr| self.iter_deref(*ptr).last())
-                    {
-                        tracing::debug!("{}", elem);
-                    }
+                    tracing::debug!("{}", p);
 
-                    Ok(None)
+                    Some(None)
                 }
                 &Op::Cmp => {
-                    let (deref_a, deref_b) = (
-                        self.stack.pop_back().ok_or(Error::CouldNotAdvance)?,
-                        self.stack.pop_back().ok_or(Error::CouldNotAdvance)?,
-                    );
+                    let (deref_a, deref_b) = (self.stack.pop_back(), self.stack.pop_back());
 
                     self.stack.push_back(StackElem::Bool(deref_a == deref_b));
 
-                    Ok(None)
+                    Some(None)
                 }
                 &Op::GoTo => {
                     let pos = self
                         .stack
                         .pop_back()
-                        .and_then(|elem| elem.as_ptr()?.as_mem_ptr())
-                        .ok_or(Error::CouldNotAdvance)?;
+                        .and_then(|elem| elem.as_ptr()?.as_mem_ptr())?;
                     self.pos = pos;
 
-                    return Ok(None);
+                    return Some(None);
                 }
                 &Op::CondExec => {
                     let recent_ops = [
-                        self.stack.pop_back().ok_or(Error::CouldNotAdvance)?,
-                        self.stack.pop_back().ok_or(Error::CouldNotAdvance)?,
-                        self.stack.pop_back().ok_or(Error::CouldNotAdvance)?,
+                        self.stack.pop_back()?,
+                        self.stack.pop_back()?,
+                        self.stack.pop_back()?,
                     ];
 
                     match &recent_ops[..] {
@@ -307,17 +307,13 @@ impl State {
                         {
                             self.stack.push_back(StackElem::Instr(a.clone()));
 
-                            Ok(None)
+                            Some(None)
                         }
-                        _ => Err(Error::CouldNotAdvance),
+                        _ => None,
                     }
                 }
                 &Op::Deref => {
-                    let recent_ptr = self
-                        .stack
-                        .pop_back()
-                        .and_then(|elem| elem.into_ptr())
-                        .ok_or(Error::CouldNotAdvance)?;
+                    let recent_ptr = self.stack.pop_back().and_then(|elem| elem.into_ptr())?;
 
                     let deref = self
                         .iter_deref(recent_ptr)
@@ -326,33 +322,28 @@ impl State {
 
                     self.stack.push_back(deref.unwrap_or(StackElem::None));
 
-                    Ok(None)
+                    Some(None)
                 }
-                Op::IncrPtr => {
-                    let recent_ptr = self
-                        .stack
-                        .pop_back()
-                        .and_then(|elem| elem.into_ptr())
-                        .ok_or(Error::CouldNotAdvance)?;
-                    let offset = self
-                        .stack
-                        .pop_back()
-                        .and_then(|elem| elem.into_offset())
-                        .ok_or(Error::CouldNotAdvance)?;
+                &Op::IncrPtr => {
+                    let offset = self.stack.pop_back().and_then(|elem| elem.into_offset())?;
+                    let recent_ptr = self.stack.pop_back().and_then(|elem| elem.into_ptr())?;
+                    self.stack
+                        .push_back(StackElem::Ptr(recent_ptr.add_offset(offset)?));
 
-                    self.stack.push_back(StackElem::Ptr(
-                        recent_ptr
-                            .add_offset(offset)
-                            .ok_or(Error::CouldNotAdvance)?,
-                    ));
-
-                    Ok(None)
+                    Some(None)
                 }
-            },
-            _ => Ok(None),
-        };
+            };
 
-        self.pos += 1;
+            self.pos += 1;
+
+            res
+        })()
+        .ok_or(Error::CouldNotAdvance {
+            op: *next_elem.clone(),
+            args: stack_snapshot.clone().into(),
+        });
+
+        tracing::trace!("executed op {} with args {:?}", next_elem, stack_snapshot);
 
         res
     }
