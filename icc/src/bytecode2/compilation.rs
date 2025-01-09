@@ -351,7 +351,7 @@ mod test {
     }
 
     #[test_log::test]
-    fn test_bruh() {
+    fn test_loop() {
         use super::super::AgentPtr;
 
         let cases = ["type atom
@@ -380,17 +380,21 @@ mod test {
                     port: Some(0),
                 })))
                 .into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
                 Op::StoreAt.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
-                Op::Load.into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
+                Op::LoadMem.into(),
                 Op::PushStack(StackElem::Offset(1)).into(),
                 Op::IncrPtr.into(),
+                Op::Copy.into(),
+                Op::Copy.into(),
                 Op::Debug.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(7))).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
                 Op::StoreAt.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(11))).into(),
-                Op::GoTo.into(),
+                Op::Deref.into(),
+                Op::PushStack(StackElem::None).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(10))).into(),
+                Op::GoToNeq.into(),
             ]);
 
             tracing::debug!("{}", program);

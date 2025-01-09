@@ -15,10 +15,6 @@ impl Program {
         self.0.get(pos)
     }
 
-    pub fn push(&mut self, elem: StackElem) {
-        self.0.push(elem)
-    }
-
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -218,30 +214,40 @@ impl Agent {
 #[derive(Ord, PartialEq, PartialOrd, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
     Load,
+    LoadMem,
     PushStack(StackElem),
     PushRes,
     Debug,
+    DebugMem,
     Cmp,
     GoTo,
     StoreAt,
     Deref,
     CondExec,
+    GoToEq,
+    GoToNeq,
     IncrPtr,
+    Copy,
 }
 
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Load => write!(f, "LOAD"),
+            Self::LoadMem => write!(f, "LOAD_MEM"),
             Self::PushStack(elem) => write!(f, "PUSH_STACK {}", elem),
             Self::PushRes => write!(f, "PUSH_RES"),
             Self::Debug => write!(f, "DEBUG"),
+            Self::DebugMem => write!(f, "DEBUG_MEM"),
             Self::Cmp => write!(f, "CMP"),
             Self::GoTo => write!(f, "GOTO"),
             Self::StoreAt => write!(f, "STO_AT"),
             Self::CondExec => write!(f, "COND_EXEC"),
+            Self::GoToEq => write!(f, "GOTO_EQ"),
+            Self::GoToNeq => write!(f, "GOTO_NEQ"),
             Self::Deref => write!(f, "DEREF"),
             Self::IncrPtr => write!(f, "INCR_PTR"),
+            Self::Copy => write!(f, "COPY"),
         }
     }
 }

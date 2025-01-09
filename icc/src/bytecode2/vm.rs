@@ -37,6 +37,7 @@ pub struct State {
     pub pos: Ptr,
     pub src: Program,
     pub stack: VecDeque<StackElem>,
+    pub mem: Vec<StackElem>,
     pub types: BTreeMap<Type, Vec<PortKind>>,
 }
 
@@ -45,6 +46,7 @@ impl State {
         Self {
             pos: Default::default(),
             src: program,
+            mem: Default::default(),
             stack: Default::default(),
             types,
         }
@@ -231,8 +233,23 @@ impl State {
 
         let stack_snapshot = self.stack.clone();
 
+        tracing::trace!(
+            "attempting op execution {} with args {:?} at line {}",
+            next_elem,
+            stack_snapshot,
+            self.pos,
+        );
+
         let res = (|| -> Option<Option<Expr>> {
             let res = match next_elem.as_ref() {
+                &Op::Copy => {
+                    let to_cpy = self.stack.pop_back()?;
+
+                    self.stack.push_back(to_cpy.clone());
+                    self.stack.push_back(to_cpy);
+
+                    Some(None)
+                }
                 &Op::PushStack(ref elem) => {
                     self.stack.push_back(elem.clone());
 
@@ -247,6 +264,15 @@ impl State {
 
                     Some(None)
                 }
+                &Op::LoadMem => {
+                    let elem = self.stack.pop_back()?;
+                    let ptr = elem.as_ptr()?;
+                    let loaded = self.mem.get(ptr.as_mem_ptr()?)?;
+
+                    self.stack.push_back(loaded.clone());
+
+                    Some(None)
+                }
                 &Op::StoreAt => {
                     let pos = self
                         .stack
@@ -255,10 +281,10 @@ impl State {
                         .and_then(|elem| elem.as_ptr()?.as_mem_ptr())?;
                     let to_store = self.stack.pop_back()?;
 
-                    if pos < self.src.len() {
-                        *self.src.0.get_mut(pos)? = to_store;
+                    if pos < self.mem.len() {
+                        *self.mem.get_mut(pos)? = to_store;
                     } else {
-                        self.src.push(to_store);
+                        self.mem.push(to_store);
                     }
 
                     Some(None)
@@ -278,6 +304,11 @@ impl State {
 
                     Some(None)
                 }
+                &Op::DebugMem => {
+                    tracing::debug!("{:?}", self.mem);
+
+                    Some(None)
+                }
                 &Op::Cmp => {
                     let (deref_a, deref_b) = (self.stack.pop_back(), self.stack.pop_back());
 
@@ -290,6 +321,36 @@ impl State {
                         .stack
                         .pop_back()
                         .and_then(|elem| elem.as_ptr()?.as_mem_ptr())?;
+                    self.pos = pos;
+
+                    return Some(None);
+                }
+                Op::GoToEq => {
+                    let pos = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
+                    let a = self.stack.pop_back()?;
+                    let b = self.stack.pop_back()?;
+
+                    if a != b {
+                        self.pos += 1;
+
+                        return Some(None);
+                    }
+
+                    self.pos = pos;
+
+                    return Some(None);
+                }
+                Op::GoToNeq => {
+                    let pos = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
+                    let a = self.stack.pop_back()?;
+                    let b = self.stack.pop_back()?;
+
+                    if a == b {
+                        self.pos += 1;
+
+                        return Some(None);
+                    }
+
                     self.pos = pos;
 
                     return Some(None);
@@ -339,11 +400,9 @@ impl State {
             res
         })()
         .ok_or(Error::CouldNotAdvance {
-            op: *next_elem.clone(),
+            op: *next_elem,
             args: stack_snapshot.clone().into(),
         });
-
-        tracing::trace!("executed op {} with args {:?}", next_elem, stack_snapshot);
 
         res
     }
