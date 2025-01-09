@@ -102,7 +102,7 @@ pub fn compile(p: TypedProgram) -> Result<Program, Error> {
 
         let (_agent_elems, agent_ptrs) = try_compile_nets(&mut out, &lhs, &rhs)?;
 
-        let lhs_ptr = GlobalPtr::StackPtr(
+        let lhs_ptr = GlobalPtr::MemPtr(
             *agent_ptrs
                 .get(&ptr::addr_of!(*lhs))
                 .ok_or(Error::IllFormedNet)?,
@@ -119,7 +119,7 @@ pub fn compile(p: TypedProgram) -> Result<Program, Error> {
 }
 
 fn compile_literal(program: &mut Vec<StackElem>, lhs_ptr: GlobalPtr) {
-    program.push(StackElem::Instr(Box::new(Op::PushRes(lhs_ptr))));
+    program.extend([StackElem::Ptr(lhs_ptr), Op::PushRes.into()]);
 }
 
 fn try_compile_nets(
@@ -133,7 +133,7 @@ fn try_compile_nets(
     ),
     Error,
 > {
-    let mut stack: Vec<StackElem> = Default::default();
+    let mut prog: Vec<StackElem> = Default::default();
 
     let start_ptr = program.len();
 
@@ -151,7 +151,7 @@ fn try_compile_nets(
     };
     let all_symbols_pos = all_symbols().collect::<BTreeMap<_, _>>();
 
-    stack.extend(
+    prog.extend(
         all_symbols()
             .map(|(k, _)| k)
             .map(|key| StackElem::Ident((*key).to_owned())),
@@ -166,7 +166,7 @@ fn try_compile_nets(
             let ident_ptr = all_symbols_pos.get(agent.name.0.as_str())?;
 
             let elem = StackElem::Agent(bc::Agent {
-                name: GlobalPtr::StackPtr(*ident_ptr),
+                name: GlobalPtr::MemPtr(*ident_ptr),
                 ports: Default::default(),
             });
 
@@ -183,7 +183,7 @@ fn try_compile_nets(
         .get_mut(&ptr::addr_of!(*lhs))
         .and_then(|elem| elem.as_agent_mut())
         .ok_or(Error::CouldNotConnectAgent)?
-        .push_port(GlobalPtr::StackPtr(
+        .push_port(GlobalPtr::MemPtr(
             *created_agent_pos
                 .get(&ptr::addr_of!(*rhs))
                 .ok_or(Error::CouldNotConnectAgent)?,
@@ -192,7 +192,7 @@ fn try_compile_nets(
         .get_mut(&ptr::addr_of!(*rhs))
         .and_then(|elem| elem.as_agent_mut())
         .ok_or(Error::CouldNotConnectAgent)?
-        .push_port(GlobalPtr::StackPtr(
+        .push_port(GlobalPtr::MemPtr(
             *created_agent_pos
                 .get(&ptr::addr_of!(*lhs))
                 .ok_or(Error::CouldNotConnectAgent)?,
@@ -214,11 +214,11 @@ fn try_compile_nets(
                         created_agent_elem
                             .get_mut(&ptr::addr_of!(*a))
                             .and_then(|elem| elem.as_agent_mut())?
-                            .push_port(GlobalPtr::StackPtr(*agent_elem_ptr));
+                            .push_port(GlobalPtr::MemPtr(*agent_elem_ptr));
 
-                        Some(GlobalPtr::StackPtr(*matching_stack_elem))
+                        Some(GlobalPtr::MemPtr(*matching_stack_elem))
                     }
-                    Port::Var(v) => Some(GlobalPtr::StackPtr(*all_symbols_pos.get(v.0.as_str())?)),
+                    Port::Var(v) => Some(GlobalPtr::MemPtr(*all_symbols_pos.get(v.0.as_str())?)),
                 })
                 .collect::<Option<Vec<_>>>()?;
 
@@ -233,8 +233,8 @@ fn try_compile_nets(
         .collect::<Option<()>>()
         .ok_or(Error::CouldNotConnectAgent)?;
 
-    stack.extend(created_agent_elem.iter().map(|(_, x)| x.clone()));
-    program.extend(stack);
+    prog.extend(created_agent_elem.iter().map(|(_, x)| x.clone()));
+    program.extend(prog);
 
     Ok((created_agent_elem, created_agent_pos))
 }
@@ -259,18 +259,19 @@ mod test {
                 StackElem::Ident("Void".to_owned()),
                 StackElem::Ident("Id".to_owned()),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(0),
-                    ports: vec![GlobalPtr::StackPtr(3)],
+                    name: GlobalPtr::MemPtr(0),
+                    ports: vec![GlobalPtr::MemPtr(3)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(1),
-                    ports: vec![GlobalPtr::StackPtr(2), GlobalPtr::StackPtr(4)],
+                    name: GlobalPtr::MemPtr(1),
+                    ports: vec![GlobalPtr::MemPtr(2), GlobalPtr::MemPtr(4)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(0),
-                    ports: vec![GlobalPtr::StackPtr(3)],
+                    name: GlobalPtr::MemPtr(0),
+                    ports: vec![GlobalPtr::MemPtr(3)],
                 }),
-                StackElem::Instr(Box::new(Op::PushRes(GlobalPtr::StackPtr(2)))),
+                StackElem::Ptr(GlobalPtr::MemPtr(2)),
+                Op::PushRes.into(),
             ],
         )];
 
@@ -336,18 +337,19 @@ mod test {
                 StackElem::Ident("Void".to_owned()),
                 StackElem::Ident("Id".to_owned()),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(0),
-                    ports: vec![GlobalPtr::StackPtr(3)],
+                    name: GlobalPtr::MemPtr(0),
+                    ports: vec![GlobalPtr::MemPtr(3)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(1),
-                    ports: vec![GlobalPtr::StackPtr(2), GlobalPtr::StackPtr(4)],
+                    name: GlobalPtr::MemPtr(1),
+                    ports: vec![GlobalPtr::MemPtr(2), GlobalPtr::MemPtr(4)],
                 }),
                 StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::StackPtr(0),
-                    ports: vec![GlobalPtr::StackPtr(3)],
+                    name: GlobalPtr::MemPtr(0),
+                    ports: vec![GlobalPtr::MemPtr(3)],
                 }),
-                StackElem::Instr(Box::new(Op::PushRes(GlobalPtr::StackPtr(2)))),
+                StackElem::Ptr(GlobalPtr::MemPtr(2)),
+                Op::PushRes.into(),
             ],
         )];
 
@@ -366,13 +368,14 @@ mod test {
 
             program.0.extend([
                 StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
-                    stack_pos: 3,
+                    mem_pos: 3,
                     port: Some(0),
                 })),
-                StackElem::Ptr(GlobalPtr::StackPtr(6)).into(),
-                Op::IncrPtrBy(1).into(),
-                Op::Debug(GlobalPtr::StackPtr(6)).into(),
-                Op::GoTo(6).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(6))).into(),
+                Op::IncrPtr.into(),
+                Op::Debug.into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(6))).into(),
+                Op::GoTo.into(),
             ]);
 
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);

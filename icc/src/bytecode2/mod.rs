@@ -40,7 +40,7 @@ impl fmt::Display for Program {
 
 #[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub enum GlobalPtr {
-    StackPtr(Ptr),
+    MemPtr(Ptr),
     AgentPtr(AgentPtr),
     Offset(Offset),
 }
@@ -48,7 +48,7 @@ pub enum GlobalPtr {
 impl fmt::Display for GlobalPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StackPtr(p) => write!(f, "*{}", p),
+            Self::MemPtr(p) => write!(f, "*{}", p),
             Self::AgentPtr(p) => write!(f, "A*{}", p),
             Self::Offset(o) => write!(f, "+{}", o),
         }
@@ -58,20 +58,20 @@ impl fmt::Display for GlobalPtr {
 impl GlobalPtr {
     pub fn add_offset(&self, offset: Offset) -> Option<Self> {
         Some(match self {
-            Self::AgentPtr(AgentPtr { stack_pos, port }) => Self::AgentPtr(AgentPtr {
-                stack_pos: *stack_pos,
+            Self::AgentPtr(AgentPtr { mem_pos, port }) => Self::AgentPtr(AgentPtr {
+                mem_pos: *mem_pos,
                 port: port
                     .map(|p| p.checked_add_signed(offset))
                     .unwrap_or(usize::try_from(offset - 1).ok()),
             }),
-            Self::StackPtr(abs_ptr) => Self::StackPtr(abs_ptr.checked_add_signed(offset)?),
+            Self::MemPtr(abs_ptr) => Self::MemPtr(abs_ptr.checked_add_signed(offset)?),
             Self::Offset(o) => Self::Offset(o + offset),
         })
     }
 
-    pub fn as_stack_ptr(&self) -> Option<Ptr> {
+    pub fn as_mem_ptr(&self) -> Option<Ptr> {
         match self {
-            Self::StackPtr(p) => Some(*p),
+            Self::MemPtr(p) => Some(*p),
             _ => None,
         }
     }
@@ -79,7 +79,7 @@ impl GlobalPtr {
 
 #[derive(Hash, Ord, PartialOrd, PartialEq, Eq, Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct AgentPtr {
-    pub stack_pos: Ptr,
+    pub mem_pos: Ptr,
     pub port: Option<Ptr>,
 }
 
@@ -88,7 +88,7 @@ impl fmt::Display for AgentPtr {
         write!(
             f,
             "PSTACK {}, {}",
-            self.stack_pos,
+            self.mem_pos,
             self.port
                 .map(|p| p.to_string())
                 .unwrap_or(String::from("NULL"))
@@ -104,6 +104,7 @@ pub enum StackElem {
     Ptr(GlobalPtr),
     Instr(Box<Op>),
     Bool(bool),
+    Offset(Offset),
     None,
 }
 
@@ -132,6 +133,7 @@ impl fmt::Display for StackElem {
             Self::Instr(op) => write!(f, "OP {}", op),
             Self::Bool(b) => write!(f, "BOOL {}", b),
             Self::None => write!(f, "NONE"),
+            Self::Offset(o) => write!(f, "OFFSET {}", o),
         }
     }
 }
@@ -154,6 +156,27 @@ impl StackElem {
     pub fn as_ptr(&self) -> Option<&GlobalPtr> {
         match &self {
             Self::Ptr(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn into_ptr(self) -> Option<GlobalPtr> {
+        match self {
+            Self::Ptr(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_offset(&self) -> Option<&Offset> {
+        match &self {
+            Self::Offset(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    pub fn into_offset(self) -> Option<Offset> {
+        match self {
+            Self::Offset(o) => Some(o),
             _ => None,
         }
     }
@@ -187,31 +210,31 @@ impl Agent {
 
 #[derive(Ord, PartialEq, PartialOrd, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
-    PushStackElem(StackElem),
-    PushRes(GlobalPtr),
-    Debug(GlobalPtr),
-    Cmp(GlobalPtr, GlobalPtr),
-    GoTo(Ptr),
-    JumpBy(Offset),
+    Load,
+    PushStack(StackElem),
+    PushRes,
+    Debug,
+    Cmp,
+    GoTo,
     Store,
     Deref,
     CondExec,
-    IncrPtrBy(Offset),
+    IncrPtr,
 }
 
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::PushStackElem(elem) => write!(f, "PUSH_ELEM {}", elem),
-            Self::PushRes(ptr) => write!(f, "PUSH_RES {}", ptr),
-            Self::Debug(ptr) => write!(f, "DEBUG {}", ptr),
-            Self::Cmp(a, b) => write!(f, "CMP {} {}", a, b),
-            Self::GoTo(pos) => write!(f, "GOTO {}", pos),
-            Self::JumpBy(diff) => write!(f, "JUMP_BY {}", diff),
+            Self::Load => write!(f, "LOAD"),
+            Self::PushStack(elem) => write!(f, "PUSH_STACK {}", elem),
+            Self::PushRes => write!(f, "PUSH_RES"),
+            Self::Debug => write!(f, "DEBUG"),
+            Self::Cmp => write!(f, "CMP"),
+            Self::GoTo => write!(f, "GOTO"),
             Self::Store => write!(f, "STO"),
             Self::CondExec => write!(f, "COND_EXEC"),
             Self::Deref => write!(f, "DEREF"),
-            Self::IncrPtrBy(o) => write!(f, "INCR_PTR_BY {}", o),
+            Self::IncrPtr => write!(f, "INCR_PTR"),
         }
     }
 }

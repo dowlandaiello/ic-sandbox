@@ -193,7 +193,7 @@ impl Agent {
         }
     }
 
-    pub fn iter_child_agents<'a>(&'a self) -> impl Iterator<Item = &Agent> + 'a {
+    pub fn iter_child_agents<'a>(&'a self) -> impl Iterator<Item = &'a Agent> + 'a {
         PortWalker::new(self)
     }
 
