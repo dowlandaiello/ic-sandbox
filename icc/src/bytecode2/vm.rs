@@ -39,7 +39,7 @@ pub struct State {
     pub stack: VecDeque<StackElem>,
     pub mem: Vec<StackElem>,
     pub types: BTreeMap<Type, Vec<PortKind>>,
-    pub redex_bag: VecDeque<(GlobalPtr, GlobalPtr)>,
+    pub redex_bag: VecDeque<(AgentPtr, AgentPtr)>,
 }
 
 impl State {
@@ -260,13 +260,21 @@ impl State {
                         .ports
                         .insert(ptr_b.port.unwrap_or_default(), GlobalPtr::AgentPtr(ptr_a));
 
+                    // If the ports are both 0 and they have complementary polarities,
+                    // mark this as a new redex
+                    if ptr_a.port.unwrap_or_default() == 0 && ptr_b.port.unwrap_or_default() == 0 {
+                        self.redex_bag.push_front((ptr_a, ptr_b));
+                    }
+
                     Some(None)
                 }
                 &Op::PopRedex => {
                     let redex = self.redex_bag.pop_back()?;
 
-                    self.stack.push_back(StackElem::Ptr(redex.0));
-                    self.stack.push_back(StackElem::Ptr(redex.1));
+                    self.stack
+                        .push_back(StackElem::Ptr(GlobalPtr::AgentPtr(redex.0)));
+                    self.stack
+                        .push_back(StackElem::Ptr(GlobalPtr::AgentPtr(redex.1)));
 
                     Some(None)
                 }
