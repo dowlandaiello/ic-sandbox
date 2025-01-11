@@ -39,6 +39,7 @@ pub struct State {
     pub stack: VecDeque<StackElem>,
     pub mem: Vec<StackElem>,
     pub types: BTreeMap<Type, Vec<PortKind>>,
+    pub redex_bag: VecDeque<(GlobalPtr, GlobalPtr)>,
 }
 
 impl State {
@@ -48,6 +49,7 @@ impl State {
             src: program,
             mem: Default::default(),
             stack: Default::default(),
+            redex_bag: Default::default(),
             types,
         }
     }
@@ -242,6 +244,55 @@ impl State {
 
         let res = (|| -> Option<Option<Expr>> {
             let res = match next_elem.as_ref() {
+                &Op::Connect => {
+                    let (ptr_a, ptr_b) = (
+                        self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?,
+                        self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?,
+                    );
+
+                    let agent_a = self.src.0.get_mut(ptr_a.mem_pos)?.as_agent_mut()?;
+                    agent_a
+                        .ports
+                        .insert(ptr_a.port.unwrap_or_default(), GlobalPtr::AgentPtr(ptr_b));
+
+                    let agent_b = self.src.0.get_mut(ptr_b.mem_pos)?.as_agent_mut()?;
+                    agent_b
+                        .ports
+                        .insert(ptr_b.port.unwrap_or_default(), GlobalPtr::AgentPtr(ptr_a));
+
+                    Some(None)
+                }
+                &Op::PopRedex => {
+                    let redex = self.redex_bag.pop_back()?;
+
+                    self.stack.push_back(StackElem::Ptr(redex.0));
+                    self.stack.push_back(StackElem::Ptr(redex.1));
+
+                    Some(None)
+                }
+                &Op::RefIndex => {
+                    let offset = self
+                        .stack
+                        .pop_back()
+                        .and_then(|elem| elem.into_ptr()?.into_mem_ptr())?;
+
+                    let ptr = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
+
+                    self.stack
+                        .push_back(StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
+                            mem_pos: ptr,
+                            port: Some(offset),
+                        })));
+
+                    Some(None)
+                }
+                &Op::PortPtr => {
+                    let port = self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?;
+                    self.stack
+                        .push_back(StackElem::Ptr(GlobalPtr::MemPtr(port.mem_pos)));
+
+                    Some(None)
+                }
                 &Op::Copy => {
                     let to_cpy = self.stack.pop_back()?;
 
@@ -267,9 +318,12 @@ impl State {
                 &Op::LoadMem => {
                     let elem = self.stack.pop_back()?;
                     let ptr = elem.as_ptr()?;
-                    let loaded = self.mem.get(ptr.as_mem_ptr()?)?;
 
-                    self.stack.push_back(loaded.clone());
+                    if let Some(loaded) = self.mem.get(ptr.as_mem_ptr()?) {
+                        self.stack.push_back(loaded.clone());
+                    } else {
+                        self.stack.push_back(StackElem::None);
+                    }
 
                     Some(None)
                 }
@@ -379,7 +433,7 @@ impl State {
                     let deref = self
                         .iter_deref(recent_ptr)
                         .filter(|elem| elem.as_ptr() != Some(&recent_ptr))
-                        .last();
+                        .next();
 
                     self.stack.push_back(deref.unwrap_or(StackElem::None));
 

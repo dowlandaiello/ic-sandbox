@@ -7,6 +7,7 @@ use crate::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     error, fmt, ptr,
+    rc::Rc,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -37,6 +38,110 @@ impl fmt::Display for Error {
 }
 
 impl error::Error for Error {}
+
+pub enum BcBlock<'a> {
+    Intro { lhs: &'a Agent, rhs: &'a Agent },
+    Sequence { stmts: Vec<Rc<BcBlock<'a>>> },
+    IterRedex { stmts: Vec<Rc<BcBlock<'a>>> },
+    PushRes(Rc<BcBlock<'a>>),
+    BlockRef(Rc<BcBlock<'a>>),
+}
+
+pub struct Compiler {}
+
+impl Compiler {
+    pub fn compile(instrs: Vec<Rc<BcBlock>>) -> Result<Program, Error> {
+        todo!()
+    }
+}
+
+pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<Rc<BcBlock<'a>>>, Error> {
+    let mut out: Vec<Rc<BcBlock<'a>>> = Default::default();
+
+    let nets_by_active_pair = p
+        .nets
+        .iter()
+        .filter_map(|net| match net {
+            Net {
+                lhs: Some(lhs),
+                rhs: Some(rhs),
+            } => Some(((lhs.name.0.as_str(), rhs.name.0.as_str()), (lhs, rhs))),
+            _ => None,
+        })
+        .collect::<BTreeMap<(&str, &str), (&Agent, &Agent)>>();
+
+    for net in &p.nets {
+        let (lhs, rhs) = match net {
+            Net {
+                lhs: Some(lhs),
+                rhs: Some(rhs),
+            } => Ok((lhs, rhs)),
+            _ => Err(Error::IllFormedNet),
+        }?;
+
+        // Nets fall into two categories:
+        // - Human-reducible constants (i.e., they can be intuitively
+        // reduced through their textual expression without any steps,
+        // e.g., Z() >< Id(Z()). They are tautological, and are compiled
+        // through strict copying
+        //
+        // TODO: In the future, optimize this to simply lazily copy
+        // the input expression
+        //
+        // - Machine-reducible dynamic expressions (i.e, they require
+        // steps to be reduced, and rely on intermediate reductions,
+        // either literal, or themselves requiring reduction). Reduction
+        // involves either: constant/literal copying, or substitution
+
+        // Nets are literals if they do not mention
+        // any nets which are members in an active pair in the program
+
+        let requires_substitution = [lhs, rhs].iter().any(|redex_mem| {
+            redex_mem
+                .iter_child_agents()
+                .filter(|agent| agent != &lhs && agent != &rhs)
+                .any(|child| {
+                    (|| {
+                        let (lhs, rhs) = p.try_get_redex(child)?;
+
+                        // The agent is not literal and requires substitution
+                        // if there is an existing rule for the pair of
+                        // agents
+                        if nets_by_active_pair
+                            .contains_key(&(lhs.name.0.as_str(), rhs.name.0.as_str()))
+                        {
+                            Some((lhs, rhs))
+                        } else {
+                            None
+                        }
+                    })()
+                    .is_some()
+                })
+        });
+
+        let net_ref = Rc::new(BcBlock::Intro { lhs, rhs });
+
+        out.push(net_ref.clone());
+
+        if !requires_substitution {
+            out.push(Rc::new(BcBlock::PushRes(Rc::new(BcBlock::BlockRef(
+                net_ref,
+            )))));
+
+            continue;
+        }
+
+        // While we have a redex left,
+        out.push(Rc::new(BcBlock::IterRedex {
+            stmts: vec![
+                // The redex will be lhs, rhs
+                // in stack [0], [-1]
+            ],
+        }));
+    }
+
+    Ok(out)
+}
 
 pub fn compile(p: TypedProgram) -> Result<Program, Error> {
     let mut out: Vec<StackElem> = Default::default();
@@ -102,7 +207,7 @@ pub fn compile(p: TypedProgram) -> Result<Program, Error> {
                 })
         });
 
-        let (_agent_elems, agent_ptrs) = try_compile_nets(&mut out, &lhs, &rhs)?;
+        let (_agent_elems, agent_ptrs) = try_compile_net(&mut out, &lhs, &rhs)?;
 
         let lhs_ptr = GlobalPtr::MemPtr(
             *agent_ptrs
@@ -127,7 +232,7 @@ fn compile_literal(program: &mut Vec<StackElem>, lhs_ptr: GlobalPtr) {
     ]);
 }
 
-fn try_compile_nets(
+fn try_compile_net(
     program: &mut Vec<StackElem>,
     lhs: &Agent,
     rhs: &Agent,
@@ -380,22 +485,45 @@ mod test {
                     port: Some(0),
                 })))
                 .into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
-                Op::StoreAt.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
-                Op::LoadMem.into(),
                 Op::Copy.into(),
                 Op::Debug.into(),
                 Op::PushStack(StackElem::Offset(1)).into(),
                 Op::IncrPtr.into(),
                 Op::Copy.into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(0))).into(),
-                Op::StoreAt.into(),
                 Op::Deref.into(),
                 Op::PushStack(StackElem::None).into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(10))).into(),
+                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(8))).into(),
                 Op::GoToNeq.into(),
             ]);
+
+            tracing::debug!("{}", program);
+
+            let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
+            state.step_to_end().unwrap();
+        }
+    }
+
+    #[test_log::test]
+    fn identify_redex() {
+        let cases = ["type atom
+             symbol Void: atom+
+             symbol Id: atom-, atom+
+             Void() >< Id(Void())"];
+
+        for case in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let mut program = compile(typed.clone()).unwrap();
+
+            tracing::debug!("{}", program);
 
             tracing::debug!("{}", program);
 

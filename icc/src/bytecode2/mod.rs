@@ -52,6 +52,27 @@ impl fmt::Display for GlobalPtr {
 }
 
 impl GlobalPtr {
+    pub fn as_agent_ptr(&self) -> Option<&AgentPtr> {
+        match &self {
+            Self::AgentPtr(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn into_mem_ptr(self) -> Option<Ptr> {
+        match self {
+            Self::MemPtr(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn into_agent_ptr(self) -> Option<AgentPtr> {
+        match self {
+            Self::AgentPtr(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub fn add_offset(&self, offset: Offset) -> Option<Self> {
         Some(match self {
             Self::AgentPtr(AgentPtr { mem_pos, port }) => Self::AgentPtr(AgentPtr {
@@ -101,6 +122,7 @@ pub enum StackElem {
     Instr(Box<Op>),
     Bool(bool),
     Offset(Offset),
+    Num(usize),
     None,
 }
 
@@ -130,6 +152,7 @@ impl fmt::Display for StackElem {
             Self::Bool(b) => write!(f, "BOOL {}", b),
             Self::None => write!(f, "NONE"),
             Self::Offset(o) => write!(f, "OFFSET {}", o),
+            Self::Num(n) => write!(f, "NUM {}", n),
         }
     }
 }
@@ -223,11 +246,15 @@ pub enum Op {
     GoTo,
     StoreAt,
     Deref,
+    PortPtr,
     CondExec,
     GoToEq,
     GoToNeq,
     IncrPtr,
     Copy,
+    RefIndex,
+    PopRedex,
+    Connect,
 }
 
 impl fmt::Display for Op {
@@ -246,8 +273,12 @@ impl fmt::Display for Op {
             Self::GoToEq => write!(f, "GOTO_EQ"),
             Self::GoToNeq => write!(f, "GOTO_NEQ"),
             Self::Deref => write!(f, "DEREF"),
+            Self::PortPtr => write!(f, "PORT_NUM"),
             Self::IncrPtr => write!(f, "INCR_PTR"),
             Self::Copy => write!(f, "COPY"),
+            Self::RefIndex => write!(f, "REF_INDEX"),
+            Self::PopRedex => write!(f, "POP_REDEX"),
+            Self::Connect => write!(f, "CONN"),
         }
     }
 }
