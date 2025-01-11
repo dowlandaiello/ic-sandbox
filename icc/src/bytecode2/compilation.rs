@@ -6,7 +6,9 @@ use crate::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    error, fmt, ptr,
+    error, fmt,
+    iter::Extend,
+    ptr,
     rc::Rc,
 };
 
@@ -39,24 +41,261 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
 pub enum BcBlock<'a> {
-    Intro { lhs: &'a Agent, rhs: &'a Agent },
-    Sequence { stmts: Vec<Rc<BcBlock<'a>>> },
-    IterRedex { stmts: Vec<Rc<BcBlock<'a>>> },
-    PushRes(Rc<BcBlock<'a>>),
-    BlockRef(Rc<BcBlock<'a>>),
+    Referable(Rc<NetRef<'a>>),
+    Substitute,
+    PushRes(Rc<NetRef<'a>>),
+    IterRedex { stmts: Vec<BcBlock<'a>> },
 }
 
-pub struct Compiler {}
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
+pub enum NetRef<'a> {
+    Intro {
+        lhs: &'a Agent,
+        rhs: &'a Agent,
+    },
+    MatchingRule,
+    SubstitutionPositions {
+        of_parent: Option<Rc<NetRef<'a>>>,
+        of_child: Option<Rc<NetRef<'a>>>,
+    },
+    CloneNet(Option<Rc<NetRef<'a>>>),
+}
 
-impl Compiler {
-    pub fn compile(instrs: Vec<Rc<BcBlock>>) -> Result<Program, Error> {
-        todo!()
+#[derive(Debug, Default)]
+pub struct Compiler<'a> {
+    src: Program,
+    agent_ptrs: BTreeMap<Rc<NetRef<'a>>, Ptr>,
+}
+
+impl<'a> Compiler<'a> {
+    fn try_compile_net(
+        start_ptr: Ptr,
+        lhs: &Agent,
+        rhs: &Agent,
+    ) -> Result<
+        (
+            Vec<StackElem>,
+            BTreeMap<*const Agent, StackElem>,
+            BTreeMap<*const Agent, Ptr>,
+        ),
+        Error,
+    > {
+        let mut prog: Vec<StackElem> = Default::default();
+
+        let (all_agents, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
+            (Vec::new(), BTreeSet::new()),
+            |(mut agents, mut seen): (Vec<&Agent>, _), agent| {
+                if seen.contains(&ptr::addr_of!(*agent)) {
+                    return (agents, seen);
+                }
+
+                agents.push(agent);
+                seen.insert(ptr::addr_of!(*agent));
+
+                (agents, seen)
+            },
+        );
+        let all_symbols = all_agents
+            .iter()
+            .map(|agent| agent.name.0.as_str())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(fst, snd)| (snd, fst + start_ptr))
+            .collect::<Vec<_>>();
+        let all_symbols_pos = all_symbols.iter().cloned().collect::<BTreeMap<_, _>>();
+
+        prog.extend(
+            all_symbols
+                .iter()
+                .map(|(k, _)| k)
+                .map(|key| StackElem::Ident((*key).to_owned())),
+        );
+
+        let (mut created_agent_elem, created_agent_pos): (
+            BTreeMap<*const Agent, StackElem>,
+            BTreeMap<*const Agent, Ptr>,
+        ) = all_agents
+            .iter()
+            .enumerate()
+            .map(|(i, agent)| {
+                let ident_ptr = all_symbols_pos.get(agent.name.0.as_str())?;
+
+                let elem = StackElem::Agent(bc::Agent {
+                    name: GlobalPtr::MemPtr(*ident_ptr),
+                    ports: Default::default(),
+                });
+
+                Some((
+                    (ptr::addr_of!(**agent), elem),
+                    (
+                        ptr::addr_of!(**agent),
+                        i + start_ptr + all_symbols_pos.len(),
+                    ),
+                ))
+            })
+            .collect::<Option<_>>()
+            .ok_or(Error::MissingSymbolDeclaration)?;
+
+        // Connect lhs and rhs agents
+        created_agent_elem
+            .get_mut(&ptr::addr_of!(*lhs))
+            .and_then(|elem| elem.as_agent_mut())
+            .ok_or(Error::CouldNotConnectAgent)?
+            .push_port(GlobalPtr::MemPtr(
+                *created_agent_pos
+                    .get(&ptr::addr_of!(*rhs))
+                    .ok_or(Error::CouldNotConnectAgent)?,
+            ));
+        created_agent_elem
+            .get_mut(&ptr::addr_of!(*rhs))
+            .and_then(|elem| elem.as_agent_mut())
+            .ok_or(Error::CouldNotConnectAgent)?
+            .push_port(GlobalPtr::MemPtr(
+                *created_agent_pos
+                    .get(&ptr::addr_of!(*lhs))
+                    .ok_or(Error::CouldNotConnectAgent)?,
+            ));
+
+        // Connect agents
+        all_agents
+            .iter()
+            .map(|agent| {
+                let agent_elem_ptr = created_agent_pos.get(&ptr::addr_of!(**agent))?;
+
+                let new_ports = agent
+                    .ports
+                    .iter()
+                    .map(|port| match port {
+                        Port::Agent(a) => {
+                            let matching_stack_elem = created_agent_pos.get(&ptr::addr_of!(*a))?;
+
+                            // Connect child to us as well in first position
+                            created_agent_elem
+                                .get_mut(&ptr::addr_of!(*a))
+                                .and_then(|elem| elem.as_agent_mut())?
+                                .push_port(GlobalPtr::MemPtr(*agent_elem_ptr));
+
+                            Some(GlobalPtr::MemPtr(*matching_stack_elem))
+                        }
+                        Port::Var(v) => {
+                            Some(GlobalPtr::MemPtr(*all_symbols_pos.get(v.0.as_str())?))
+                        }
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+
+                let agent_elem_mut = created_agent_elem
+                    .get_mut(&ptr::addr_of!(**agent))?
+                    .as_agent_mut()?;
+
+                agent_elem_mut.ports.extend(new_ports);
+
+                Some(())
+            })
+            .collect::<Option<()>>()
+            .ok_or(Error::CouldNotConnectAgent)?;
+
+        prog.extend(
+            all_agents
+                .iter()
+                .map(|a| created_agent_elem.remove(&ptr::addr_of!(**a)))
+                .collect::<Option<Vec<_>>>()
+                .ok_or(Error::IllFormedNet)?,
+        );
+
+        Ok((prog, created_agent_elem, created_agent_pos))
+    }
+
+    pub fn compile(&mut self, instrs: Vec<BcBlock<'a>>) -> Result<(), Error> {
+        self.src = Program(Self::compile_section(0, &mut self.agent_ptrs, instrs)?);
+
+        Ok(())
+    }
+
+    fn compile_section(
+        start_ptr: Ptr,
+        agent_ptrs: &mut BTreeMap<Rc<NetRef<'a>>, Ptr>,
+        instrs: Vec<BcBlock<'a>>,
+    ) -> Result<Vec<StackElem>, Error> {
+        let mut src = Vec::new();
+
+        for instr in instrs {
+            match instr {
+                BcBlock::Referable(r) => match r.clone().as_ref() {
+                    NetRef::CloneNet(from) => {
+                        if let Some(from) = from {
+                            let ptr = agent_ptrs.get(from.as_ref()).unwrap().clone();
+
+                            src.push(Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(ptr))).into());
+                        }
+
+                        src.push(Op::CloneNet.into());
+                    }
+                    NetRef::Intro { lhs, rhs } => {
+                        let (section, _, intro_agent_ptrs) =
+                            Self::try_compile_net(start_ptr + src.len() - 1, lhs, rhs)?;
+                        src.extend(section);
+
+                        agent_ptrs
+                            .extend(intro_agent_ptrs.into_iter().map(|(_, v)| (r.clone(), v)));
+                    }
+                    NetRef::MatchingRule => {
+                        src.push(Op::PushMatchingRule.into());
+                    }
+                    NetRef::SubstitutionPositions {
+                        of_parent,
+                        of_child,
+                    } => {
+                        if let Some(parent_instr) = of_parent {
+                            let ptr = agent_ptrs.get(parent_instr.as_ref()).unwrap();
+                            src.push(Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into());
+                        }
+
+                        if let Some(child_instr) = of_child {
+                            let ptr = agent_ptrs.get(child_instr.as_ref()).unwrap();
+                            src.push(Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into());
+                        }
+
+                        src.push(Op::PushSubstitutionPositions.into());
+                    }
+                },
+                BcBlock::IterRedex { stmts } => {
+                    let loop_start_ptr = start_ptr + src.len() - 1;
+
+                    src.extend([Op::PopRedex.into()]);
+                    src.extend(Self::compile_section(
+                        loop_start_ptr + 1,
+                        agent_ptrs,
+                        stmts,
+                    )?);
+                    src.extend([
+                        Op::PushStack(StackElem::None).into(),
+                        Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(loop_start_ptr))).into(),
+                        Op::GoToNeq.into(),
+                    ]);
+                }
+                BcBlock::PushRes(from) => {
+                    let ptr = agent_ptrs.get(from.as_ref()).unwrap();
+
+                    src.extend([
+                        Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into(),
+                        Op::PushRes.into(),
+                    ]);
+                }
+                BcBlock::Substitute => {
+                    src.push(Op::Substitute.into());
+                }
+            }
+        }
+
+        Ok(src)
     }
 }
 
-pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<Rc<BcBlock<'a>>>, Error> {
-    let mut out: Vec<Rc<BcBlock<'a>>> = Default::default();
+pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
+    let mut out: Vec<BcBlock<'a>> = Default::default();
 
     let nets_by_active_pair = p
         .nets
@@ -119,255 +358,44 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<Rc<BcBlock<'a>>>, Error
                 })
         });
 
-        let net_ref = Rc::new(BcBlock::Intro { lhs, rhs });
+        let net_ref = Rc::new(NetRef::Intro { lhs, rhs });
 
-        out.push(net_ref.clone());
+        out.push(BcBlock::Referable(net_ref.clone()));
 
         if !requires_substitution {
-            out.push(Rc::new(BcBlock::PushRes(Rc::new(BcBlock::BlockRef(
-                net_ref,
-            )))));
+            out.push(BcBlock::PushRes(net_ref));
 
             continue;
         }
-
-        // While we have a redex left,
-        out.push(Rc::new(BcBlock::IterRedex {
-            stmts: vec![
-                // The redex will be lhs, rhs
-                // in stack [0], [-1]
-            ],
-        }));
     }
+
+    let matching_rule_before_copy = Rc::new(NetRef::MatchingRule);
+    let clone_net = Rc::new(NetRef::CloneNet(None));
+    let cloned_sub_positions = Rc::new(NetRef::SubstitutionPositions {
+        of_parent: None,
+        of_child: None,
+    });
+
+    // While we have a redex left,
+    out.push(BcBlock::IterRedex {
+        stmts: vec![
+            // The redex will be lhs port pointer, rhs port pointer
+            // in stack [0], [-1]
+            BcBlock::Referable(matching_rule_before_copy),
+            BcBlock::Referable(clone_net),
+            BcBlock::Referable(cloned_sub_positions.clone()),
+            BcBlock::Substitute,
+        ],
+    });
 
     Ok(out)
 }
 
 pub fn compile(p: TypedProgram) -> Result<Program, Error> {
-    let mut out: Vec<StackElem> = Default::default();
+    let mut compiler = Compiler::default();
+    compiler.compile(precompile(&p)?)?;
 
-    let nets_by_active_pair = p
-        .nets
-        .iter()
-        .filter_map(|net| match net {
-            Net {
-                lhs: Some(lhs),
-                rhs: Some(rhs),
-            } => Some(((lhs.name.0.as_str(), rhs.name.0.as_str()), (lhs, rhs))),
-            _ => None,
-        })
-        .collect::<BTreeMap<(&str, &str), (&Agent, &Agent)>>();
-
-    for net in &p.nets {
-        let (lhs, rhs) = match net {
-            Net {
-                lhs: Some(lhs),
-                rhs: Some(rhs),
-            } => Ok((lhs, rhs)),
-            _ => Err(Error::IllFormedNet),
-        }?;
-
-        // Nets fall into two categories:
-        // - Human-reducible constants (i.e., they can be intuitively
-        // reduced through their textual expression without any steps,
-        // e.g., Z() >< Id(Z()). They are tautological, and are compiled
-        // through strict copying
-        //
-        // TODO: In the future, optimize this to simply lazily copy
-        // the input expression
-        //
-        // - Machine-reducible dynamic expressions (i.e, they require
-        // steps to be reduced, and rely on intermediate reductions,
-        // either literal, or themselves requiring reduction). Reduction
-        // involves either: constant/literal copying, or substitution
-
-        // Nets are literals if they do not mention
-        // any nets which are members in an active pair in the program
-
-        let requires_substitution = [lhs, rhs].iter().any(|redex_mem| {
-            redex_mem
-                .iter_child_agents()
-                .filter(|agent| agent != &lhs && agent != &rhs)
-                .any(|child| {
-                    (|| {
-                        let (lhs, rhs) = p.try_get_redex(child)?;
-
-                        // The agent is not literal and requires substitution
-                        // if there is an existing rule for the pair of
-                        // agents
-                        if nets_by_active_pair
-                            .contains_key(&(lhs.name.0.as_str(), rhs.name.0.as_str()))
-                        {
-                            Some((lhs, rhs))
-                        } else {
-                            None
-                        }
-                    })()
-                    .is_some()
-                })
-        });
-
-        let (_agent_elems, agent_ptrs) = try_compile_net(&mut out, &lhs, &rhs)?;
-
-        let lhs_ptr = GlobalPtr::MemPtr(
-            *agent_ptrs
-                .get(&ptr::addr_of!(*lhs))
-                .ok_or(Error::IllFormedNet)?,
-        );
-
-        if !requires_substitution {
-            compile_literal(&mut out, lhs_ptr);
-
-            continue;
-        }
-    }
-
-    Ok(Program(out))
-}
-
-fn compile_literal(program: &mut Vec<StackElem>, lhs_ptr: GlobalPtr) {
-    program.extend([
-        Op::PushStack(StackElem::Ptr(lhs_ptr)).into(),
-        Op::PushRes.into(),
-    ]);
-}
-
-fn try_compile_net(
-    program: &mut Vec<StackElem>,
-    lhs: &Agent,
-    rhs: &Agent,
-) -> Result<
-    (
-        BTreeMap<*const Agent, StackElem>,
-        BTreeMap<*const Agent, Ptr>,
-    ),
-    Error,
-> {
-    let mut prog: Vec<StackElem> = Default::default();
-
-    let start_ptr = program.len();
-
-    let (all_agents, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
-        (Vec::new(), BTreeSet::new()),
-        |(mut agents, mut seen): (Vec<&Agent>, _), agent| {
-            if seen.contains(&ptr::addr_of!(*agent)) {
-                return (agents, seen);
-            }
-
-            agents.push(agent);
-            seen.insert(ptr::addr_of!(*agent));
-
-            (agents, seen)
-        },
-    );
-    let all_symbols = all_agents
-        .iter()
-        .map(|agent| agent.name.0.as_str())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .enumerate()
-        .map(|(fst, snd)| (snd, fst + start_ptr))
-        .collect::<Vec<_>>();
-    let all_symbols_pos = all_symbols.iter().cloned().collect::<BTreeMap<_, _>>();
-
-    prog.extend(
-        all_symbols
-            .iter()
-            .map(|(k, _)| k)
-            .map(|key| StackElem::Ident((*key).to_owned())),
-    );
-
-    let (mut created_agent_elem, created_agent_pos): (
-        BTreeMap<*const Agent, StackElem>,
-        BTreeMap<*const Agent, Ptr>,
-    ) = all_agents
-        .iter()
-        .enumerate()
-        .map(|(i, agent)| {
-            let ident_ptr = all_symbols_pos.get(agent.name.0.as_str())?;
-
-            let elem = StackElem::Agent(bc::Agent {
-                name: GlobalPtr::MemPtr(*ident_ptr),
-                ports: Default::default(),
-            });
-
-            Some((
-                (ptr::addr_of!(**agent), elem),
-                (
-                    ptr::addr_of!(**agent),
-                    i + start_ptr + all_symbols_pos.len(),
-                ),
-            ))
-        })
-        .collect::<Option<_>>()
-        .ok_or(Error::MissingSymbolDeclaration)?;
-
-    // Connect lhs and rhs agents
-    created_agent_elem
-        .get_mut(&ptr::addr_of!(*lhs))
-        .and_then(|elem| elem.as_agent_mut())
-        .ok_or(Error::CouldNotConnectAgent)?
-        .push_port(GlobalPtr::MemPtr(
-            *created_agent_pos
-                .get(&ptr::addr_of!(*rhs))
-                .ok_or(Error::CouldNotConnectAgent)?,
-        ));
-    created_agent_elem
-        .get_mut(&ptr::addr_of!(*rhs))
-        .and_then(|elem| elem.as_agent_mut())
-        .ok_or(Error::CouldNotConnectAgent)?
-        .push_port(GlobalPtr::MemPtr(
-            *created_agent_pos
-                .get(&ptr::addr_of!(*lhs))
-                .ok_or(Error::CouldNotConnectAgent)?,
-        ));
-
-    // Connect agents
-    all_agents
-        .iter()
-        .map(|agent| {
-            let agent_elem_ptr = created_agent_pos.get(&ptr::addr_of!(**agent))?;
-
-            let new_ports = agent
-                .ports
-                .iter()
-                .map(|port| match port {
-                    Port::Agent(a) => {
-                        let matching_stack_elem = created_agent_pos.get(&ptr::addr_of!(*a))?;
-
-                        // Connect child to us as well in first position
-                        created_agent_elem
-                            .get_mut(&ptr::addr_of!(*a))
-                            .and_then(|elem| elem.as_agent_mut())?
-                            .push_port(GlobalPtr::MemPtr(*agent_elem_ptr));
-
-                        Some(GlobalPtr::MemPtr(*matching_stack_elem))
-                    }
-                    Port::Var(v) => Some(GlobalPtr::MemPtr(*all_symbols_pos.get(v.0.as_str())?)),
-                })
-                .collect::<Option<Vec<_>>>()?;
-
-            let agent_elem_mut = created_agent_elem
-                .get_mut(&ptr::addr_of!(**agent))?
-                .as_agent_mut()?;
-
-            agent_elem_mut.ports.extend(new_ports);
-
-            Some(())
-        })
-        .collect::<Option<()>>()
-        .ok_or(Error::CouldNotConnectAgent)?;
-
-    prog.extend(
-        all_agents
-            .iter()
-            .map(|a| created_agent_elem.remove(&ptr::addr_of!(**a)))
-            .collect::<Option<Vec<_>>>()
-            .ok_or(Error::IllFormedNet)?,
-    );
-    program.extend(prog);
-
-    Ok((created_agent_elem, created_agent_pos))
+    Ok(compiler.src)
 }
 
 #[cfg(test)]

@@ -32,6 +32,11 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
+pub struct Substitution {
+    src: GlobalPtr,
+    dest: GlobalPtr,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub pos: Ptr,
@@ -39,19 +44,50 @@ pub struct State {
     pub stack: VecDeque<StackElem>,
     pub mem: Vec<StackElem>,
     pub types: BTreeMap<Type, Vec<PortKind>>,
-    pub redex_bag: VecDeque<(AgentPtr, AgentPtr)>,
+    pub redex_bag: VecDeque<(Ptr, Ptr)>,
 }
 
 impl State {
     pub fn new(program: Program, types: BTreeMap<Type, Vec<PortKind>>) -> Self {
-        Self {
+        let mut s = Self {
             pos: Default::default(),
             src: program,
             mem: Default::default(),
             stack: Default::default(),
             redex_bag: Default::default(),
             types,
-        }
+        };
+
+        s.refresh_redex_bag();
+
+        s
+    }
+
+    pub fn refresh_redex_bag(&mut self) {
+        self.redex_bag = self
+            .iter_redex_dyn()
+            .map(|((a_pos, _), (b_pos, _))| (a_pos, b_pos))
+            .collect();
+    }
+
+    pub fn iter_redex_dyn(&self) -> impl Iterator<Item = ((Ptr, &Agent), (Ptr, &Agent))> {
+        let agents = self
+            .src
+            .0
+            .iter()
+            .enumerate()
+            .filter_map(|(i, elem)| Some((i, elem.as_agent()?)));
+        agents.filter_map(|(mem_pos, agent)| {
+            let a = agent;
+            let b_port_ptr = agent.ports.get(0)?.as_agent_ptr()?;
+            let b = self.src.get(b_port_ptr.mem_pos)?.as_agent()?;
+
+            if b_port_ptr.port != Some(0) {
+                return None;
+            }
+
+            Some(((mem_pos, a), (b_port_ptr.mem_pos, b)))
+        })
     }
 
     pub fn iter_deref<'a>(&'a self, p: GlobalPtr) -> impl Iterator<Item = StackElem> + 'a {
@@ -87,6 +123,81 @@ impl State {
         stack_ptr: GlobalPtr,
     ) -> Option<impl Iterator<Item = GlobalPtr>> {
         Some(self.iter_ports(stack_ptr)?.map(|(_, x)| x))
+    }
+
+    pub fn subset_tree_positions(
+        &self,
+        ptr_child: Ptr,
+        ptr_parent: Ptr,
+    ) -> Option<Vec<Substitution>> {
+        let mut iter_child = self
+            .iter_tree(GlobalPtr::MemPtr(ptr_child))?
+            .collect::<Vec<_>>();
+        let mut positions = Vec::new();
+
+        for (ptr, node) in self
+            .iter_tree(GlobalPtr::MemPtr(ptr_parent))?
+            .into_iter()
+            .map(|ptr| Some((ptr, self.iter_deref(ptr).last()?)))
+            .collect::<Option<Vec<_>>>()?
+        {
+            let corresponding = iter_child.remove(0);
+            let corresponding_elem = self.iter_deref(corresponding).last()?;
+
+            if corresponding_elem == node {
+                continue;
+            }
+
+            // Advance the corresponding pointers to the next non-child pointer
+            if matches!(node, StackElem::Var(_)) {
+                positions.push(Substitution {
+                    src: ptr,
+                    dest: corresponding,
+                });
+
+                // Skip all child pointers
+                let mut subtree = self.iter_tree(corresponding)?;
+                iter_child = iter_child
+                    .into_iter()
+                    .skip_while(|x| subtree.next() == Some(*x))
+                    .collect();
+
+                continue;
+            }
+
+            return None;
+        }
+
+        Some(positions)
+    }
+
+    pub fn clone_tree(&mut self, p: Ptr) -> Option<Ptr> {
+        let elem = self.iter_deref(GlobalPtr::MemPtr(p)).last()?;
+
+        match elem {
+            StackElem::Agent(a) => {
+                let cloned_children = a
+                    .ports
+                    .iter()
+                    .map(|child| child.as_agent_ptr())
+                    .map(|aptr| {
+                        aptr.and_then(|aptr| {
+                            Some(GlobalPtr::AgentPtr(AgentPtr {
+                                mem_pos: self.clone_tree(aptr.mem_pos)?,
+                                port: aptr.port,
+                            }))
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                self.src.0.push(StackElem::Agent(Agent {
+                    name: a.name,
+                    ports: cloned_children,
+                }));
+
+                Some(self.src.0.len() - 1)
+            }
+            _ => Some(p),
+        }
     }
 
     pub fn iter_tree<'a>(
@@ -244,37 +355,145 @@ impl State {
 
         let res = (|| -> Option<Option<Expr>> {
             let res = match next_elem.as_ref() {
-                &Op::Connect => {
-                    let (ptr_a, ptr_b) = (
-                        self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?,
-                        self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?,
-                    );
+                &Op::Substitute => {
+                    while let (Some(src), Some(dest)) = (
+                        self.stack.pop_back()?.as_ptr()?.as_agent_ptr(),
+                        self.stack.pop_back()?.as_ptr()?.as_agent_ptr(),
+                    ) {
+                        *self
+                            .src
+                            .0
+                            .get_mut(src.mem_pos)?
+                            .as_agent_mut()?
+                            .ports
+                            .get_mut(src.port?)? = GlobalPtr::AgentPtr(*dest);
+                        *self
+                            .src
+                            .0
+                            .get_mut(dest.mem_pos)?
+                            .as_agent_mut()?
+                            .ports
+                            .get_mut(dest.port?)? = GlobalPtr::AgentPtr(*src);
 
-                    let agent_a = self.src.0.get_mut(ptr_a.mem_pos)?.as_agent_mut()?;
-                    agent_a
-                        .ports
-                        .insert(ptr_a.port.unwrap_or_default(), GlobalPtr::AgentPtr(ptr_b));
-
-                    let agent_b = self.src.0.get_mut(ptr_b.mem_pos)?.as_agent_mut()?;
-                    agent_b
-                        .ports
-                        .insert(ptr_b.port.unwrap_or_default(), GlobalPtr::AgentPtr(ptr_a));
-
-                    // If the ports are both 0 and they have complementary polarities,
-                    // mark this as a new redex
-                    if ptr_a.port.unwrap_or_default() == 0 && ptr_b.port.unwrap_or_default() == 0 {
-                        self.redex_bag.push_front((ptr_a, ptr_b));
+                        // This is a new redex
+                        if src.port == Some(0) && dest.port == Some(0) {
+                            self.redex_bag.push_back((src.mem_pos, dest.mem_pos));
+                        }
                     }
 
                     Some(None)
                 }
-                &Op::PopRedex => {
-                    let redex = self.redex_bag.pop_back()?;
+                &Op::PushSubstitutionPositions => {
+                    let parent_tree = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
+                    let child_tree = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
 
-                    self.stack
-                        .push_back(StackElem::Ptr(GlobalPtr::AgentPtr(redex.0)));
-                    self.stack
-                        .push_back(StackElem::Ptr(GlobalPtr::AgentPtr(redex.1)));
+                    let positions = self.subset_tree_positions(child_tree, parent_tree);
+
+                    if let Some(positions) = positions {
+                        for Substitution { src, dest } in positions {
+                            self.stack.push_back(StackElem::Ptr(src));
+                            self.stack.push_back(StackElem::Ptr(dest));
+                        }
+                    } else {
+                        self.stack.push_back(StackElem::None);
+                    }
+
+                    Some(None)
+                }
+                &Op::PushMatchingRule => {
+                    let (ptr_lhs, ptr_rhs) = (
+                        self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?,
+                        self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?,
+                    );
+
+                    let agent_a = self.src.0.get(ptr_lhs)?.as_agent()?;
+                    let agent_b = self.src.0.get(ptr_rhs)?.as_agent()?;
+
+                    let agent_a_name = self.src.get(agent_a.name.as_mem_ptr()?)?.as_ident()?;
+                    let agent_b_name = self.src.get(agent_b.name.as_mem_ptr()?)?.as_ident()?;
+
+                    let sig_a = self.types.get(&Type(agent_a_name.to_owned()))?;
+
+                    let to_match = if sig_a.get(0)?.as_output().is_some() {
+                        (ptr_lhs, agent_a, agent_a_name)
+                    } else {
+                        (ptr_rhs, agent_b, agent_b_name)
+                    };
+
+                    let agents = self
+                        .src
+                        .0
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, elem)| Some((i, elem.as_agent()?)));
+                    let redexed_agents = agents.filter_map(|(mem_pos, agent)| {
+                        let a = agent;
+                        let b_port_ptr = agent.ports.get(0)?.as_agent_ptr()?;
+                        let b = self.src.get(b_port_ptr.mem_pos)?.as_agent()?;
+
+                        if b_port_ptr.port != Some(0) {
+                            return None;
+                        }
+
+                        Some(((mem_pos, a), (b_port_ptr.mem_pos, b)))
+                    });
+                    let named_typed_agents =
+                        redexed_agents.filter_map(|((a_pos, a), (b_pos, b))| {
+                            let name_a = self.src.get(a.name.as_mem_ptr()?)?.as_ident()?;
+                            let name_b = self.src.get(b.name.as_mem_ptr()?)?.as_ident()?;
+
+                            let ty_a = self.types.get(&Type(name_a.to_owned()))?;
+                            let ty_b = self.types.get(&Type(name_a.to_owned()))?;
+
+                            Some(((ty_a, name_a, a_pos, a), (ty_b, name_b, b_pos, b)))
+                        });
+                    let out_first = named_typed_agents.filter_map(
+                        |((ty_a, name_a, a_pos, a), (ty_b, name_b, b_pos, b))| {
+                            if ty_a.get(0)?.as_output().is_some() {
+                                Some(((ty_a, name_a, a_pos, a), (ty_b, name_b, b_pos, b)))
+                            } else {
+                                Some(((ty_b, name_b, b_pos, b), (ty_a, name_a, a_pos, a)))
+                            }
+                        },
+                    );
+                    let name_matching_rules =
+                        out_first.filter(|((_, name_a, _, _), (_, name_b, _, _))| {
+                            BTreeSet::from_iter([*name_a, *name_b])
+                                == BTreeSet::from_iter([agent_a_name, agent_b_name])
+                        });
+
+                    // The structure of the rule must be identical, except
+                    // for the variables. These can be bound to whatever
+                    let mut matching_rules =
+                        name_matching_rules.filter_map(|((_, _, pos, _), _)| {
+                            Some((pos, self.subset_tree_positions(to_match.0, pos)?))
+                        });
+
+                    if let Some((pos, _)) = matching_rules.next() {
+                        self.stack.push_back(StackElem::Ptr(GlobalPtr::MemPtr(pos)));
+                    } else {
+                        self.stack.push_back(StackElem::None);
+                    }
+
+                    Some(None)
+                }
+                &Op::CloneNet => {
+                    let to_clone = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
+                    let ptr = self.clone_tree(to_clone)?;
+
+                    self.stack.push_back(StackElem::Ptr(GlobalPtr::MemPtr(ptr)));
+
+                    Some(None)
+                }
+                &Op::PopRedex => {
+                    if let Some(redex) = self.redex_bag.pop_back() {
+                        self.stack
+                            .push_back(StackElem::Ptr(GlobalPtr::MemPtr(redex.0)));
+                        self.stack
+                            .push_back(StackElem::Ptr(GlobalPtr::MemPtr(redex.1)));
+                    } else {
+                        self.stack.push_back(StackElem::None);
+                    }
 
                     Some(None)
                 }

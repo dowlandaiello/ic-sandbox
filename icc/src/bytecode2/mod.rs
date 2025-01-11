@@ -7,7 +7,7 @@ pub mod vm;
 pub type Ptr = usize;
 pub type Offset = isize;
 
-#[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
+#[derive(Default, Serialize, Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Program(pub(crate) Vec<StackElem>);
 
 impl Program {
@@ -254,7 +254,10 @@ pub enum Op {
     Copy,
     RefIndex,
     PopRedex,
-    Connect,
+    PushMatchingRule,
+    CloneNet,
+    PushSubstitutionPositions,
+    Substitute,
 }
 
 impl fmt::Display for Op {
@@ -278,7 +281,10 @@ impl fmt::Display for Op {
             Self::Copy => write!(f, "COPY"),
             Self::RefIndex => write!(f, "REF_INDEX"),
             Self::PopRedex => write!(f, "POP_REDEX"),
-            Self::Connect => write!(f, "CONN"),
+            Self::PushMatchingRule => write!(f, "PUSH_RULE"),
+            Self::CloneNet => write!(f, "CLONE_NET"),
+            Self::PushSubstitutionPositions => write!(f, "PUSH_SUB_POS"),
+            Self::Substitute => write!(f, "SUB"),
         }
     }
 }
