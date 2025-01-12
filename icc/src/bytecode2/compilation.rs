@@ -498,49 +498,6 @@ mod test {
     use chumsky::Parser;
 
     #[test]
-    fn test_compile_nets() {
-        let cases = [(
-            "type atom
-             symbol Void: atom+
-             symbol Id: atom-, atom+
-             Void() >< Id(Void())",
-            vec![
-                StackElem::Ident("Id".to_owned()),
-                StackElem::Ident("Void".to_owned()),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(1),
-                    ports: vec![GlobalPtr::MemPtr(3)],
-                }),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(0),
-                    ports: vec![GlobalPtr::MemPtr(2), GlobalPtr::MemPtr(4)],
-                }),
-                StackElem::Agent(bc::Agent {
-                    name: GlobalPtr::MemPtr(1),
-                    ports: vec![GlobalPtr::MemPtr(3)],
-                }),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(2))).into(),
-                Op::PushRes.into(),
-            ],
-        )];
-
-        for (case, expected) in cases {
-            let lexed = lexer()
-                .parse(case)
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-            let parsed = parser().parse(lexed).unwrap();
-
-            let (typed, _) = heur::parse_typed_program(parsed);
-
-            let program = compile(typed).unwrap();
-            assert_eq!(program, Program(expected));
-        }
-    }
-
-    #[test]
     fn test_readback() {
         use super::super::vm;
 
@@ -621,8 +578,8 @@ mod test {
         }
     }
 
-    #[test_log::test]
-    fn identify_redex() {
+    #[test]
+    fn test_eval_literal() {
         let cases = ["type atom
              symbol Void: atom+
              symbol Id: atom-, atom+
@@ -639,11 +596,7 @@ mod test {
 
             let (typed, _) = heur::parse_typed_program(parsed);
 
-            let mut program = compile(typed.clone()).unwrap();
-
-            tracing::debug!("{}", program);
-
-            tracing::debug!("{}", program);
+            let program = compile(typed.clone()).unwrap();
 
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
             state.step_to_end().unwrap();

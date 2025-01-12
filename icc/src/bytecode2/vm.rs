@@ -251,8 +251,12 @@ impl State {
                 let (a_raw_ptr, b_raw_ptr) = (a.as_mem_ptr()?, b.as_mem_ptr()?);
 
                 let (port_b, port_a) = (
-                    a_elem.ports.iter().position(|elem| *elem == *b)?,
-                    b_elem.ports.iter().position(|elem| *elem == *a)?,
+                    a_elem.ports.iter().position(|elem| {
+                        (|| Some(elem.as_agent_ptr()?.mem_pos == b_raw_ptr))().unwrap_or_default()
+                    })?,
+                    b_elem.ports.iter().position(|elem| {
+                        (|| Some(elem.as_agent_ptr()?.mem_pos == a_raw_ptr))().unwrap_or_default()
+                    })?,
                 );
                 let (a_ty, b_ty) = (typed_agents.get(&a_raw_ptr)?, typed_agents.get(&b_raw_ptr)?);
 
@@ -283,13 +287,13 @@ impl State {
             .ports
             .iter()
             .skip(1)
-            .filter_map(|p| self.readback_elem(*p, &mut Default::default()))
+            .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, &mut Default::default()))
             .collect();
         rhs_agent.ports = rhs_elem
             .ports
             .iter()
             .skip(1)
-            .filter_map(|p| self.readback_elem(*p, &mut Default::default()))
+            .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, &mut Default::default()))
             .collect();
 
         Some(Expr::Net(Net {
@@ -298,14 +302,14 @@ impl State {
         }))
     }
 
-    pub fn readback_elem(&self, p: GlobalPtr, seen: &mut BTreeSet<GlobalPtr>) -> Option<Port> {
+    pub fn readback_elem(&self, p: Ptr, seen: &mut BTreeSet<Ptr>) -> Option<Port> {
         if seen.contains(&p) {
             return None;
         }
 
         seen.insert(p);
 
-        let elem = self.iter_deref(p).last()?;
+        let elem = self.iter_deref(GlobalPtr::MemPtr(p)).last()?;
 
         let build: Port = match elem {
             StackElem::Var(v) => {
@@ -326,7 +330,7 @@ impl State {
                         .ports
                         .iter()
                         .skip(1)
-                        .filter_map(|p| self.readback_elem(*p, seen))
+                        .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, seen))
                         .collect::<Vec<_>>(),
                 }))
             }
