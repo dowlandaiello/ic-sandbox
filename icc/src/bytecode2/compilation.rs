@@ -1,4 +1,4 @@
-use super::{GlobalPtr, Op, Program, Ptr, StackElem};
+use super::{AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::{
     bytecode2 as bc,
     heuristics::TypedProgram,
@@ -205,51 +205,72 @@ impl<'a> Compiler<'a> {
             .get_mut(&ptr::addr_of!(*lhs))
             .and_then(|elem| elem.as_agent_mut())
             .ok_or(ErrorCause::CouldNotConnectAgent.into())?
-            .push_port(GlobalPtr::MemPtr(
-                *created_agent_pos
+            .push_port(GlobalPtr::AgentPtr(AgentPtr {
+                mem_pos: *created_agent_pos
                     .get(&ptr::addr_of!(*rhs))
                     .ok_or(ErrorCause::CouldNotConnectAgent.into())?,
-            ));
+                port: Some(0),
+            }));
         created_agent_elem
             .get_mut(&ptr::addr_of!(*rhs))
             .and_then(|elem| elem.as_agent_mut())
             .ok_or(ErrorCause::CouldNotConnectAgent.into())?
-            .push_port(GlobalPtr::MemPtr(
-                *created_agent_pos
+            .push_port(GlobalPtr::AgentPtr(AgentPtr {
+                mem_pos: *created_agent_pos
                     .get(&ptr::addr_of!(*lhs))
                     .ok_or(ErrorCause::CouldNotConnectAgent.into())?,
-            ));
+                port: Some(0),
+            }));
 
         // Connect agents
         all_agents
             .iter()
             .map(|agent| {
-                let agent_elem_ptr = created_agent_pos.get(&ptr::addr_of!(**agent))?;
-
-                let new_ports = agent
-                    .ports
-                    .iter()
-                    .map(|port| match port {
+                for port in agent.ports.iter() {
+                    match port {
                         Port::Agent(a) => {
-                            let matching_stack_elem = created_agent_pos.get(&ptr::addr_of!(*a))?;
+                            let src_elem_ptr = created_agent_pos.get(&ptr::addr_of!(**agent))?;
+                            let dest_elem_ptr = created_agent_pos.get(&ptr::addr_of!(*a))?;
 
-                            // Connect child to us as well in first position
-                            created_agent_elem
-                                .get_mut(&ptr::addr_of!(*a))
-                                .and_then(|elem| elem.as_agent_mut())?
-                                .push_port(GlobalPtr::MemPtr(*agent_elem_ptr));
+                            let n_ports_src = created_agent_elem
+                                .get(&ptr::addr_of!(**agent))?
+                                .as_agent()?
+                                .ports
+                                .len();
+                            let n_ports_dest = created_agent_elem
+                                .get(&ptr::addr_of!(*a))?
+                                .as_agent()?
+                                .ports
+                                .len();
 
-                            Some(GlobalPtr::MemPtr(*matching_stack_elem))
+                            let src_elem_mut = created_agent_elem
+                                .get_mut(&ptr::addr_of!(**agent))?
+                                .as_agent_mut()?;
+
+                            src_elem_mut.ports.push(GlobalPtr::AgentPtr(AgentPtr {
+                                mem_pos: *dest_elem_ptr,
+                                port: Some(n_ports_dest),
+                            }));
+
+                            let dest_elem_mut = created_agent_elem
+                                .get_mut(&ptr::addr_of!(*a))?
+                                .as_agent_mut()?;
+                            dest_elem_mut.ports.push(GlobalPtr::AgentPtr(AgentPtr {
+                                mem_pos: *src_elem_ptr,
+                                port: Some(n_ports_src),
+                            }));
                         }
-                        Port::Var(v) => Some(GlobalPtr::MemPtr(*all_vars_pos.get(v.0.as_str())?)),
-                    })
-                    .collect::<Option<Vec<_>>>()?;
+                        Port::Var(v) => {
+                            let src_elem_mut = created_agent_elem
+                                .get_mut(&ptr::addr_of!(**agent))?
+                                .as_agent_mut()?;
 
-                let agent_elem_mut = created_agent_elem
-                    .get_mut(&ptr::addr_of!(**agent))?
-                    .as_agent_mut()?;
-
-                agent_elem_mut.ports.extend(new_ports);
+                            src_elem_mut
+                                .ports
+                                .push(GlobalPtr::MemPtr(*all_vars_pos.get(v.0.as_str())?));
+                        }
+                    }
+                }
 
                 Some(())
             })

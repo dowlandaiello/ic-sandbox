@@ -172,6 +172,13 @@ impl StackElem {
         }
     }
 
+    pub fn into_agent(self) -> Option<Agent> {
+        match self {
+            Self::Agent(a) => Some(a),
+            _ => None,
+        }
+    }
+
     pub fn as_agent(&self) -> Option<&Agent> {
         match &self {
             Self::Agent(a) => Some(a),

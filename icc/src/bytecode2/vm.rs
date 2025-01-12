@@ -208,13 +208,19 @@ impl State {
     }
 
     pub fn readback(&self, p: GlobalPtr) -> Option<Expr> {
-        let pointers = self.iter_tree(p)?.collect::<Vec<_>>();
+        let pointers = self
+            .iter_tree(p)?
+            .filter(|ptr| ptr.as_mem_ptr().is_some())
+            .collect::<Vec<_>>();
 
         let typed_agents = pointers
             .iter()
             .filter_map(|ptr| {
-                let elem = self.iter_deref(*ptr).last()?;
-                let name = self.iter_deref(elem.as_agent()?.name).last()?;
+                let elem = self
+                    .iter_deref(*ptr)
+                    .filter_map(|elem| elem.into_agent())
+                    .next()?;
+                let name = self.iter_deref(elem.name).last()?;
 
                 Some((
                     ptr.as_mem_ptr()?,
@@ -236,11 +242,11 @@ impl State {
             .filter_map(|(a, b)| {
                 let (a_elem, b_elem) = (
                     self.iter_deref(*a)
-                        .last()
-                        .and_then(|x| Some(x.as_agent()?.clone()))?,
+                        .filter_map(|elem| elem.into_agent())
+                        .next()?,
                     self.iter_deref(*b)
-                        .last()
-                        .and_then(|x| Some(x.as_agent()?.clone()))?,
+                        .filter_map(|elem| elem.into_agent())
+                        .next()?,
                 );
                 let (a_raw_ptr, b_raw_ptr) = (a.as_mem_ptr()?, b.as_mem_ptr()?);
 
@@ -775,12 +781,17 @@ impl Iterator for TreeVisitor<'_> {
     type Item = GlobalPtr;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let curr_ptr = self
+        let mut to_visit = self
             .to_visit
-            .iter()
+            .drain(..)
             .skip_while(|x| self.seen.contains(x))
-            .next()
-            .copied()?;
+            .collect::<VecDeque<_>>();
+        let curr_ptr = to_visit.pop_front()?;
+        self.to_visit = to_visit;
+
+        if let GlobalPtr::AgentPtr(ptr) = curr_ptr {
+            self.to_visit.push_front(GlobalPtr::MemPtr(ptr.mem_pos));
+        }
 
         self.seen.insert(curr_ptr);
 
