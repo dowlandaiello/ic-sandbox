@@ -212,7 +212,7 @@ impl State {
 
         let typed_agents = pointers
             .iter()
-            .map(|ptr| {
+            .filter_map(|ptr| {
                 let elem = self.iter_deref(*ptr).last()?;
                 let name = self.iter_deref(elem.as_agent()?.name).last()?;
 
@@ -221,7 +221,7 @@ impl State {
                     self.types.get(&Type(name.as_ident()?.to_owned()))?.clone(),
                 ))
             })
-            .collect::<Option<BTreeMap<Ptr, Vec<PortKind>>>>()?;
+            .collect::<BTreeMap<Ptr, Vec<PortKind>>>();
 
         // Find first redex
         let (lhs_elem, rhs_elem): (Agent, Agent) = pointers
