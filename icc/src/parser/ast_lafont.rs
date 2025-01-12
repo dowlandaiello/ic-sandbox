@@ -193,7 +193,7 @@ impl Agent {
         }
     }
 
-    pub fn iter_child_agents<'a>(&'a self) -> impl Iterator<Item = &'a Agent> + 'a {
+    pub fn iter_child_agents<'a>(&'a self) -> impl Iterator<Item = PortView> + 'a {
         PortWalker::new(self)
     }
 
@@ -252,34 +252,53 @@ impl fmt::Display for Agent {
     }
 }
 
+#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
+pub enum PortView<'a> {
+    Agent(&'a Agent),
+    Var(&'a Ident),
+}
+
 pub struct PortWalker<'a> {
-    to_visit: VecDeque<&'a Agent>,
+    to_visit: VecDeque<PortView<'a>>,
     seen: BTreeSet<*const Agent>,
 }
 
 impl<'a> PortWalker<'a> {
     pub fn new(start: &'a Agent) -> Self {
         Self {
-            to_visit: VecDeque::from_iter([start]),
+            to_visit: VecDeque::from_iter([PortView::Agent(start)]),
             seen: Default::default(),
         }
     }
 }
 
 impl<'a> Iterator for PortWalker<'a> {
-    type Item = &'a Agent;
+    type Item = PortView<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let curr_ptr = *self
+        let mut to_visit = self
             .to_visit
-            .iter()
-            .skip_while(|x| self.seen.contains(&ptr::addr_of!(***x)))
-            .next()?;
+            .drain(..)
+            .skip_while(|x| {
+                if let PortView::Agent(a) = x {
+                    self.seen.contains(&ptr::addr_of!(**a))
+                } else {
+                    false
+                }
+            })
+            .collect::<VecDeque<_>>();
+        let curr_ptr = to_visit.pop_front()?;
 
-        self.seen.insert(ptr::addr_of!(*curr_ptr));
+        self.to_visit = to_visit;
 
-        self.to_visit
-            .extend(curr_ptr.ports.iter().filter_map(|elem| elem.as_agent()));
+        if let PortView::Agent(a) = curr_ptr {
+            self.seen.insert(ptr::addr_of!(*a));
+
+            self.to_visit.extend(a.ports.iter().map(|p| match p {
+                Port::Agent(a) => PortView::Agent(a),
+                Port::Var(v) => PortView::Var(v),
+            }));
+        }
 
         Some(curr_ptr)
     }

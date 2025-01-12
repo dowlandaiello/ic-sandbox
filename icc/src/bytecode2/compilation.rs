@@ -2,9 +2,10 @@ use super::{GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::{
     bytecode2 as bc,
     heuristics::TypedProgram,
-    parser::ast_lafont::{Agent, Net, Port},
+    parser::ast_lafont::{Agent, Net, Port, PortView},
 };
 use std::{
+    backtrace::Backtrace,
     collections::{BTreeMap, BTreeSet},
     error, fmt,
     iter::Extend,
@@ -12,8 +13,29 @@ use std::{
     rc::Rc,
 };
 
+#[derive(Debug)]
+pub struct Error {
+    trace: Backtrace,
+    cause: ErrorCause,
+}
+
+impl From<ErrorCause> for Error {
+    fn from(e: ErrorCause) -> Self {
+        Self {
+            trace: Backtrace::capture(),
+            cause: e,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:\n{}", self.cause, self.trace)
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
-pub enum Error {
+pub enum ErrorCause {
     /// Nets must all be active pairs in LaFont's syntax
     IllFormedNet,
 
@@ -23,7 +45,16 @@ pub enum Error {
     CouldNotConnectAgent,
 }
 
-impl fmt::Display for Error {
+impl ErrorCause {
+    fn into(self) -> Error {
+        Error {
+            cause: self,
+            trace: Backtrace::capture(),
+        }
+    }
+}
+
+impl fmt::Display for ErrorCause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IllFormedNet => write!(
@@ -84,22 +115,28 @@ impl<'a> Compiler<'a> {
     > {
         let mut prog: Vec<StackElem> = Default::default();
 
-        let (all_agents, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
+        let (all_ports, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
             (Vec::new(), BTreeSet::new()),
-            |(mut agents, mut seen): (Vec<&Agent>, _), agent| {
-                if seen.contains(&ptr::addr_of!(*agent)) {
-                    return (agents, seen);
+            |(mut ports, mut seen): (Vec<PortView>, _), port| {
+                if let PortView::Agent(a) = port {
+                    if seen.contains(&ptr::addr_of!(*a)) {
+                        return (ports, seen);
+                    }
+
+                    seen.insert(ptr::addr_of!(*a));
                 }
 
-                agents.push(agent);
-                seen.insert(ptr::addr_of!(*agent));
+                ports.push(port);
 
-                (agents, seen)
+                (ports, seen)
             },
         );
-        let all_symbols = all_agents
+        let all_symbols = all_ports
             .iter()
-            .map(|agent| agent.name.0.as_str())
+            .map(|port| match port {
+                PortView::Agent(a) => a.name.0.as_str(),
+                PortView::Var(v) => v.0.as_str(),
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .enumerate()
@@ -113,6 +150,33 @@ impl<'a> Compiler<'a> {
                 .map(|(k, _)| k)
                 .map(|key| StackElem::Ident((*key).to_owned())),
         );
+
+        let (all_vars, all_vars_pos) = all_ports
+            .iter()
+            .filter_map(|port| match port {
+                PortView::Var(v) => Some(v),
+                _ => None,
+            })
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let pos = all_symbols_pos.get(v.0.as_str())?;
+
+                Some((
+                    StackElem::Var(*pos),
+                    (v.0.as_str(), i + start_ptr + prog.len()),
+                ))
+            })
+            .collect::<(Vec<_>, BTreeMap<&str, Ptr>)>();
+
+        prog.extend(all_vars);
+
+        let all_agents = all_ports
+            .iter()
+            .filter_map(|port| match port {
+                PortView::Agent(a) => Some(*a),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         let (mut created_agent_elem, created_agent_pos): (
             BTreeMap<*const Agent, StackElem>,
@@ -130,33 +194,30 @@ impl<'a> Compiler<'a> {
 
                 Some((
                     (ptr::addr_of!(**agent), elem),
-                    (
-                        ptr::addr_of!(**agent),
-                        i + start_ptr + all_symbols_pos.len(),
-                    ),
+                    (ptr::addr_of!(**agent), i + start_ptr + prog.len()),
                 ))
             })
             .collect::<Option<_>>()
-            .ok_or(Error::MissingSymbolDeclaration)?;
+            .ok_or(ErrorCause::MissingSymbolDeclaration.into())?;
 
         // Connect lhs and rhs agents
         created_agent_elem
             .get_mut(&ptr::addr_of!(*lhs))
             .and_then(|elem| elem.as_agent_mut())
-            .ok_or(Error::CouldNotConnectAgent)?
+            .ok_or(ErrorCause::CouldNotConnectAgent.into())?
             .push_port(GlobalPtr::MemPtr(
                 *created_agent_pos
                     .get(&ptr::addr_of!(*rhs))
-                    .ok_or(Error::CouldNotConnectAgent)?,
+                    .ok_or(ErrorCause::CouldNotConnectAgent.into())?,
             ));
         created_agent_elem
             .get_mut(&ptr::addr_of!(*rhs))
             .and_then(|elem| elem.as_agent_mut())
-            .ok_or(Error::CouldNotConnectAgent)?
+            .ok_or(ErrorCause::CouldNotConnectAgent.into())?
             .push_port(GlobalPtr::MemPtr(
                 *created_agent_pos
                     .get(&ptr::addr_of!(*lhs))
-                    .ok_or(Error::CouldNotConnectAgent)?,
+                    .ok_or(ErrorCause::CouldNotConnectAgent.into())?,
             ));
 
         // Connect agents
@@ -180,9 +241,7 @@ impl<'a> Compiler<'a> {
 
                             Some(GlobalPtr::MemPtr(*matching_stack_elem))
                         }
-                        Port::Var(v) => {
-                            Some(GlobalPtr::MemPtr(*all_symbols_pos.get(v.0.as_str())?))
-                        }
+                        Port::Var(v) => Some(GlobalPtr::MemPtr(*all_vars_pos.get(v.0.as_str())?)),
                     })
                     .collect::<Option<Vec<_>>>()?;
 
@@ -195,14 +254,14 @@ impl<'a> Compiler<'a> {
                 Some(())
             })
             .collect::<Option<()>>()
-            .ok_or(Error::CouldNotConnectAgent)?;
+            .ok_or(ErrorCause::CouldNotConnectAgent)?;
 
         prog.extend(
             all_agents
                 .iter()
                 .map(|a| created_agent_elem.remove(&ptr::addr_of!(**a)))
                 .collect::<Option<Vec<_>>>()
-                .ok_or(Error::IllFormedNet)?,
+                .ok_or(ErrorCause::IllFormedNet)?,
         );
 
         Ok((prog, created_agent_elem, created_agent_pos))
@@ -321,7 +380,7 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
                 lhs: Some(lhs),
                 rhs: Some(rhs),
             } => Ok((lhs, rhs)),
-            _ => Err(Error::IllFormedNet),
+            _ => Err(ErrorCause::IllFormedNet.into()),
         }?;
 
         // Nets fall into two categories:
@@ -344,6 +403,10 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
         let requires_substitution = [lhs, rhs].iter().any(|redex_mem| {
             redex_mem
                 .iter_child_agents()
+                .filter_map(|port| match port {
+                    PortView::Agent(a) => Some(a),
+                    _ => None,
+                })
                 .filter(|agent| agent != &lhs && agent != &rhs)
                 .any(|child| {
                     (|| {

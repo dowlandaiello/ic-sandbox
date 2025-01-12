@@ -52,7 +52,12 @@ fn main() {
         }
         Some(("eval", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
-                let bytecode = cc::compile(program.clone()).unwrap();
+                let bytecode = match cc::compile(program.clone()) {
+                    Ok(bytecode) => bytecode,
+                    Err(e) => {
+                        panic!("compilation error {}", e);
+                    }
+                };
 
                 let mut exec = State::new(bytecode, program.symbol_declarations_for);
                 let results = exec.step_to_end().unwrap();
