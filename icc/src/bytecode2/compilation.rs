@@ -235,7 +235,7 @@ impl<'a> Compiler<'a> {
                     }
                     NetRef::Intro { lhs, rhs } => {
                         let (section, _, intro_agent_ptrs) =
-                            Self::try_compile_net(start_ptr + src.len() - 1, lhs, rhs)?;
+                            Self::try_compile_net(start_ptr + src.len(), lhs, rhs)?;
                         src.extend(section);
 
                         agent_ptrs
@@ -262,18 +262,24 @@ impl<'a> Compiler<'a> {
                     }
                 },
                 BcBlock::IterRedex { stmts } => {
-                    let loop_start_ptr = start_ptr + src.len() - 1;
+                    let loop_start_ptr = start_ptr + src.len();
 
-                    src.extend([Op::PopRedex.into()]);
-                    src.extend(Self::compile_section(
-                        loop_start_ptr + 1,
-                        agent_ptrs,
-                        stmts,
-                    )?);
+                    let compiled_instrs =
+                        Self::compile_section(loop_start_ptr + 4, agent_ptrs, stmts)?;
+
                     src.extend([
+                        Op::PopRedex.into(),
                         Op::PushStack(StackElem::None).into(),
+                        Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(
+                            loop_start_ptr + 4 + compiled_instrs.len() + 2,
+                        )))
+                        .into(),
+                        Op::GoToEq.into(),
+                    ]);
+                    src.extend(compiled_instrs);
+                    src.extend([
                         Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(loop_start_ptr))).into(),
-                        Op::GoToNeq.into(),
+                        Op::GoTo.into(),
                     ]);
                 }
                 BcBlock::PushRes(from) => {
