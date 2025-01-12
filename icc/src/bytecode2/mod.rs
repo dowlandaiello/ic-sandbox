@@ -260,7 +260,8 @@ pub enum Op {
     IncrPtr,
     Copy,
     RefIndex,
-    PopRedex,
+    PushRedex,
+    QueueRedex,
     PushMatchingRule,
     CloneNet,
     PushSubstitutionPositions,
@@ -287,11 +288,12 @@ impl fmt::Display for Op {
             Self::IncrPtr => write!(f, "INCR_PTR"),
             Self::Copy => write!(f, "COPY"),
             Self::RefIndex => write!(f, "REF_INDEX"),
-            Self::PopRedex => write!(f, "POP_REDEX"),
+            Self::PushRedex => write!(f, "PUSH_REDEX"),
             Self::PushMatchingRule => write!(f, "PUSH_RULE"),
             Self::CloneNet => write!(f, "CLONE_NET"),
             Self::PushSubstitutionPositions => write!(f, "PUSH_SUB_POS"),
             Self::Substitute => write!(f, "SUB"),
+            Self::QueueRedex => write!(f, "QUEUE_REDEX"),
         }
     }
 }

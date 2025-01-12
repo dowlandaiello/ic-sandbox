@@ -495,7 +495,20 @@ impl State {
 
                     Some(None)
                 }
-                &Op::PopRedex => {
+                &Op::QueueRedex => {
+                    let lhs_ptr = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
+                    let lhs_agent = self
+                        .iter_deref(GlobalPtr::MemPtr(lhs_ptr))
+                        .next()?
+                        .into_agent()?;
+
+                    let rhs_ptr = lhs_agent.ports.get(0)?.as_agent_ptr()?.mem_pos;
+
+                    self.redex_bag.push_back((lhs_ptr, rhs_ptr));
+
+                    Some(None)
+                }
+                &Op::PushRedex => {
                     if let Some(redex) = self.redex_bag.pop_back() {
                         self.stack
                             .push_back(StackElem::Ptr(GlobalPtr::MemPtr(redex.0)));

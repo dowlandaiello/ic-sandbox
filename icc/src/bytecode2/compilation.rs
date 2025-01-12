@@ -78,6 +78,7 @@ pub enum BcBlock<'a> {
     Substitute,
     PushRes(Rc<NetRef<'a>>),
     IterRedex { stmts: Vec<BcBlock<'a>> },
+    QueueRedex(Rc<NetRef<'a>>),
 }
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
@@ -303,6 +304,14 @@ impl<'a> Compiler<'a> {
 
         for instr in instrs {
             match instr {
+                BcBlock::QueueRedex(from) => {
+                    let ptr = agent_ptrs.get(from.as_ref()).unwrap().clone();
+
+                    src.extend([
+                        Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(ptr))).into(),
+                        Op::QueueRedex.into(),
+                    ]);
+                }
                 BcBlock::Referable(r) => match r.clone().as_ref() {
                     NetRef::CloneNet(from) => {
                         if let Some(from) = from {
@@ -322,7 +331,7 @@ impl<'a> Compiler<'a> {
                             .extend(intro_agent_ptrs.into_iter().map(|(_, v)| (r.clone(), v)));
                     }
                     NetRef::MatchingRule => {
-                        src.push(Op::PushMatchingRule.into());
+                        src.extend([Op::PushMatchingRule.into()]);
                     }
                     NetRef::SubstitutionPositions {
                         of_parent,
@@ -348,7 +357,8 @@ impl<'a> Compiler<'a> {
                         Self::compile_section(loop_start_ptr + 4, agent_ptrs, stmts)?;
 
                     src.extend([
-                        Op::PopRedex.into(),
+                        Op::PushRedex.into(),
+                        Op::Copy.into(),
                         Op::PushStack(StackElem::None).into(),
                         Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(
                             loop_start_ptr + 4 + compiled_instrs.len() + 2,
@@ -452,31 +462,31 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
 
         out.push(BcBlock::Referable(net_ref.clone()));
 
-        if !requires_substitution {
-            out.push(BcBlock::PushRes(net_ref));
+        if requires_substitution {
+            let matching_rule_before_copy = Rc::new(NetRef::MatchingRule);
+            let clone_net = Rc::new(NetRef::CloneNet(None));
+            let cloned_sub_positions = Rc::new(NetRef::SubstitutionPositions {
+                of_parent: None,
+                of_child: None,
+            });
 
-            continue;
+            out.extend([BcBlock::QueueRedex(net_ref.clone())]);
+
+            // While we have a redex left,
+            out.push(BcBlock::IterRedex {
+                stmts: vec![
+                    // The redex will be lhs port pointer, rhs port pointer
+                    // in stack [0], [-1]
+                    BcBlock::Referable(matching_rule_before_copy),
+                    BcBlock::Referable(clone_net),
+                    BcBlock::Referable(cloned_sub_positions.clone()),
+                    BcBlock::Substitute,
+                ],
+            });
         }
+
+        out.push(BcBlock::PushRes(net_ref));
     }
-
-    let matching_rule_before_copy = Rc::new(NetRef::MatchingRule);
-    let clone_net = Rc::new(NetRef::CloneNet(None));
-    let cloned_sub_positions = Rc::new(NetRef::SubstitutionPositions {
-        of_parent: None,
-        of_child: None,
-    });
-
-    // While we have a redex left,
-    out.push(BcBlock::IterRedex {
-        stmts: vec![
-            // The redex will be lhs port pointer, rhs port pointer
-            // in stack [0], [-1]
-            BcBlock::Referable(matching_rule_before_copy),
-            BcBlock::Referable(clone_net),
-            BcBlock::Referable(cloned_sub_positions.clone()),
-            BcBlock::Substitute,
-        ],
-    });
 
     Ok(out)
 }
@@ -497,7 +507,7 @@ mod test {
     };
     use chumsky::Parser;
 
-    #[test]
+    #[test_log::test]
     fn test_readback() {
         use super::super::vm;
 
@@ -506,7 +516,7 @@ mod test {
              symbol Void: atom+
              symbol Id: atom-, atom+
              Void() >< Id(Void())",
-            "Void() >< Id(Void())",
+            "Id(Void()) >< Void()",
         )];
 
         for (case, expected) in cases {
@@ -578,7 +588,7 @@ mod test {
         }
     }
 
-    #[test]
+    #[test_log::test]
     fn test_eval_literal() {
         let cases = ["type atom
              symbol Void: atom+
