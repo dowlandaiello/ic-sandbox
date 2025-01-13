@@ -32,6 +32,7 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
+#[derive(PartialEq, Clone, Debug)]
 pub struct Substitution {
     src: GlobalPtr,
     dest: GlobalPtr,
@@ -130,42 +131,68 @@ impl State {
         ptr_child: Ptr,
         ptr_parent: Ptr,
     ) -> Option<Vec<Substitution>> {
+        let filter_ptr_relevant = |ptr| {
+            // We want vars and agents, not variables
+            let elem = self
+                .iter_deref(ptr)
+                .filter(|elem| {
+                    matches!(elem, StackElem::Agent(_)) || matches!(elem, StackElem::Var(_))
+                })
+                .next()?;
+
+            Some((ptr, elem))
+        };
+
         let mut iter_child = self
             .iter_tree(GlobalPtr::MemPtr(ptr_child))?
-            .collect::<Vec<_>>();
+            .filter_map(filter_ptr_relevant)
+            .collect::<VecDeque<_>>();
         let mut positions = Vec::new();
 
-        for (ptr, node) in self
+        let parent_tree = self
             .iter_tree(GlobalPtr::MemPtr(ptr_parent))?
-            .into_iter()
-            .map(|ptr| Some((ptr, self.iter_deref(ptr).last()?)))
-            .collect::<Option<Vec<_>>>()?
-        {
-            let corresponding = iter_child.remove(0);
-            let corresponding_elem = self.iter_deref(corresponding).last()?;
+            .collect::<Vec<_>>();
 
-            if corresponding_elem == node {
-                continue;
+        for (ptr, node) in parent_tree.into_iter().filter_map(filter_ptr_relevant) {
+            let (corresponding, corresponding_elem) = iter_child.pop_front()?;
+
+            match node {
+                StackElem::Agent(a) => match corresponding_elem {
+                    StackElem::Var(_) => {
+                        return None;
+                    }
+                    StackElem::Agent(b) => {
+                        let a_name = self.iter_deref(a.name).last();
+                        let b_name = self.iter_deref(a.name).last();
+
+                        if a_name == b_name && a.ports.len() == b.ports.len() {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        return None;
+                    }
+                },
+                // Advance the corresponding pointers to the next non-child pointer
+                StackElem::Var(_) => {
+                    positions.push(Substitution {
+                        src: ptr,
+                        dest: corresponding,
+                    });
+
+                    // Skip all child pointers
+                    let mut subtree = self.iter_tree(corresponding)?;
+                    iter_child = iter_child
+                        .into_iter()
+                        .skip_while(|(ptr, _)| subtree.next() == Some(*ptr))
+                        .collect();
+
+                    continue;
+                }
+                _ => {
+                    return None;
+                }
             }
-
-            // Advance the corresponding pointers to the next non-child pointer
-            if matches!(node, StackElem::Var(_)) {
-                positions.push(Substitution {
-                    src: ptr,
-                    dest: corresponding,
-                });
-
-                // Skip all child pointers
-                let mut subtree = self.iter_tree(corresponding)?;
-                iter_child = iter_child
-                    .into_iter()
-                    .skip_while(|x| subtree.next() == Some(*x))
-                    .collect();
-
-                continue;
-            }
-
-            return None;
         }
 
         Some(positions)
@@ -728,12 +755,14 @@ impl State {
 pub struct DerefVisitor<'a> {
     pos: Option<GlobalPtr>,
     view: &'a State,
+    seen: BTreeSet<GlobalPtr>,
 }
 
 impl<'a> DerefVisitor<'a> {
     pub fn new(view: &'a State, pos: GlobalPtr) -> Self {
         Self {
             pos: Some(pos),
+            seen: Default::default(),
             view,
         }
     }
@@ -743,8 +772,16 @@ impl Iterator for DerefVisitor<'_> {
     type Item = StackElem;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let curr_ptr = self.pos?;
+
+        if self.seen.contains(&curr_ptr) {
+            return None;
+        }
+
+        self.seen.insert(curr_ptr);
+
         let curr = {
-            match self.pos? {
+            match curr_ptr {
                 GlobalPtr::MemPtr(p) => self.view.src.get(p).cloned(),
                 GlobalPtr::Offset(_) => unimplemented!(),
                 GlobalPtr::AgentPtr(AgentPtr { mem_pos, port }) => {
@@ -820,5 +857,80 @@ impl Iterator for TreeVisitor<'_> {
         );
 
         Some(curr_ptr)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        bytecode2 as bc, heuristics as heur,
+        parser::parser_lafont::{lexer, parser},
+    };
+    use chumsky::Parser;
+
+    #[test_log::test]
+    fn test_iter_tree() {
+        let cases = ["type nat
+             symbol Z: nat+
+             symbol Add: nat-, nat-, nat+
+             Add(x, x) >< Z()"];
+
+        for case in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let program = bc::compilation::compile(typed.clone()).unwrap();
+
+            let state = bc::vm::State::new(program, typed.symbol_declarations_for);
+            let ptrs = state.iter_tree(bc::GlobalPtr::MemPtr(5)).unwrap();
+
+            let mut elems = ptrs.filter_map(|ptr| state.iter_deref(ptr).next());
+            assert!(elems
+                .find(|elem| matches!(elem, bc::StackElem::Var(_)))
+                .is_some());
+        }
+    }
+
+    #[test_log::test]
+    fn test_subset_tree_positions() {
+        use super::Substitution;
+
+        let cases = ["type nat
+             symbol Z: nat+
+             symbol Add: nat-, nat-, nat+
+             Add(x, x) >< Z()
+             Add(Z(), x) >< Z()"];
+
+        for case in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let program = bc::compilation::compile(typed.clone()).unwrap();
+
+            let state = bc::vm::State::new(program, typed.symbol_declarations_for);
+            let pos = state.subset_tree_positions(4, 14).unwrap();
+
+            assert_eq!(
+                pos,
+                vec![Substitution {
+                    src: bc::GlobalPtr::MemPtr(13),
+                    dest: bc::GlobalPtr::MemPtr(5),
+                }]
+            );
+        }
     }
 }
