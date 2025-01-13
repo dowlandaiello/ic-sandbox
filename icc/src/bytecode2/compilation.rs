@@ -266,9 +266,9 @@ impl<'a> Compiler<'a> {
                                 .get_mut(&ptr::addr_of!(**agent))?
                                 .as_agent_mut()?;
 
-                            src_elem_mut
-                                .ports
-                                .push(GlobalPtr::MemPtr(*all_vars_pos.get(v.0.as_str())?));
+                            let var_ptr = GlobalPtr::MemPtr(*all_vars_pos.get(v.0.as_str())?);
+
+                            src_elem_mut.ports.push(var_ptr);
                         }
                     }
                 }
@@ -610,6 +610,38 @@ mod test {
 
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
             state.step_to_end().unwrap();
+        }
+    }
+
+    #[test_log::test]
+    fn test_eval_substituted() {
+        let cases = [(
+            "type nat
+             symbol Z: nat+
+             symbol Add: nat-, nat-, nat+
+             Add(x, x) >< Z()
+             Add(Z(), Z()) >< Z()",
+            ["Z() >< Add(Z(), Z())", "Z() >< Add(x, x)"],
+        )];
+
+        for (case, expected) in cases {
+            let lexed = lexer()
+                .parse(case)
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let parsed = parser().parse(lexed).unwrap();
+
+            let (typed, _) = heur::parse_typed_program(parsed);
+
+            let program = compile(typed.clone()).unwrap();
+
+            let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
+            let mut res = state.step_to_end().unwrap();
+
+            assert_eq!(res.remove(0).to_string().as_str(), expected[0]);
+            assert_eq!(res.remove(0).to_string().as_str(), expected[1]);
         }
     }
 }

@@ -287,13 +287,13 @@ impl State {
             .ports
             .iter()
             .skip(1)
-            .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, &mut Default::default()))
+            .filter_map(|p| self.readback_elem(p.get_src_pos()?, &mut Default::default()))
             .collect();
         rhs_agent.ports = rhs_elem
             .ports
             .iter()
             .skip(1)
-            .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, &mut Default::default()))
+            .filter_map(|p| self.readback_elem(p.get_src_pos()?, &mut Default::default()))
             .collect();
 
         Some(Expr::Net(Net {

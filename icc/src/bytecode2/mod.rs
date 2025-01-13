@@ -52,6 +52,14 @@ impl fmt::Display for GlobalPtr {
 }
 
 impl GlobalPtr {
+    pub fn get_src_pos(&self) -> Option<Ptr> {
+        match &self {
+            Self::AgentPtr(p) => Some(p.mem_pos),
+            Self::MemPtr(p) => Some(*p),
+            Self::Offset(_) => None,
+        }
+    }
+
     pub fn as_agent_ptr(&self) -> Option<&AgentPtr> {
         match &self {
             Self::AgentPtr(p) => Some(p),
