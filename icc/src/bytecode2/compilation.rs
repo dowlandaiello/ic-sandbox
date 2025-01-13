@@ -393,17 +393,33 @@ impl<'a> Compiler<'a> {
 pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
     let mut out: Vec<BcBlock<'a>> = Default::default();
 
-    let nets_by_active_pair = p
+    let all_net_pairs = p
         .nets
         .iter()
         .filter_map(|net| match net {
             Net {
                 lhs: Some(lhs),
                 rhs: Some(rhs),
-            } => Some(((lhs.name.0.as_str(), rhs.name.0.as_str()), (lhs, rhs))),
+            } => Some((lhs.name.0.as_str(), rhs.name.0.as_str())),
             _ => None,
         })
-        .collect::<BTreeMap<(&str, &str), (&Agent, &Agent)>>();
+        .collect::<Vec<_>>();
+
+    // Get first of each occurrence of an interaction: these are rules
+    let rules = all_net_pairs.into_iter().fold(
+        BTreeSet::new(),
+        |mut nets_by_pair, (lhs_name, rhs_name)| {
+            let pair = (lhs_name, rhs_name);
+
+            if nets_by_pair.contains(&pair) {
+                return nets_by_pair;
+            }
+
+            nets_by_pair.insert(pair);
+
+            nets_by_pair
+        },
+    );
 
     for net in &p.nets {
         let (lhs, rhs) = match net {
@@ -431,32 +447,7 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
         // Nets are literals if they do not mention
         // any nets which are members in an active pair in the program
 
-        let requires_substitution = [lhs, rhs].iter().any(|redex_mem| {
-            redex_mem
-                .iter_child_agents()
-                .filter_map(|port| match port {
-                    PortView::Agent(a) => Some(a),
-                    _ => None,
-                })
-                .filter(|agent| agent != &lhs && agent != &rhs)
-                .any(|child| {
-                    (|| {
-                        let (lhs, rhs) = p.try_get_redex(child)?;
-
-                        // The agent is not literal and requires substitution
-                        // if there is an existing rule for the pair of
-                        // agents
-                        if nets_by_active_pair
-                            .contains_key(&(lhs.name.0.as_str(), rhs.name.0.as_str()))
-                        {
-                            Some((lhs, rhs))
-                        } else {
-                            None
-                        }
-                    })()
-                    .is_some()
-                })
-        });
+        let requires_substitution = rules.contains(&(lhs.name.0.as_str(), rhs.name.0.as_str()));
 
         let net_ref = Rc::new(NetRef::Intro { lhs, rhs });
 
@@ -620,8 +611,13 @@ mod test {
              symbol Z: nat+
              symbol Add: nat-, nat-, nat+
              Add(x, x) >< Z()
-             Add(Z(), Z()) >< Z()",
-            ["Z() >< Add(Z(), Z())", "Z() >< Add(x, x)"],
+             Add(Z(), Z()) >< Z()
+             Add(Z(), x) >< Z()",
+            [
+                "Z() >< Add(Z(), Z())",
+                "Z() >< Add(Z(), Z())",
+                "Z() >< Add(x, x)",
+            ],
         )];
 
         for (case, expected) in cases {
@@ -640,8 +636,9 @@ mod test {
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
             let mut res = state.step_to_end().unwrap();
 
-            assert_eq!(res.remove(0).to_string().as_str(), expected[0]);
-            assert_eq!(res.remove(0).to_string().as_str(), expected[1]);
+            for expected_readback in expected {
+                assert_eq!(res.remove(0).to_string().as_str(), expected_readback);
+            }
         }
     }
 }
