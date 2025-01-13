@@ -413,10 +413,10 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
 
             // Interactions with no variables are necessarily literals
             // and shall not be registered as rules
-            if [lhs, rhs].iter().any(|redex_elem| {
+            if [lhs, rhs].iter().all(|redex_elem| {
                 redex_elem
                     .iter_child_agents()
-                    .filter(|view| matches!(view, PortView::Var(_)))
+                    .filter(|view| matches!(view, &PortView::Var(_)))
                     .count()
                     == 0
             }) {
