@@ -655,7 +655,7 @@ mod test {
              symbol Add: nat-, nat-, nat+
              Add(x, x) >< Z()
              Add(Z(), x) >< Z()",
-            ["Z() >< Add(Z(), Z())", "Z() >< Add(x, x)"],
+            ["Z() >< Add(x, x)", "Z() >< Add(Z(), Z())"],
         )];
 
         for (case, expected) in cases {
