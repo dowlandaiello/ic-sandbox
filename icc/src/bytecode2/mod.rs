@@ -251,6 +251,8 @@ impl Agent {
 
 #[derive(Ord, PartialEq, PartialOrd, Eq, Clone, Debug, Serialize, Deserialize)]
 pub enum Op {
+    Swap3,
+    Pop,
     Load,
     LoadMem,
     PushStack(StackElem),
@@ -274,11 +276,14 @@ pub enum Op {
     CloneNet,
     PushSubstitutionPositions,
     Substitute,
+    Flip,
 }
 
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Swap3 => write!(f, "SWAP_3"),
+            Self::Pop => write!(f, "POP"),
             Self::Load => write!(f, "LOAD"),
             Self::LoadMem => write!(f, "LOAD_MEM"),
             Self::PushStack(elem) => write!(f, "PUSH_STACK {}", elem),
@@ -302,6 +307,7 @@ impl fmt::Display for Op {
             Self::PushSubstitutionPositions => write!(f, "PUSH_SUB_POS"),
             Self::Substitute => write!(f, "SUB"),
             Self::QueueRedex => write!(f, "QUEUE_REDEX"),
+            Self::Flip => write!(f, "FLIP"),
         }
     }
 }

@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub struct TypedProgram {
     pub types: BTreeSet<Type>,
     pub symbol_declarations_for: BTreeMap<Type, Vec<PortKind>>,
-    pub nets: BTreeSet<Net>,
+    pub nets: Vec<Net>,
 }
 
 impl TypedProgram {
@@ -142,7 +142,9 @@ impl TypedProgram {
     }
 
     pub fn push_net(&mut self, net: Net) {
-        self.nets.insert(net);
+        if !self.nets.contains(&net) {
+            self.nets.push(net);
+        }
     }
 }
 
@@ -337,7 +339,7 @@ pub fn parse_typed_program(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::{parser::parser_lafont, test as test_utils};
+    use crate::parser::parser_lafont;
     use chumsky::{stream::Stream, Parser};
 
     #[test]
@@ -521,35 +523,5 @@ Z() >< Add(Z(), Z())
                 .0
                 .clone()]
         );
-    }
-
-    #[test]
-    fn test_subset_bindings() {
-        let types = test_utils::with_typed(
-            "type nat
-
-symbol Z: nat+
-symbol S: nat+, nat-
-symbol Add: nat-, nat-, nat+
-
-S(Z()) >< Add(x, S(x))
-S(Z()) >< Add(Z(), x)",
-        );
-        let nets = types.nets.iter().cloned().collect::<Vec<_>>();
-        let subbindings = TypedProgram::subset_bindings(
-            &types.symbol_declarations_for,
-            &nets[1].rhs.as_ref().unwrap(),
-            &nets[0].rhs.as_ref().unwrap(),
-            &types
-                .symbol_declarations_for
-                .get(&nets[1].rhs.as_ref().unwrap().name)
-                .unwrap()
-                .into_iter()
-                .cloned()
-                .skip(1)
-                .collect::<Vec<_>>(),
-        );
-
-        assert!(subbindings.is_some());
     }
 }

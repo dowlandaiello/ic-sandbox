@@ -292,18 +292,21 @@ impl Executor {
                     acc
                 });
 
-        let nets = self
-            .evaluations
+        let mut p = TypedProgram {
+            types,
+            symbol_declarations_for,
+            nets: Default::default(),
+        };
+
+        self.evaluations
             .iter()
             .map(|(_, buff)| buff)
             .cloned()
-            .collect::<BTreeSet<_>>();
+            .for_each(|n| {
+                p.push_net(n);
+            });
 
-        TypedProgram {
-            types,
-            symbol_declarations_for,
-            nets,
-        }
+        p
     }
 
     /// Steps the virtual machine until nothing in the stack is left to execute

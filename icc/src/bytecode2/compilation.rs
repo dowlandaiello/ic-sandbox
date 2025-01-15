@@ -76,8 +76,9 @@ impl error::Error for Error {}
 pub enum BcBlock<'a> {
     Referable(Rc<NetRef<'a>>),
     Substitute,
-    PushRes(Rc<NetRef<'a>>),
+    PushRes(Option<Rc<NetRef<'a>>>),
     IterRedex { stmts: Vec<BcBlock<'a>> },
+    RawStackElem(StackElem),
     QueueRedex(Rc<NetRef<'a>>),
 }
 
@@ -304,6 +305,9 @@ impl<'a> Compiler<'a> {
 
         for instr in instrs {
             match instr {
+                BcBlock::RawStackElem(e) => {
+                    src.push(e);
+                }
                 BcBlock::QueueRedex(from) => {
                     let ptr = agent_ptrs.get(from.as_ref()).unwrap().clone();
 
@@ -361,7 +365,7 @@ impl<'a> Compiler<'a> {
                         Op::Copy.into(),
                         Op::PushStack(StackElem::None).into(),
                         Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(
-                            loop_start_ptr + 4 + compiled_instrs.len() + 2,
+                            loop_start_ptr + 4 + compiled_instrs.len() + 3,
                         )))
                         .into(),
                         Op::GoToEq.into(),
@@ -373,12 +377,16 @@ impl<'a> Compiler<'a> {
                     ]);
                 }
                 BcBlock::PushRes(from) => {
-                    let ptr = agent_ptrs.get(from.as_ref()).unwrap();
+                    if let Some(from) = from {
+                        let ptr = agent_ptrs.get(&from).unwrap();
 
-                    src.extend([
-                        Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into(),
-                        Op::PushRes.into(),
-                    ]);
+                        src.extend([
+                            Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into(),
+                            Op::PushRes.into(),
+                        ]);
+                    } else {
+                        src.push(Op::PushRes.into());
+                    }
                 }
                 BcBlock::Substitute => {
                     src.push(Op::Substitute.into());
@@ -406,32 +414,43 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
         .collect::<Vec<_>>();
 
     // Get first occurrence of a rule with variables: this is a rule
-    let (_, substituted) = all_net_pairs.into_iter().enumerate().fold(
-        (BTreeSet::new(), Vec::new()),
-        |(mut nets_by_pair, mut substituted), (i, ((lhs_name, rhs_name), (lhs, rhs)))| {
-            let pair = (lhs_name, rhs_name);
-
+    let substituted = all_net_pairs.into_iter().enumerate().fold(
+        Vec::new(),
+        |mut substituted, (i, ((_, _), (lhs, rhs)))| {
             // Interactions with no variables are necessarily literals
             // and shall not be registered as rules
-            if [lhs, rhs].iter().all(|redex_elem| {
-                redex_elem
-                    .iter_child_agents()
-                    .filter(|view| matches!(view, &PortView::Var(_)))
-                    .count()
-                    == 0
-            }) {
-                return (nets_by_pair, substituted);
-            }
+            //
+            // Interactions must have the same variable occurring twice
+            // to be a rule
+            let all_vars = [lhs, rhs]
+                .iter()
+                .map(|redex_elem| {
+                    redex_elem
+                        .iter_child_agents()
+                        .filter_map(|view| match view {
+                            PortView::Var(v) => Some(v),
+                            _ => None,
+                        })
+                })
+                .flatten()
+                .fold(
+                    BTreeMap::<&str, Vec<&str>>::new(),
+                    |mut acc: BTreeMap<&str, Vec<_>>, x| {
+                        acc.entry(x.0.as_str()).or_default().push(x.0.as_ref());
 
-            if nets_by_pair.contains(&pair) {
+                        acc
+                    },
+                );
+
+            // This is not a well formed rule, it is a binding
+            if all_vars
+                .iter()
+                .any(|(_, occurrences)| occurrences.len() < 2)
+            {
                 substituted.push(i);
-
-                return (nets_by_pair, substituted);
             }
 
-            nets_by_pair.insert(pair);
-
-            (nets_by_pair, substituted)
+            substituted
         },
     );
 
@@ -468,6 +487,8 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
         out.push(BcBlock::Referable(net_ref.clone()));
 
         if requires_substitution {
+            out.push(BcBlock::QueueRedex(net_ref.clone()));
+
             let matching_rule_before_copy = Rc::new(NetRef::MatchingRule);
             let clone_net = Rc::new(NetRef::CloneNet(None));
             let cloned_sub_positions = Rc::new(NetRef::SubstitutionPositions {
@@ -475,22 +496,30 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
                 of_child: None,
             });
 
-            out.extend([BcBlock::QueueRedex(net_ref.clone())]);
-
             // While we have a redex left,
             out.push(BcBlock::IterRedex {
                 stmts: vec![
                     // The redex will be lhs port pointer, rhs port pointer
                     // in stack [0], [-1]
+                    BcBlock::RawStackElem(Op::Copy.into()),
                     BcBlock::Referable(matching_rule_before_copy),
                     BcBlock::Referable(clone_net),
+                    BcBlock::RawStackElem(Op::Copy.into()),
+                    BcBlock::RawStackElem(Op::Swap3.into()),
+                    BcBlock::RawStackElem(Op::Flip.into()),
                     BcBlock::Referable(cloned_sub_positions.clone()),
+                    // Do some swap here of instrs copy
                     BcBlock::Substitute,
                 ],
             });
-        }
 
-        out.push(BcBlock::PushRes(net_ref));
+            out.extend([
+                BcBlock::RawStackElem(Op::Pop.into()),
+                BcBlock::PushRes(None),
+            ]);
+        } else {
+            out.push(BcBlock::PushRes(Some(net_ref)));
+        }
     }
 
     Ok(out)
@@ -625,8 +654,8 @@ mod test {
              symbol Z: nat+
              symbol Add: nat-, nat-, nat+
              Add(x, x) >< Z()
-             Add(Z(), Z()) >< Z()",
-            ["Z() >< Add(Z(), Z())", "Z() >< Add(Z(), Z())"],
+             Add(Z(), x) >< Z()",
+            ["Z() >< Add(Z(), Z())", "Z() >< Add(x, x)"],
         )];
 
         for (case, expected) in cases {

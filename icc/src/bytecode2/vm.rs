@@ -76,6 +76,7 @@ impl State {
             .src
             .0
             .iter()
+            .skip(self.src.len())
             .enumerate()
             .filter_map(|(i, elem)| Some((i, elem.as_agent()?)));
         agents.filter_map(|(mem_pos, agent)| {
@@ -199,32 +200,82 @@ impl State {
     }
 
     pub fn clone_tree(&mut self, p: Ptr) -> Option<Ptr> {
-        let elem = self.iter_deref(GlobalPtr::MemPtr(p)).last()?;
+        let all_elems = self.iter_tree(GlobalPtr::MemPtr(p))?.collect::<Vec<_>>();
+        let mut new_elems = all_elems
+            .into_iter()
+            .filter_map(|ptr| {
+                // We want vars and agents, not variables
+                let elem = self
+                    .iter_deref(ptr)
+                    .filter(|elem| {
+                        matches!(elem, StackElem::Agent(_)) || matches!(elem, StackElem::Var(_))
+                    })
+                    .next()?;
 
-        match elem {
-            StackElem::Agent(a) => {
-                let cloned_children = a
+                match elem {
+                    StackElem::Agent(a) => {
+                        let name = {
+                            let name = self.src.get(a.name.as_mem_ptr()?)?.clone();
+                            self.src.0.push(name);
+
+                            Some(self.src.len() - 1)
+                        }?;
+
+                        self.src.0.push(StackElem::Agent(Agent {
+                            name: GlobalPtr::MemPtr(name),
+                            ports: Default::default(),
+                        }));
+
+                        Some((ptr, self.src.len() - 1))
+                    }
+                    StackElem::Var(v) => {
+                        let name = {
+                            let name = self.src.get(v)?.clone();
+                            self.src.0.push(name);
+
+                            Some(self.src.len() - 1)
+                        }?;
+
+                        self.src.0.push(StackElem::Var(name));
+
+                        Some((ptr, self.src.len() - 1))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<BTreeMap<GlobalPtr, Ptr>>();
+
+        // Now connect elems as they were in the original
+        let _ = new_elems
+            .iter()
+            .filter_map(|(original, new)| Some((original.as_mem_ptr()?, new)))
+            .filter_map(|(original, new)| {
+                let new_ports = self
+                    .src
+                    .get(original)?
+                    .as_agent()?
                     .ports
                     .iter()
-                    .map(|child| child.as_agent_ptr())
-                    .map(|aptr| {
-                        aptr.and_then(|aptr| {
-                            Some(GlobalPtr::AgentPtr(AgentPtr {
-                                mem_pos: self.clone_tree(aptr.mem_pos)?,
-                                port: aptr.port,
-                            }))
-                        })
+                    .map(|p| match p {
+                        GlobalPtr::AgentPtr(p) => Some(GlobalPtr::AgentPtr(AgentPtr {
+                            mem_pos: *new_elems.get(&GlobalPtr::MemPtr(p.mem_pos))?,
+                            port: p.port,
+                        })),
+                        GlobalPtr::MemPtr(p) => {
+                            Some(GlobalPtr::MemPtr(*new_elems.get(&GlobalPtr::MemPtr(*p))?))
+                        }
+                        _ => None,
                     })
                     .collect::<Option<Vec<_>>>()?;
-                self.src.0.push(StackElem::Agent(Agent {
-                    name: a.name,
-                    ports: cloned_children,
-                }));
+                let new_mut = self.src.0.get_mut(*new)?.as_agent_mut()?;
 
-                Some(self.src.0.len() - 1)
-            }
-            _ => Some(p),
-        }
+                new_mut.ports = new_ports;
+
+                Some(())
+            })
+            .collect::<Vec<_>>();
+
+        new_elems.remove(&GlobalPtr::MemPtr(p))
     }
 
     pub fn iter_tree<'a>(
@@ -393,29 +444,26 @@ impl State {
         let res = (|| -> Option<Option<Expr>> {
             let res = match next_elem.as_ref() {
                 &Op::Substitute => {
-                    while let (Some(src), Some(dest)) = (
-                        self.stack.pop_back()?.as_ptr()?.as_agent_ptr(),
-                        self.stack.pop_back()?.as_ptr()?.as_agent_ptr(),
-                    ) {
-                        *self
-                            .src
-                            .0
-                            .get_mut(src.mem_pos)?
-                            .as_agent_mut()?
-                            .ports
-                            .get_mut(src.port?)? = GlobalPtr::AgentPtr(*dest);
-                        *self
-                            .src
-                            .0
-                            .get_mut(dest.mem_pos)?
-                            .as_agent_mut()?
-                            .ports
-                            .get_mut(dest.port?)? = GlobalPtr::AgentPtr(*src);
+                    while self.stack.len() >= 2 {
+                        let (v1, v2) = (self.stack.pop_back()?, self.stack.pop_back()?);
 
-                        // This is a new redex
-                        if src.port == Some(0) && dest.port == Some(0) {
-                            self.redex_bag.push_back((src.mem_pos, dest.mem_pos));
-                        }
+                        let (dest, src) = if let (Some(dest), Some(src)) =
+                            (v1.as_ptr()?.as_mem_ptr(), v2.as_ptr()?.as_mem_ptr())
+                        {
+                            (dest, src)
+                        } else {
+                            self.stack.push_back(v2);
+                            self.stack.push_back(v1);
+
+                            break;
+                        };
+
+                        let to_substitute_ptr = dest;
+                        let to_substitute_with = self.iter_deref(GlobalPtr::MemPtr(src)).next()?;
+
+                        *self.src.0.get_mut(to_substitute_ptr)? = to_substitute_with;
+
+                        self.refresh_redex_bag();
                     }
 
                     Some(None)
@@ -428,8 +476,8 @@ impl State {
 
                     if let Some(positions) = positions {
                         for Substitution { src, dest } in positions {
-                            self.stack.push_back(StackElem::Ptr(src));
                             self.stack.push_back(StackElem::Ptr(dest));
+                            self.stack.push_back(StackElem::Ptr(src));
                         }
                     } else {
                         self.stack.push_back(StackElem::None);
@@ -438,12 +486,11 @@ impl State {
                     Some(None)
                 }
                 &Op::PushMatchingRule => {
-                    let (ptr_lhs, ptr_rhs) = (
-                        self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?,
-                        self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?,
-                    );
+                    let ptr_lhs = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
 
                     let agent_a = self.src.0.get(ptr_lhs)?.as_agent()?;
+
+                    let ptr_rhs = agent_a.ports.get(0)?.as_agent_ptr()?.mem_pos;
                     let agent_b = self.src.0.get(ptr_rhs)?.as_agent()?;
 
                     let agent_a_name = self.src.get(agent_a.name.as_mem_ptr()?)?.as_ident()?;
@@ -514,6 +561,11 @@ impl State {
 
                     Some(None)
                 }
+                &Op::Pop => {
+                    let _ = self.stack.pop_back()?;
+
+                    Some(None)
+                }
                 &Op::CloneNet => {
                     let to_clone = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
                     let ptr = self.clone_tree(to_clone)?;
@@ -539,8 +591,6 @@ impl State {
                     if let Some(redex) = self.redex_bag.pop_back() {
                         self.stack
                             .push_back(StackElem::Ptr(GlobalPtr::MemPtr(redex.0)));
-                        self.stack
-                            .push_back(StackElem::Ptr(GlobalPtr::MemPtr(redex.1)));
                     } else {
                         self.stack.push_back(StackElem::None);
                     }
@@ -575,6 +625,26 @@ impl State {
 
                     self.stack.push_back(to_cpy.clone());
                     self.stack.push_back(to_cpy);
+
+                    Some(None)
+                }
+                &Op::Swap3 => {
+                    let a = self.stack.pop_back()?;
+                    let b = self.stack.pop_back()?;
+                    let c = self.stack.pop_back()?;
+
+                    self.stack.push_back(a);
+                    self.stack.push_back(b);
+                    self.stack.push_back(c);
+
+                    Some(None)
+                }
+                &Op::Flip => {
+                    let a = self.stack.pop_back()?;
+                    let b = self.stack.pop_back()?;
+
+                    self.stack.push_back(a);
+                    self.stack.push_back(b);
 
                     Some(None)
                 }
@@ -922,13 +992,13 @@ mod test {
             let program = bc::compilation::compile(typed.clone()).unwrap();
 
             let state = bc::vm::State::new(program, typed.symbol_declarations_for);
-            let pos = state.subset_tree_positions(4, 14).unwrap();
+            let pos = state.subset_tree_positions(13, 4).unwrap();
 
             assert_eq!(
                 pos,
                 vec![Substitution {
-                    src: bc::GlobalPtr::MemPtr(13),
-                    dest: bc::GlobalPtr::MemPtr(5),
+                    src: bc::GlobalPtr::MemPtr(4),
+                    dest: bc::GlobalPtr::MemPtr(13),
                 }]
             );
         }
