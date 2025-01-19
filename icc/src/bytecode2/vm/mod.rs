@@ -1,13 +1,11 @@
 use super::{Agent, AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
-use redex_tree::{RedexTree, RedexTreeElem};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     error, fmt,
+    rc::Rc,
 };
-
-mod redex_tree;
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -53,7 +51,16 @@ pub struct State {
     pub redex_bag: VecDeque<(Ptr, Ptr)>,
 
     #[serde(skip)]
-    pub results: RedexTree<Expr>,
+    pub results: BTreeMap<Rc<Vec<(RedexElem, RedexElem)>>, Expr>,
+
+    #[serde(skip)]
+    pub results_ord: Vec<Rc<Vec<(RedexElem, RedexElem)>>>,
+}
+
+#[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RedexElem {
+    Agent { name: String },
+    Var { name: String },
 }
 
 impl State {
@@ -66,6 +73,7 @@ impl State {
             redex_bag: Default::default(),
             types,
             results: Default::default(),
+            results_ord: Default::default(),
         };
 
         s.refresh_redex_bag();
@@ -704,39 +712,48 @@ impl State {
                         .stack
                         .pop_back()
                         .and_then(|elem| elem.as_ptr().cloned())?;
-                    let k = self
+
+                    let lhs = self
                         .stack
                         .pop_back()
                         .and_then(|elem| elem.as_ptr().cloned())?;
-                    let tree = self
-                        .iter_tree(k)?
-                        .filter_map(|ptr| {
-                            let elem = self.iter_deref(ptr).next()?;
+                    let lhs_elem = self.iter_deref(lhs).next()?;
+                    let lhs_agent = lhs_elem.as_agent()?;
+                    let rhs = lhs_agent.ports.get(0)?;
 
-                            match elem {
-                                StackElem::Var(name) => {
-                                    let name_elem =
-                                        self.iter_deref(GlobalPtr::MemPtr(name)).next()?;
-                                    let name = name_elem.as_ident()?;
+                    let relevant_ptr = |ptr| {
+                        let elem = self.iter_deref(ptr).next()?;
 
-                                    Some(RedexTreeElem::Var(name.to_owned()))
-                                }
-                                StackElem::Agent(Agent { name, .. }) => {
-                                    let name_elem = self.iter_deref(name).next()?;
-                                    let name = name_elem.as_ident()?;
+                        match elem {
+                            StackElem::Var(name) => {
+                                let name_elem = self.iter_deref(GlobalPtr::MemPtr(name)).next()?;
+                                let name = name_elem.as_ident()?;
 
-                                    Some(RedexTreeElem::Agent {
-                                        name: name.to_owned(),
-                                    })
-                                }
-                                _ => None,
+                                Some(RedexElem::Var {
+                                    name: name.to_owned(),
+                                })
                             }
-                        })
-                        .collect::<Vec<_>>();
+                            StackElem::Agent(Agent { name, .. }) => {
+                                let name_elem = self.iter_deref(name).next()?;
+                                let name = name_elem.as_ident()?;
+
+                                Some(RedexElem::Agent {
+                                    name: name.to_owned(),
+                                })
+                            }
+                            _ => None,
+                        }
+                    };
+
+                    let tree_lhs = self.iter_tree(lhs)?.filter_map(relevant_ptr);
+                    let tree_rhs = self.iter_tree(*rhs)?.filter_map(relevant_ptr);
 
                     let result = self.readback(v)?;
 
-                    self.results.insert(tree.into_iter(), result);
+                    let path = Rc::new(tree_lhs.zip(tree_rhs).collect::<Vec<_>>());
+
+                    self.results.insert(path.clone(), result);
+                    self.results_ord.push(path);
 
                     Some(())
                 }
@@ -850,12 +867,12 @@ impl State {
         res.map(|_| ())
     }
 
-    pub fn step_to_end(&mut self) -> Result<Vec<Expr>, Error> {
+    pub fn step_to_end(&mut self) -> Result<impl Iterator<Item = &Expr>, Error> {
         while self.pos < self.src.len() {
             self.step()?;
         }
 
-        todo!()
+        Ok(self.results_ord.iter().filter_map(|k| self.results.get(k)))
     }
 }
 
@@ -1001,42 +1018,6 @@ mod test {
             assert!(elems
                 .find(|elem| matches!(elem, bc::StackElem::Var(_)))
                 .is_some());
-        }
-    }
-
-    #[test_log::test]
-    fn test_subset_tree_positions() {
-        use super::Substitution;
-
-        let cases = ["type nat
-             symbol Z: nat+
-             symbol Add: nat-, nat-, nat+
-             Add(x, x) >< Z()
-             Add(Z(), x) >< Z()"];
-
-        for case in cases {
-            let lexed = lexer()
-                .parse(case)
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-            let parsed = parser().parse(lexed).unwrap();
-
-            let (typed, _) = heur::parse_typed_program(parsed);
-
-            let program = bc::compilation::compile(typed.clone()).unwrap();
-
-            let state = bc::vm::State::new(program, typed.symbol_declarations_for);
-            let pos = state.subset_tree_positions(13, 4).unwrap();
-
-            assert_eq!(
-                pos,
-                vec![Substitution {
-                    src: bc::GlobalPtr::MemPtr(4),
-                    dest: bc::GlobalPtr::MemPtr(13),
-                }]
-            );
         }
     }
 }

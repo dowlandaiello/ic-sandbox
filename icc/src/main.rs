@@ -63,7 +63,6 @@ fn main() {
                 let results = exec.step_to_end().unwrap();
 
                 results
-                    .iter()
                     .map(|n| n.to_string())
                     .collect::<Vec<_>>()
                     .join("\n")

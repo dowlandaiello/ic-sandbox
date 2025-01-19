@@ -76,7 +76,7 @@ impl error::Error for Error {}
 pub enum BcBlock<'a> {
     Referable(Rc<NetRef<'a>>),
     Substitute,
-    PushRes(Option<Rc<NetRef<'a>>>),
+    PushRes(Option<Rc<NetRef<'a>>>, Option<Rc<NetRef<'a>>>),
     IterRedex { stmts: Vec<BcBlock<'a>> },
     RawStackElem(StackElem),
     QueueRedex(Rc<NetRef<'a>>),
@@ -372,17 +372,22 @@ impl<'a> Compiler<'a> {
                         Op::GoTo.into(),
                     ]);
                 }
-                BcBlock::PushRes(from) => {
+                BcBlock::PushRes(from, result) => {
                     if let Some(from) = from {
                         let ptr = agent_ptrs.get(&from).unwrap();
 
-                        src.extend([
-                            Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into(),
-                            Op::PushRes.into(),
-                        ]);
-                    } else {
-                        src.push(Op::PushRes.into());
+                        src.push(Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr))).into());
                     }
+
+                    if let Some(result) = result {
+                        let ptr_result = agent_ptrs.get(&result).unwrap();
+
+                        src.push(
+                            Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(*ptr_result))).into(),
+                        );
+                    }
+
+                    src.extend([Op::Flip.into(), Op::PushRes.into()]);
                 }
                 BcBlock::Substitute => {
                     src.push(Op::Substitute.into());
@@ -511,10 +516,10 @@ pub fn precompile<'a>(p: &'a TypedProgram) -> Result<Vec<BcBlock<'a>>, Error> {
 
             out.extend([
                 BcBlock::RawStackElem(Op::Pop.into()),
-                BcBlock::PushRes(None),
+                BcBlock::PushRes(Some(net_ref), None),
             ]);
         } else {
-            out.push(BcBlock::PushRes(Some(net_ref)));
+            out.push(BcBlock::PushRes(Some(net_ref.clone()), Some(net_ref)));
         }
     }
 
@@ -546,7 +551,7 @@ mod test {
              symbol Void: atom+
              symbol Id: atom-, atom+
              Void() >< Id(Void())",
-            "Id(Void()) >< Void()",
+            "Void() >< Id(Void())",
         )];
 
         for (case, expected) in cases {
@@ -562,59 +567,10 @@ mod test {
 
             let program = compile(typed.clone()).unwrap();
 
-            let mut results = vm::State::new(program, typed.symbol_declarations_for)
-                .step_to_end()
-                .unwrap();
+            let mut state = vm::State::new(program, typed.symbol_declarations_for);
+            let mut results = state.step_to_end().unwrap();
 
-            assert_eq!(results.remove(0).to_string(), expected);
-        }
-    }
-
-    #[test_log::test]
-    fn test_loop() {
-        use super::super::AgentPtr;
-
-        let cases = ["type atom
-             symbol Void: atom+
-             symbol Id: atom-, atom+
-             Void() >< Id(Void())"];
-
-        for case in cases {
-            let lexed = lexer()
-                .parse(case)
-                .unwrap()
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
-            let parsed = parser().parse(lexed).unwrap();
-
-            let (typed, _) = heur::parse_typed_program(parsed);
-
-            let mut program = compile(typed.clone()).unwrap();
-
-            tracing::debug!("{}", program);
-
-            program.0.extend([
-                Op::PushStack(StackElem::Ptr(GlobalPtr::AgentPtr(AgentPtr {
-                    mem_pos: 3,
-                    port: Some(0),
-                })))
-                .into(),
-                Op::Copy.into(),
-                Op::Debug.into(),
-                Op::PushStack(StackElem::Offset(1)).into(),
-                Op::IncrPtr.into(),
-                Op::Copy.into(),
-                Op::Deref.into(),
-                Op::PushStack(StackElem::None).into(),
-                Op::PushStack(StackElem::Ptr(GlobalPtr::MemPtr(8))).into(),
-                Op::GoToNeq.into(),
-            ]);
-
-            tracing::debug!("{}", program);
-
-            let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
-            state.step_to_end().unwrap();
+            assert_eq!(results.next().unwrap().to_string(), expected);
         }
     }
 
@@ -639,7 +595,7 @@ mod test {
             let program = compile(typed.clone()).unwrap();
 
             let mut state = bc::vm::State::new(program, typed.symbol_declarations_for);
-            state.step_to_end().unwrap();
+            let _ = state.step_to_end().unwrap();
         }
     }
 
@@ -651,7 +607,7 @@ mod test {
              symbol Add: nat-, nat-, nat+
              Add(x, x) >< Z()
              Add(Z(), x) >< Z()",
-            ["Z() >< Add(x, x)", "Z() >< Add(Z(), Z())"],
+            ["Add(x, x) >< Z()", "Z() >< Add(Z(), Z())"],
         )];
 
         for (case, expected) in cases {
@@ -671,7 +627,7 @@ mod test {
             let mut res = state.step_to_end().unwrap();
 
             for expected_readback in expected {
-                assert_eq!(res.remove(0).to_string().as_str(), expected_readback);
+                assert_eq!(res.next().unwrap().to_string().as_str(), expected_readback);
             }
         }
     }

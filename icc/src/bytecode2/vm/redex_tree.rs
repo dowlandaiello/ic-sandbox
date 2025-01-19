@@ -14,7 +14,7 @@ pub enum RedexTreeElem {
 }
 
 pub struct RedexTree<V> {
-    roots: BTreeMap<Rc<RedexTreeElem>, RedexNode<V>>,
+    roots: BTreeMap<(Rc<RedexTreeElem>, Rc<RedexTreeElem>), (RedexNode<V>, RedexNode<V>)>,
 }
 
 impl<V> default::Default for RedexTree<V> {
@@ -26,10 +26,26 @@ impl<V> default::Default for RedexTree<V> {
 }
 
 impl<V> RedexTree<V> {
-    pub fn remove(&self, tree: impl Iterator<Item = RedexTreeElem>) -> Option<V> {
-        self.iter_tree(tree)
+    pub fn drain_values<'a>(&'a self) -> impl Iterator<Item = V> + 'a {
+        self.roots
+            .iter()
+            .map(|(_, (lhs, _))| lhs.drain_child_values())
+            .flatten()
+    }
+
+    pub fn remove(
+        &self,
+        lhs_tree: impl Iterator<Item = RedexTreeElem>,
+        rhs_tree: impl Iterator<Item = RedexTreeElem>,
+    ) -> Option<V> {
+        self.iter_tree(lhs_tree)
             .last()
-            .and_then(|elem| elem.value.take())
+            .zip(self.iter_tree(rhs_tree.last())
+            .and_then(|(elem_lhs, elem_rhs)| {
+                let _ = elem_rhs.value.take();
+
+                elem_lhs.value.take()
+            })
     }
 
     pub fn insert(
@@ -92,6 +108,19 @@ struct RedexNode<V> {
 }
 
 impl<V> RedexNode<V> {
+    // This is pretty inefficient
+    fn drain_child_values<'a>(&'a self) -> Box<dyn Iterator<Item = V> + 'a> {
+        Box::new(
+            [self.value.take()].into_iter().filter_map(|x| x).chain(
+                self.children
+                    .iter()
+                    .map(|(_, v)| v)
+                    .map(|child| child.drain_child_values())
+                    .flatten(),
+            ),
+        )
+    }
+
     fn new(value: Option<V>) -> Self {
         Self {
             children: Default::default(),
