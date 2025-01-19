@@ -43,7 +43,7 @@ pub struct Substitution {
     dest: GlobalPtr,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct State {
     pub pos: Ptr,
     pub src: Program,
@@ -859,7 +859,6 @@ impl State {
     }
 }
 
-#[derive(Debug)]
 pub struct DerefVisitor<'a> {
     pos: Option<GlobalPtr>,
     view: &'a State,
@@ -922,7 +921,6 @@ impl Iterator for DerefVisitor<'_> {
     }
 }
 
-#[derive(Debug)]
 pub struct TreeVisitor<'a> {
     seen: BTreeSet<GlobalPtr>,
     to_visit: VecDeque<GlobalPtr>,

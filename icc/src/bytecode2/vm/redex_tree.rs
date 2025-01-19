@@ -13,12 +13,11 @@ pub enum RedexTreeElem {
     Var(String),
 }
 
-#[derive(Debug, Clone)]
-pub struct RedexTree<V: Copy> {
+pub struct RedexTree<V> {
     roots: BTreeMap<Rc<RedexTreeElem>, RedexNode<V>>,
 }
 
-impl<V: Copy> default::Default for RedexTree<V> {
+impl<V> default::Default for RedexTree<V> {
     fn default() -> Self {
         Self {
             roots: Default::default(),
@@ -26,11 +25,11 @@ impl<V: Copy> default::Default for RedexTree<V> {
     }
 }
 
-impl<V: Copy> RedexTree<V> {
-    pub fn get_inner(&self, tree: impl Iterator<Item = RedexTreeElem>) -> Option<V> {
+impl<V> RedexTree<V> {
+    pub fn remove(&self, tree: impl Iterator<Item = RedexTreeElem>) -> Option<V> {
         self.iter_tree(tree)
             .last()
-            .and_then(|elem| elem.value.get())
+            .and_then(|elem| elem.value.take())
     }
 
     pub fn insert(
@@ -42,20 +41,12 @@ impl<V: Copy> RedexTree<V> {
 
         self.roots
             .entry(first_key.clone())
-            .or_insert(RedexNode::new(first_key, None))
+            .or_insert(RedexNode::new(None))
             .insert_tree(tree, value)
-    }
-
-    pub fn get(&self, tree: impl Iterator<Item = RedexTreeElem>) -> Option<&Cell<Option<V>>> {
-        self.iter_tree(tree).last().map(|elem| &elem.value)
     }
 
     pub fn contains_key(&self, tree: impl Iterator<Item = RedexTreeElem>) -> bool {
         self.iter_tree(tree).last().is_some()
-    }
-
-    fn get_root_mut(&mut self, k: RedexTreeElem) -> Option<&mut RedexNode<V>> {
-        self.roots.get_mut(&k)
     }
 
     fn get_root(&self, k: RedexTreeElem) -> Option<&RedexNode<V>> {
@@ -70,12 +61,12 @@ impl<V: Copy> RedexTree<V> {
     }
 }
 
-struct Iter<'a, V: Copy> {
+struct Iter<'a, V> {
     curr: Option<&'a RedexNode<V>>,
     plan: VecDeque<RedexTreeElem>,
 }
 
-impl<'a, V: Copy> Iter<'a, V> {
+impl<'a, V> Iter<'a, V> {
     fn new(curr: Option<&'a RedexNode<V>>, plan: impl Iterator<Item = RedexTreeElem>) -> Self {
         Self {
             curr,
@@ -84,7 +75,7 @@ impl<'a, V: Copy> Iter<'a, V> {
     }
 }
 
-impl<'a, V: Copy> Iterator for Iter<'a, V> {
+impl<'a, V> Iterator for Iter<'a, V> {
     type Item = &'a RedexNode<V>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -95,17 +86,14 @@ impl<'a, V: Copy> Iterator for Iter<'a, V> {
     }
 }
 
-#[derive(Debug, Clone)]
-struct RedexNode<V: Copy> {
-    key: Rc<RedexTreeElem>,
+struct RedexNode<V> {
     value: Cell<Option<V>>,
     children: BTreeMap<Rc<RedexTreeElem>, RedexNode<V>>,
 }
 
-impl<V: Copy> RedexNode<V> {
-    fn new(key: Rc<RedexTreeElem>, value: Option<V>) -> Self {
+impl<V> RedexNode<V> {
+    fn new(value: Option<V>) -> Self {
         Self {
-            key,
             children: Default::default(),
             value: value.into(),
         }
@@ -127,30 +115,13 @@ impl<V: Copy> RedexNode<V> {
         Self::insert_tree(
             self.children
                 .entry(next_key.clone())
-                .or_insert(RedexNode::new(next_key, None)),
+                .or_insert(RedexNode::new(None)),
             tree,
             value,
         )
     }
 
-    fn insert(&mut self, k: RedexTreeElem, v: V) -> &mut Self {
-        if self.key.as_ref() == &k {
-            self.value = Cell::new(Some(v));
-
-            return self;
-        }
-
-        let heaped: Rc<RedexTreeElem> = k.into();
-        self.children
-            .entry(heaped.clone())
-            .or_insert_with(|| RedexNode::new(heaped, None))
-    }
-
     fn get(&self, elem: &RedexTreeElem) -> Option<&Self> {
         self.children.get(elem)
-    }
-
-    fn get_mut(&mut self, elem: &RedexTreeElem) -> Option<&mut Self> {
-        self.children.get_mut(elem)
     }
 }
