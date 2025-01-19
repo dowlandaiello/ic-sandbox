@@ -80,7 +80,7 @@ impl fmt::Display for Keyword {
     }
 }
 
-#[derive(Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Hash, Eq, Clone, Debug, PartialEq)]
 pub enum Expr {
     TypeDec(Type),
     Symbol {
@@ -120,7 +120,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Ord, PartialOrd, Hash, Eq, Clone, Debug, PartialEq)]
 pub struct Net {
     pub lhs: Option<Agent>,
     pub rhs: Option<Agent>,

@@ -107,14 +107,7 @@ impl<'a> Compiler<'a> {
         start_ptr: Ptr,
         lhs: &Agent,
         rhs: &Agent,
-    ) -> Result<
-        (
-            Vec<StackElem>,
-            BTreeMap<*const Agent, StackElem>,
-            BTreeMap<*const Agent, Ptr>,
-        ),
-        Error,
-    > {
+    ) -> Result<(Vec<StackElem>, Ptr), Error> {
         let mut prog: Vec<StackElem> = Default::default();
 
         let (all_ports, _) = lhs.iter_child_agents().chain(rhs.iter_child_agents()).fold(
@@ -180,7 +173,7 @@ impl<'a> Compiler<'a> {
             })
             .collect::<Vec<_>>();
 
-        let (mut created_agent_elem, created_agent_pos): (
+        let (mut created_agent_elem, mut created_agent_pos): (
             BTreeMap<*const Agent, StackElem>,
             BTreeMap<*const Agent, Ptr>,
         ) = all_agents
@@ -287,7 +280,10 @@ impl<'a> Compiler<'a> {
                 .ok_or(ErrorCause::IllFormedNet)?,
         );
 
-        Ok((prog, created_agent_elem, created_agent_pos))
+        Ok((
+            prog,
+            created_agent_pos.remove(&ptr::addr_of!(*lhs)).unwrap(),
+        ))
     }
 
     pub fn compile(&mut self, instrs: Vec<BcBlock<'a>>) -> Result<(), Error> {
@@ -327,12 +323,12 @@ impl<'a> Compiler<'a> {
                         src.push(Op::CloneNet.into());
                     }
                     NetRef::Intro { lhs, rhs } => {
-                        let (section, _, intro_agent_ptrs) =
+                        let (section, lhs_ptr) =
                             Self::try_compile_net(start_ptr + src.len(), lhs, rhs)?;
+
                         src.extend(section);
 
-                        agent_ptrs
-                            .extend(intro_agent_ptrs.into_iter().map(|(_, v)| (r.clone(), v)));
+                        agent_ptrs.insert(r, lhs_ptr);
                     }
                     NetRef::MatchingRule => {
                         src.extend([Op::PushMatchingRule.into()]);

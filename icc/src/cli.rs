@@ -19,7 +19,7 @@ pub fn compile(args: &ArgMatches, transformer: impl Fn(TypedProgram) -> Vec<u8>)
     let input_fname = args
         .get_one::<String>("source")
         .expect("missing source file name");
-    let mut out_fname = input_fname.split_terminator(".d").collect::<String>();
+    let mut out_fname = input_fname.split_terminator(".i").collect::<String>();
     out_fname.push_str(BYTECODE_EXTENSION);
 
     transform_input_to_output(input_fname, &out_fname, transformer)

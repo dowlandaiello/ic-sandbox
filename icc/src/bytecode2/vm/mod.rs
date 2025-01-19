@@ -1,8 +1,13 @@
 use super::{Agent, AgentPtr, GlobalPtr, Op, Program, Ptr, StackElem};
 use crate::parser::ast_lafont::{self as ast, Expr, Ident, Net, Port, PortKind, Type};
+use redex_tree::{RedexTree, RedexTreeElem};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::{error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    error, fmt,
+};
+
+mod redex_tree;
 
 #[derive(Clone, Debug)]
 pub enum Error {
@@ -46,6 +51,9 @@ pub struct State {
     pub mem: Vec<StackElem>,
     pub types: BTreeMap<Type, Vec<PortKind>>,
     pub redex_bag: VecDeque<(Ptr, Ptr)>,
+
+    #[serde(skip)]
+    pub results: RedexTree<Expr>,
 }
 
 impl State {
@@ -57,6 +65,7 @@ impl State {
             stack: Default::default(),
             redex_bag: Default::default(),
             types,
+            results: Default::default(),
         };
 
         s.refresh_redex_bag();
@@ -408,7 +417,7 @@ impl State {
                         .ports
                         .iter()
                         .skip(1)
-                        .filter_map(|p| self.readback_elem(p.as_agent_ptr()?.mem_pos, seen))
+                        .filter_map(|p| self.readback_elem(p.get_src_pos()?, seen))
                         .collect::<Vec<_>>(),
                 }))
             }
@@ -418,7 +427,7 @@ impl State {
         Some(build)
     }
 
-    pub fn step(&mut self) -> Result<Option<Expr>, Error> {
+    pub fn step(&mut self) -> Result<(), Error> {
         let next_elem = if let StackElem::Instr(o) = self
             .src
             .get(self.pos)
@@ -429,7 +438,7 @@ impl State {
         } else {
             self.pos += 1;
 
-            return Ok(None);
+            return Ok(());
         };
 
         let stack_snapshot = self.stack.clone();
@@ -441,7 +450,7 @@ impl State {
             self.pos,
         );
 
-        let res = (|| -> Option<Option<Expr>> {
+        let res = (|| -> Option<()> {
             let res = match next_elem.as_ref() {
                 &Op::Substitute => {
                     while self.stack.len() >= 2 {
@@ -466,7 +475,7 @@ impl State {
                         self.refresh_redex_bag();
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PushSubstitutionPositions => {
                     let parent_tree = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
@@ -483,7 +492,7 @@ impl State {
                         self.stack.push_back(StackElem::None);
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PushMatchingRule => {
                     let ptr_lhs = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
@@ -559,12 +568,12 @@ impl State {
                         self.stack.push_back(StackElem::None);
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Pop => {
                     let _ = self.stack.pop_back()?;
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::CloneNet => {
                     let to_clone = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
@@ -572,7 +581,7 @@ impl State {
 
                     self.stack.push_back(StackElem::Ptr(GlobalPtr::MemPtr(ptr)));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::QueueRedex => {
                     let lhs_ptr = self.stack.pop_back()?.into_ptr()?.into_mem_ptr()?;
@@ -585,7 +594,7 @@ impl State {
 
                     self.redex_bag.push_back((lhs_ptr, rhs_ptr));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PushRedex => {
                     if let Some(redex) = self.redex_bag.pop_back() {
@@ -595,7 +604,7 @@ impl State {
                         self.stack.push_back(StackElem::None);
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::RefIndex => {
                     let offset = self
@@ -611,14 +620,14 @@ impl State {
                             port: Some(offset),
                         })));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PortPtr => {
                     let port = self.stack.pop_back()?.into_ptr()?.into_agent_ptr()?;
                     self.stack
                         .push_back(StackElem::Ptr(GlobalPtr::MemPtr(port.mem_pos)));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Copy => {
                     let to_cpy = self.stack.pop_back()?;
@@ -626,7 +635,7 @@ impl State {
                     self.stack.push_back(to_cpy.clone());
                     self.stack.push_back(to_cpy);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Swap3 => {
                     let a = self.stack.pop_back()?;
@@ -637,7 +646,7 @@ impl State {
                     self.stack.push_back(b);
                     self.stack.push_back(c);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Flip => {
                     let a = self.stack.pop_back()?;
@@ -646,12 +655,12 @@ impl State {
                     self.stack.push_back(a);
                     self.stack.push_back(b);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PushStack(ref elem) => {
                     self.stack.push_back(elem.clone());
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Load => {
                     let elem = self.stack.pop_back()?;
@@ -660,7 +669,7 @@ impl State {
 
                     self.stack.push_back(loaded);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::LoadMem => {
                     let elem = self.stack.pop_back()?;
@@ -672,7 +681,7 @@ impl State {
                         self.stack.push_back(StackElem::None);
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::StoreAt => {
                     let pos = self
@@ -688,34 +697,67 @@ impl State {
                         self.mem.push(to_store);
                     }
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::PushRes => {
-                    let to_push = self
+                    let v = self
                         .stack
                         .pop_back()
                         .and_then(|elem| elem.as_ptr().cloned())?;
+                    let k = self
+                        .stack
+                        .pop_back()
+                        .and_then(|elem| elem.as_ptr().cloned())?;
+                    let tree = self
+                        .iter_tree(k)?
+                        .filter_map(|ptr| {
+                            let elem = self.iter_deref(ptr).next()?;
 
-                    Some(Some(self.readback(to_push)?))
+                            match elem {
+                                StackElem::Var(name) => {
+                                    let name_elem =
+                                        self.iter_deref(GlobalPtr::MemPtr(name)).next()?;
+                                    let name = name_elem.as_ident()?;
+
+                                    Some(RedexTreeElem::Var(name.to_owned()))
+                                }
+                                StackElem::Agent(Agent { name, .. }) => {
+                                    let name_elem = self.iter_deref(name).next()?;
+                                    let name = name_elem.as_ident()?;
+
+                                    Some(RedexTreeElem::Agent {
+                                        name: name.to_owned(),
+                                    })
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    let result = self.readback(v)?;
+
+                    self.results.insert(tree.into_iter(), result);
+
+                    Some(())
                 }
                 &Op::Debug => {
                     let p = self.stack.pop_back()?;
 
                     tracing::debug!("{}", p);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::DebugMem => {
                     tracing::debug!("{:?}", self.mem);
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::Cmp => {
                     let (deref_a, deref_b) = (self.stack.pop_back(), self.stack.pop_back());
 
                     self.stack.push_back(StackElem::Bool(deref_a == deref_b));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::GoTo => {
                     let pos = self
@@ -724,7 +766,7 @@ impl State {
                         .and_then(|elem| elem.as_ptr()?.as_mem_ptr())?;
                     self.pos = pos;
 
-                    return Some(None);
+                    return Some(());
                 }
                 Op::GoToEq => {
                     let pos = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
@@ -734,12 +776,12 @@ impl State {
                     if a != b {
                         self.pos += 1;
 
-                        return Some(None);
+                        return Some(());
                     }
 
                     self.pos = pos;
 
-                    return Some(None);
+                    return Some(());
                 }
                 Op::GoToNeq => {
                     let pos = self.stack.pop_back()?.as_ptr()?.as_mem_ptr()?;
@@ -749,12 +791,12 @@ impl State {
                     if a == b {
                         self.pos += 1;
 
-                        return Some(None);
+                        return Some(());
                     }
 
                     self.pos = pos;
 
-                    return Some(None);
+                    return Some(());
                 }
                 &Op::CondExec => {
                     let recent_ops = [
@@ -769,7 +811,7 @@ impl State {
                         {
                             self.stack.push_back(StackElem::Instr(a.clone()));
 
-                            Some(None)
+                            Some(())
                         }
                         _ => None,
                     }
@@ -784,7 +826,7 @@ impl State {
 
                     self.stack.push_back(deref.unwrap_or(StackElem::None));
 
-                    Some(None)
+                    Some(())
                 }
                 &Op::IncrPtr => {
                     let offset = self.stack.pop_back().and_then(|elem| elem.into_offset())?;
@@ -792,7 +834,7 @@ impl State {
                     self.stack
                         .push_back(StackElem::Ptr(recent_ptr.add_offset(offset)?));
 
-                    Some(None)
+                    Some(())
                 }
             };
 
@@ -805,19 +847,15 @@ impl State {
             args: stack_snapshot.clone().into(),
         });
 
-        res
+        res.map(|_| ())
     }
 
     pub fn step_to_end(&mut self) -> Result<Vec<Expr>, Error> {
-        let mut results = Vec::default();
-
         while self.pos < self.src.len() {
-            if let Some(res) = self.step()? {
-                results.push(res);
-            }
+            self.step()?;
         }
 
-        Ok(results)
+        todo!()
     }
 }
 
