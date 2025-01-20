@@ -149,6 +149,10 @@ impl State {
         ptr_child: Ptr,
         ptr_parent: Ptr,
     ) -> Option<Vec<Substitution>> {
+        // Algorithm for subset positions:
+        // - Find all port positions of variables in the parent expression
+        // - Find all port positions of substituted agents in the child expression
+        // in a port position of one of the variables
         let filter_ptr_relevant = |ptr| {
             // We want vars and agents, not variables
             let elem = self
@@ -161,57 +165,98 @@ impl State {
             Some((ptr, elem))
         };
 
-        let mut iter_child = self
+        let iter_child = self
             .iter_tree(GlobalPtr::MemPtr(ptr_child))?
             .filter_map(filter_ptr_relevant)
+            .filter_map(|(ptr, elem)| Some((ptr, elem.into_agent()?)))
             .collect::<VecDeque<_>>();
-        let mut positions = Vec::new();
 
         let parent_tree = self
             .iter_tree(GlobalPtr::MemPtr(ptr_parent))?
+            .filter_map(filter_ptr_relevant)
             .collect::<Vec<_>>();
 
-        for (ptr, node) in parent_tree.into_iter().filter_map(filter_ptr_relevant) {
-            let (corresponding, corresponding_elem) = iter_child.pop_front()?;
+        let substitution_ptrs = parent_tree
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, elem))| elem.as_var().is_some());
 
-            match node {
-                StackElem::Agent(a) => match corresponding_elem {
-                    StackElem::Var(_) => {
-                        return None;
-                    }
-                    StackElem::Agent(b) => {
-                        let a_name = self.iter_deref(a.name).last();
-                        let b_name = self.iter_deref(a.name).last();
+        let with_parents = substitution_ptrs.filter_map(|(_, (ptr, child))| {
+            let (parent, ptr) = parent_tree
+                .iter()
+                .filter_map(|(agent_ptr, elem)| {
+                    let parent = elem.as_agent()?;
 
-                        if a_name == b_name && a.ports.len() == b.ports.len() {
-                            continue;
-                        }
-                    }
-                    _ => {
-                        return None;
-                    }
-                },
-                // Advance the corresponding pointers to the next non-child pointer
-                StackElem::Var(_) => {
-                    positions.push(Substitution {
-                        src: ptr,
-                        dest: corresponding,
-                    });
+                    parent
+                        .ports
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, port)| {
+                            if port == ptr {
+                                Some((
+                                    parent,
+                                    GlobalPtr::AgentPtr(AgentPtr {
+                                        mem_pos: agent_ptr.as_mem_ptr()?,
+                                        port: Some(i),
+                                    }),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .next()
+                })
+                .next()?;
 
-                    // Skip all child pointers
-                    let mut subtree = self.iter_tree(corresponding)?;
-                    iter_child = iter_child
-                        .into_iter()
-                        .skip_while(|(ptr, _)| subtree.next() == Some(*ptr))
-                        .collect();
+            Some((parent, (ptr, child)))
+        });
 
-                    continue;
-                }
-                _ => {
+        let positions = with_parents
+            .filter_map(|(parent, (ptr, _))| {
+                let parent_name_elem = self.iter_deref(parent.name).next()?;
+                let parent_name = parent_name_elem.as_ident()?;
+
+                let pos_variable = ptr.as_agent_ptr()?.port?;
+
+                // Get the last consecutive parent agent with this name
+                // and whose
+                let (_, child_parent_elem) = if let Some((child_parent_ptr, elem)) = iter_child
+                    .iter()
+                    .skip_while(|(_, elem): &&(_, Agent)| {
+                        (|| {
+                            let name_elem = self.iter_deref(elem.name).next()?;
+                            let name = name_elem.as_ident()?;
+
+                            Some(
+                                name != parent_name
+                                    || elem.ports.get(pos_variable)?.as_agent_ptr().is_none(),
+                            )
+                        })()
+                        .unwrap_or(true)
+                    })
+                    .next()
+                {
+                    (child_parent_ptr, elem)
+                } else {
                     return None;
-                }
-            }
-        }
+                };
+
+                Some(Substitution {
+                    dest: *self
+                        .iter_deref(ptr)
+                        .take_while(|elem| elem.as_var().is_none())
+                        .last()?
+                        .as_ptr()?,
+                    src: GlobalPtr::MemPtr(
+                        child_parent_elem
+                            .ports
+                            .get(pos_variable)?
+                            .as_agent_ptr()?
+                            .mem_pos,
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
 
         Some(positions)
     }
@@ -450,11 +495,30 @@ impl State {
         };
 
         let stack_snapshot = self.stack.clone();
+        let stack_snapshot_debug = || {
+            self.stack
+                .clone()
+                .into_iter()
+                .map(|elem| match elem {
+                    StackElem::Ptr(p) => {
+                        format!(
+                            "elem = {:?}, debug = {}",
+                            elem,
+                            p.as_mem_ptr()
+                                .and_then(|ptr| self.readback_elem(ptr, &mut Default::default()))
+                                .map(|expr| expr.to_string())
+                                .unwrap_or("?".to_string())
+                        )
+                    }
+                    _ => format!("elem = {:?}, debug = ?", elem),
+                })
+                .collect::<Vec<_>>()
+        };
 
         tracing::trace!(
             "attempting op execution {} with args {:?} at line {}",
             next_elem,
-            stack_snapshot,
+            stack_snapshot_debug(),
             self.pos,
         );
 
@@ -493,8 +557,8 @@ impl State {
 
                     if let Some(positions) = positions {
                         for Substitution { src, dest } in positions {
-                            self.stack.push_back(StackElem::Ptr(dest));
                             self.stack.push_back(StackElem::Ptr(src));
+                            self.stack.push_back(StackElem::Ptr(dest));
                         }
                     } else {
                         self.stack.push_back(StackElem::None);

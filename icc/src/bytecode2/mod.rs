@@ -194,6 +194,13 @@ impl StackElem {
         }
     }
 
+    pub fn as_var(&self) -> Option<&Ptr> {
+        match &self {
+            Self::Var(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn as_ptr(&self) -> Option<&GlobalPtr> {
         match &self {
             Self::Ptr(p) => Some(p),
