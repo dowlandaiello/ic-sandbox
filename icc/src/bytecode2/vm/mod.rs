@@ -41,7 +41,7 @@ pub struct Substitution {
     dest: GlobalPtr,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     pub pos: Ptr,
     pub src: Program,
@@ -51,10 +51,13 @@ pub struct State {
     pub redex_bag: VecDeque<(Ptr, Ptr)>,
 
     #[serde(skip)]
-    pub results: BTreeMap<Rc<Vec<(RedexElem, RedexElem)>>, Expr>,
+    pub results: BTreeMap<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>, Rc<Expr>>,
 
     #[serde(skip)]
-    pub results_ord: Vec<Rc<Vec<(RedexElem, RedexElem)>>>,
+    pub results_ord: Vec<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>>,
+
+    #[serde(skip)]
+    pub results_for_net: BTreeMap<(Ptr, Ptr), Rc<Expr>>,
 }
 
 #[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,7 +68,7 @@ pub enum RedexElem {
 
 impl State {
     pub fn new(program: Program, types: BTreeMap<Type, Vec<PortKind>>) -> Self {
-        let mut s = Self {
+        Self {
             pos: Default::default(),
             src: program,
             mem: Default::default(),
@@ -74,18 +77,24 @@ impl State {
             types,
             results: Default::default(),
             results_ord: Default::default(),
-        };
-
-        s.refresh_redex_bag();
-
-        s
+            results_for_net: Default::default(),
+        }
     }
 
     pub fn refresh_redex_bag(&mut self) {
-        self.redex_bag = self
+        let mut redex_bag = self
             .iter_redex_dyn()
-            .map(|((a_pos, _), (b_pos, _))| (a_pos, b_pos))
-            .collect();
+            .map(|((a_pos, _), (b_pos, _))| {
+                if a_pos < b_pos {
+                    (a_pos, b_pos)
+                } else {
+                    (b_pos, a_pos)
+                }
+            })
+            .collect::<Vec<_>>();
+        redex_bag.dedup();
+
+        self.redex_bag = redex_bag.into();
     }
 
     pub fn iter_redex_dyn(&self) -> impl Iterator<Item = ((Ptr, &Agent), (Ptr, &Agent))> {
@@ -93,15 +102,26 @@ impl State {
             .src
             .0
             .iter()
-            .skip(self.src.len())
             .enumerate()
+            .skip(self.pos)
             .filter_map(|(i, elem)| Some((i, elem.as_agent()?)));
         agents.filter_map(|(mem_pos, agent)| {
             let a = agent;
             let b_port_ptr = agent.ports.get(0)?.as_agent_ptr()?;
             let b = self.src.get(b_port_ptr.mem_pos)?.as_agent()?;
 
-            if b_port_ptr.port != Some(0) {
+            if b_port_ptr.port != Some(0)
+                || self.results.contains_key(&self.redex_tree(
+                    GlobalPtr::MemPtr(mem_pos),
+                    GlobalPtr::MemPtr(b_port_ptr.mem_pos),
+                )?)
+                || self
+                    .results_for_net
+                    .contains_key(&(mem_pos, b_port_ptr.mem_pos))
+                || self
+                    .results_for_net
+                    .contains_key(&(b_port_ptr.mem_pos, mem_pos))
+            {
                 return None;
             }
 
@@ -144,6 +164,51 @@ impl State {
         Some(self.iter_ports(stack_ptr)?.map(|(_, x)| x))
     }
 
+    fn redex_tree(
+        &self,
+        lhs: GlobalPtr,
+        rhs: GlobalPtr,
+    ) -> Option<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>> {
+        let relevant_ptr = |ptr| {
+            let elem = self.iter_deref(ptr).next()?;
+
+            match elem {
+                StackElem::Var(name) => {
+                    let name_elem = self.iter_deref(GlobalPtr::MemPtr(name)).next()?;
+                    let name = name_elem.as_ident()?;
+
+                    Some(RedexElem::Var {
+                        name: name.to_owned(),
+                    })
+                }
+                StackElem::Agent(Agent { name, .. }) => {
+                    let name_elem = self.iter_deref(name).next()?;
+                    let name = name_elem.as_ident()?;
+
+                    Some(RedexElem::Agent {
+                        name: name.to_owned(),
+                    })
+                }
+                _ => None,
+            }
+        };
+
+        let tree_lhs = self
+            .iter_tree(lhs)?
+            .filter_map(relevant_ptr)
+            .collect::<BTreeSet<_>>();
+        let tree_rhs = self
+            .iter_tree(rhs)?
+            .filter_map(relevant_ptr)
+            .collect::<BTreeSet<_>>();
+
+        if tree_lhs < tree_rhs {
+            Some(Rc::new((tree_lhs, tree_rhs)))
+        } else {
+            Some(Rc::new((tree_lhs, tree_rhs)))
+        }
+    }
+
     pub fn subset_tree_positions(
         &self,
         ptr_child: Ptr,
@@ -176,88 +241,75 @@ impl State {
             .filter_map(filter_ptr_relevant)
             .collect::<Vec<_>>();
 
-        let substitution_ptrs = parent_tree
+        let substitution_parents = parent_tree
             .iter()
             .enumerate()
-            .filter(|(_, (_, elem))| elem.as_var().is_some());
+            .filter_map(|(_, (ptr, elem))| {
+                let parent = elem.as_agent()?;
 
-        let with_parents = substitution_ptrs.filter_map(|(_, (ptr, child))| {
-            let (parent, ptr) = parent_tree
-                .iter()
-                .filter_map(|(agent_ptr, elem)| {
-                    let parent = elem.as_agent()?;
+                if parent.ports.iter().any(|p| p.as_mem_ptr().is_some()) {
+                    Some((ptr, parent))
+                } else {
+                    None
+                }
+            });
 
+        let positions = substitution_parents
+            .filter_map(|(ptr, parent)| {
+                let parent_name_elem = self.iter_deref(parent.name).next()?;
+                let parent_name = parent_name_elem.as_ident()?;
+
+                Some(
                     parent
                         .ports
                         .iter()
                         .enumerate()
-                        .filter_map(|(i, port)| {
-                            if port == ptr {
-                                Some((
-                                    parent,
-                                    GlobalPtr::AgentPtr(AgentPtr {
-                                        mem_pos: agent_ptr.as_mem_ptr()?,
-                                        port: Some(i),
-                                    }),
-                                ))
-                            } else {
-                                None
-                            }
+                        .filter(|(_, port)| port.as_mem_ptr().is_some())
+                        .filter_map(|(i, _)| {
+                            let (child_parent_elem, child_sub_pos) = iter_child
+                                .iter()
+                                .filter_map(|(_, agent)| {
+                                    let agent_name_elem = self.iter_deref(agent.name).next()?;
+                                    let agent_name = agent_name_elem.as_ident()?;
+
+                                    if agent_name != parent_name {
+                                        return None;
+                                    }
+
+                                    Some((
+                                        agent,
+                                        agent
+                                            .ports
+                                            .iter()
+                                            .position(|p| p.as_agent_ptr().is_some())?,
+                                    ))
+                                })
+                                .next()?;
+
+                            Some((child_parent_elem, i, child_sub_pos))
                         })
-                        .next()
-                })
-                .next()?;
-
-            Some((parent, (ptr, child)))
-        });
-
-        let positions = with_parents
-            .filter_map(|(parent, (ptr, _))| {
-                let parent_name_elem = self.iter_deref(parent.name).next()?;
-                let parent_name = parent_name_elem.as_ident()?;
-
-                let pos_variable = ptr.as_agent_ptr()?.port?;
-
-                // Get the last consecutive parent agent with this name
-                // and whose
-                let (_, child_parent_elem) = if let Some((child_parent_ptr, elem)) = iter_child
-                    .iter()
-                    .skip_while(|(_, elem): &&(_, Agent)| {
-                        (|| {
-                            let name_elem = self.iter_deref(elem.name).next()?;
-                            let name = name_elem.as_ident()?;
-
-                            Some(
-                                name != parent_name
-                                    || elem.ports.get(pos_variable)?.as_agent_ptr().is_none()
-                                    || elem.ports.iter().any(|p| p.as_mem_ptr().is_some()),
-                            )
-                        })()
-                        .unwrap_or(true)
-                    })
-                    .next()
-                {
-                    (child_parent_ptr, elem)
-                } else {
-                    return None;
-                };
-
-                Some(Substitution {
-                    dest: *self
-                        .iter_deref(ptr)
-                        .take_while(|elem| elem.as_var().is_none())
-                        .last()?
-                        .as_ptr()?,
-                    src: GlobalPtr::MemPtr(
-                        child_parent_elem
-                            .ports
-                            .get(pos_variable)?
-                            .as_agent_ptr()?
-                            .mem_pos,
-                    ),
-                })
+                        .filter_map(|(child_parent_elem, pos_to_sub_variable, pos_sub_with)| {
+                            Some(Substitution {
+                                src: GlobalPtr::MemPtr(
+                                    child_parent_elem
+                                        .ports
+                                        .get(pos_sub_with)?
+                                        .as_agent_ptr()?
+                                        .mem_pos,
+                                ),
+                                dest: GlobalPtr::AgentPtr(AgentPtr {
+                                    mem_pos: ptr.as_mem_ptr()?,
+                                    port: Some(pos_to_sub_variable),
+                                }),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
             })
+            .flatten()
             .collect::<Vec<_>>();
+
+        tracing::trace!("got substitutions {:?}", positions);
 
         Some(positions)
     }
@@ -501,12 +553,25 @@ impl State {
                 .clone()
                 .into_iter()
                 .map(|elem| match elem {
-                    StackElem::Ptr(p) => {
+                    StackElem::Ptr(GlobalPtr::AgentPtr(a)) => {
                         format!(
                             "elem = {:?}, debug = {}",
                             elem,
-                            p.as_mem_ptr()
-                                .and_then(|ptr| self.readback_elem(ptr, &mut Default::default()))
+                            self.iter_deref(GlobalPtr::AgentPtr(a))
+                                .filter_map(|p| p.as_ptr()?.as_mem_ptr())
+                                .last()
+                                .and_then(
+                                    |mem_ptr| self.readback_elem(mem_ptr, &mut Default::default())
+                                )
+                                .map(|expr| expr.to_string())
+                                .unwrap_or("?".to_string())
+                        )
+                    }
+                    StackElem::Ptr(GlobalPtr::MemPtr(p)) => {
+                        format!(
+                            "elem = {:?}, debug = {}",
+                            elem,
+                            self.readback_elem(p, &mut Default::default())
                                 .map(|expr| expr.to_string())
                                 .unwrap_or("?".to_string())
                         )
@@ -530,7 +595,7 @@ impl State {
                         let (v1, v2) = (self.stack.pop_back()?, self.stack.pop_back()?);
 
                         let (dest, src) = if let (Some(dest), Some(src)) =
-                            (v1.as_ptr()?.as_mem_ptr(), v2.as_ptr()?.as_mem_ptr())
+                            (v1.as_ptr()?.as_agent_ptr(), v2.as_ptr()?.as_mem_ptr())
                         {
                             (dest, src)
                         } else {
@@ -541,11 +606,26 @@ impl State {
                         };
 
                         let to_substitute_ptr = dest;
-                        let to_substitute_with = self.iter_deref(GlobalPtr::MemPtr(src)).next()?;
 
-                        *self.src.0.get_mut(to_substitute_ptr)? = to_substitute_with;
+                        tracing::trace!(
+                            "substituting in {}",
+                            self.readback_elem(to_substitute_ptr.mem_pos, &mut Default::default())
+                                .map(|s| s.to_string())
+                                .unwrap_or("?".to_owned())
+                        );
 
-                        self.refresh_redex_bag();
+                        *self
+                            .src
+                            .0
+                            .get_mut(to_substitute_ptr.mem_pos)?
+                            .as_agent_mut()?
+                            .ports
+                            .get_mut(to_substitute_ptr.port?)? = GlobalPtr::AgentPtr(AgentPtr {
+                            mem_pos: src,
+                            port: Some(0),
+                        });
+                        *self.src.0.get_mut(src)?.as_agent_mut()?.ports.get_mut(0)? =
+                            GlobalPtr::AgentPtr(*to_substitute_ptr);
                     }
 
                     Some(())
@@ -786,36 +866,8 @@ impl State {
                     let lhs_agent = lhs_elem.as_agent()?;
                     let rhs = lhs_agent.ports.get(0)?;
 
-                    let relevant_ptr = |ptr| {
-                        let elem = self.iter_deref(ptr).next()?;
-
-                        match elem {
-                            StackElem::Var(name) => {
-                                let name_elem = self.iter_deref(GlobalPtr::MemPtr(name)).next()?;
-                                let name = name_elem.as_ident()?;
-
-                                Some(RedexElem::Var {
-                                    name: name.to_owned(),
-                                })
-                            }
-                            StackElem::Agent(Agent { name, .. }) => {
-                                let name_elem = self.iter_deref(name).next()?;
-                                let name = name_elem.as_ident()?;
-
-                                Some(RedexElem::Agent {
-                                    name: name.to_owned(),
-                                })
-                            }
-                            _ => None,
-                        }
-                    };
-
-                    let tree_lhs = self.iter_tree(lhs)?.filter_map(relevant_ptr);
-                    let tree_rhs = self.iter_tree(*rhs)?.filter_map(relevant_ptr);
-
-                    let result = self.readback(v)?;
-
-                    let path = Rc::new(tree_lhs.zip(tree_rhs).collect::<Vec<_>>());
+                    let result = Rc::new(self.readback(v)?);
+                    let path = self.redex_tree(lhs, *rhs)?;
 
                     self.results.insert(path.clone(), result);
                     self.results_ord.push(path);
@@ -937,7 +989,10 @@ impl State {
             self.step()?;
         }
 
-        Ok(self.results_ord.iter().filter_map(|k| self.results.get(k)))
+        Ok(self
+            .results_ord
+            .iter()
+            .filter_map(|k| Some(self.results.get(k)?.as_ref())))
     }
 }
 
