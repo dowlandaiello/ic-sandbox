@@ -51,10 +51,10 @@ pub struct State {
     pub redex_bag: VecDeque<(Ptr, Ptr)>,
 
     #[serde(skip)]
-    pub results: BTreeMap<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>, Rc<Expr>>,
+    pub results: BTreeMap<Rc<(Vec<RedexElem>, Vec<RedexElem>)>, Rc<Expr>>,
 
     #[serde(skip)]
-    pub results_ord: Vec<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>>,
+    pub results_ord: Vec<Rc<(Vec<RedexElem>, Vec<RedexElem>)>>,
 
     #[serde(skip)]
     pub results_for_net: BTreeMap<(Ptr, Ptr), Rc<Expr>>,
@@ -168,7 +168,7 @@ impl State {
         &self,
         lhs: GlobalPtr,
         rhs: GlobalPtr,
-    ) -> Option<Rc<(BTreeSet<RedexElem>, BTreeSet<RedexElem>)>> {
+    ) -> Option<Rc<(Vec<RedexElem>, Vec<RedexElem>)>> {
         let relevant_ptr = |ptr| {
             let elem = self.iter_deref(ptr).next()?;
 
@@ -196,11 +196,11 @@ impl State {
         let tree_lhs = self
             .iter_tree(lhs)?
             .filter_map(relevant_ptr)
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
         let tree_rhs = self
             .iter_tree(rhs)?
             .filter_map(relevant_ptr)
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
 
         if tree_lhs < tree_rhs {
             Some(Rc::new((tree_lhs, tree_rhs)))
@@ -241,67 +241,27 @@ impl State {
             .filter_map(filter_ptr_relevant)
             .collect::<Vec<_>>();
 
-        let substitution_parents = parent_tree
+        let substitution_vars_parents_ports = parent_tree
             .iter()
-            .enumerate()
-            .filter_map(|(_, (ptr, elem))| {
-                let parent = elem.as_agent()?;
-
-                if parent.ports.iter().any(|p| p.as_mem_ptr().is_some()) {
-                    Some((ptr, parent))
-                } else {
-                    None
-                }
-            });
-
-        let positions = substitution_parents
-            .filter_map(|(ptr, parent)| {
-                let parent_name_elem = self.iter_deref(parent.name).next()?;
-                let parent_name = parent_name_elem.as_ident()?;
+            .filter_map(|(ptr, elem)| {
+                let agent = elem.as_agent()?;
 
                 Some(
-                    parent
+                    agent
                         .ports
                         .iter()
                         .enumerate()
-                        .filter(|(_, port)| port.as_mem_ptr().is_some())
-                        .filter_map(|(i, _)| {
-                            let (child_parent_elem, child_sub_pos) = iter_child
-                                .iter()
-                                .filter_map(|(_, agent)| {
-                                    let agent_name_elem = self.iter_deref(agent.name).next()?;
-                                    let agent_name = agent_name_elem.as_ident()?;
+                        .filter_map(|(i, p)| {
+                            let var_ptr = p.as_mem_ptr()?;
+                            let var_elem = self.iter_deref(GlobalPtr::MemPtr(var_ptr)).next()?;
+                            let var = var_elem.as_var()?;
+                            let var_name = self
+                                .iter_deref(GlobalPtr::MemPtr(*var))
+                                .next()?
+                                .as_ident()?
+                                .to_owned();
 
-                                    if agent_name != parent_name {
-                                        return None;
-                                    }
-
-                                    Some((
-                                        agent,
-                                        agent
-                                            .ports
-                                            .iter()
-                                            .position(|p| p.as_agent_ptr().is_some())?,
-                                    ))
-                                })
-                                .next()?;
-
-                            Some((child_parent_elem, i, child_sub_pos))
-                        })
-                        .filter_map(|(child_parent_elem, pos_to_sub_variable, pos_sub_with)| {
-                            Some(Substitution {
-                                src: GlobalPtr::MemPtr(
-                                    child_parent_elem
-                                        .ports
-                                        .get(pos_sub_with)?
-                                        .as_agent_ptr()?
-                                        .mem_pos,
-                                ),
-                                dest: GlobalPtr::AgentPtr(AgentPtr {
-                                    mem_pos: ptr.as_mem_ptr()?,
-                                    port: Some(pos_to_sub_variable),
-                                }),
-                            })
+                            Some((ptr, elem, i, var_name))
                         })
                         .collect::<Vec<_>>(),
                 )
@@ -309,9 +269,65 @@ impl State {
             .flatten()
             .collect::<Vec<_>>();
 
-        tracing::trace!("got substitutions {:?}", positions);
+        let var_substitution_values = iter_child
+            .iter()
+            .filter_map(|(_, agent)| {
+                let agent_name_elem = self.iter_deref(agent.name).next()?;
+                let agent_name = agent_name_elem.as_ident()?;
 
-        Some(positions)
+                Some(
+                    substitution_vars_parents_ports
+                        .iter()
+                        .filter_map(|(_, _, port, var)| {
+                            let a_name_elem = self.iter_deref(agent.name).next()?;
+                            let a_name = a_name_elem.as_ident()?;
+
+                            if a_name != agent_name {
+                                return None;
+                            }
+
+                            if let Some(binding) = agent.ports.get(*port)?.as_agent_ptr() {
+                                Some((var, GlobalPtr::MemPtr(binding.mem_pos)))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .flatten()
+            .collect::<BTreeMap<_, _>>();
+
+        // Replace all instnaces of the var with the binding
+        Some(
+            parent_tree
+                .iter()
+                .filter_map(|(ptr, elem)| {
+                    let a = elem.as_agent()?;
+
+                    Some(a.ports.iter().enumerate().filter_map(|(i, elem)| {
+                        let var_ptr = elem.as_mem_ptr()?;
+                        let var_elem = self.iter_deref(GlobalPtr::MemPtr(var_ptr)).next()?;
+                        let var = var_elem.as_var()?;
+                        let var_name_elem = self.iter_deref(GlobalPtr::MemPtr(*var)).next()?;
+                        let var_name = var_name_elem.as_ident()?;
+
+                        var_substitution_values
+                            .get(&var_name.to_owned())
+                            .and_then(|src| {
+                                Some(Substitution {
+                                    src: *src,
+                                    dest: GlobalPtr::AgentPtr(AgentPtr {
+                                        mem_pos: ptr.as_mem_ptr()?,
+                                        port: Some(i),
+                                    }),
+                                })
+                            })
+                    }))
+                })
+                .flatten()
+                .collect::<Vec<_>>(),
+        )
     }
 
     pub fn clone_tree(&mut self, p: Ptr) -> Option<Ptr> {
