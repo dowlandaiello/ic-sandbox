@@ -229,7 +229,8 @@ impl State {
 
                             Some(
                                 name != parent_name
-                                    || elem.ports.get(pos_variable)?.as_agent_ptr().is_none(),
+                                    || elem.ports.get(pos_variable)?.as_agent_ptr().is_none()
+                                    || elem.ports.iter().any(|p| p.as_mem_ptr().is_some()),
                             )
                         })()
                         .unwrap_or(true)
