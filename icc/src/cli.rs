@@ -5,29 +5,136 @@ use chumsky::{
 };
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
-    heuristics::{self, TypedProgram},
-    parser::parser_lafont::{self},
-    preprocessor, BYTECODE_EXTENSION,
+    bytecode::combinated::CombinatedProgram,
+    parser::parser_combinators::{self},
+    preprocessor,
+    reducers::combinators::reduce_dyn,
+};
+use rustyline::{
+    completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
+    Editor, Helper, Highlighter, Validator,
 };
 use std::{
+    collections::BTreeSet,
+    default,
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
 };
 
-pub fn compile(args: &ArgMatches, transformer: impl Fn(TypedProgram) -> Vec<u8>) {
-    let input_fname = args
-        .get_one::<String>("source")
-        .expect("missing source file name");
-    let mut out_fname = input_fname.split_terminator(".i").collect::<String>();
-    out_fname.push_str(BYTECODE_EXTENSION);
+#[derive(Helper, Validator, Highlighter)]
+pub struct KeywordCompleter {
+    hints: BTreeSet<&'static str>,
+}
 
-    transform_input_to_output(input_fname, &out_fname, transformer)
+impl default::Default for KeywordCompleter {
+    fn default() -> Self {
+        Self {
+            hints: BTreeSet::from_iter(["Constr[", "Era[", "Dup["]),
+        }
+    }
+}
+
+impl Completer for KeywordCompleter {
+    type Candidate = String;
+}
+
+impl Hinter for KeywordCompleter {
+    type Hint = String;
+
+    fn hint(&self, line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if line.trim().ends_with(")") && !line.contains("><") {
+            if line.ends_with(" ") {
+                return Some(">< ".into());
+            } else {
+                return Some(" >< ".into());
+            }
+        }
+
+        let digits = line
+            .rfind("[@")
+            .and_then(|w_pos| Some((w_pos, line[w_pos..].rfind("]")?)))
+            .map(|(w_start, w_end)| &line[w_start..(w_start + w_end)])
+            .map(|w| w[2..].parse::<usize>().ok())
+            .unwrap_or_default();
+        let last_word: &str = line.split(" ").last().unwrap_or_default();
+
+        self.hints
+            .iter()
+            .filter(|hint| hint.starts_with(last_word) && !last_word.is_empty())
+            .map(|h| &h[last_word.len()..])
+            .next()
+            .map(|h| {
+                format!(
+                    "{}@{}](",
+                    h,
+                    (digits.iter().max().unwrap_or(&0) + 1) as usize
+                )
+            })
+    }
+}
+
+pub fn repl() {
+    let mut rl =
+        Editor::<KeywordCompleter, DefaultHistory>::new().expect("failed to get readline editor");
+    rl.set_helper(Some(KeywordCompleter::default()));
+
+    loop {
+        let readline = rl.readline(">> ");
+
+        match readline {
+            Ok(line) => {
+                let parsed = assert_parse_literal_ok(line.as_str());
+
+                loop {
+                    let cmd = rl.readline(&format!(
+                        "[{}...] (reduce|print|exit) >> ",
+                        &parsed.to_string().chars().take(10).collect::<String>()
+                    ));
+
+                    match cmd.as_ref().map(|s| s.as_str()) {
+                        Ok("exit") | Err(ReadlineError::Eof) => {
+                            break;
+                        }
+                        Ok("print") => {
+                            println!("{}", parsed);
+                        }
+                        Ok("reduce") => {
+                            let res = reduce_dyn(&parsed.nets[0]).expect("failed to reduce net");
+
+                            println!(
+                                "{}",
+                                res.iter()
+                                    .map(|n| n.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            );
+                        }
+                        Err(ReadlineError::Interrupted) => {
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                return;
+            }
+            Err(ReadlineError::Eof) => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+
+                return;
+            }
+        }
+    }
 }
 
 pub fn transform_input_to_output_cli(
     args: &ArgMatches,
-    transformer: impl Fn(TypedProgram) -> Vec<u8>,
+    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
 ) {
     let out_fname = args
         .get_one::<String>("out")
@@ -39,11 +146,7 @@ pub fn transform_input_to_output_cli(
     transform_input_to_output(input_fname, out_fname, transformer)
 }
 
-pub fn transform_input_to_output(
-    in_fname: &str,
-    out_fname: &str,
-    transformer: impl Fn(TypedProgram) -> Vec<u8>,
-) {
+pub fn read_program(in_fname: &str) -> CombinatedProgram {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -54,7 +157,7 @@ pub fn transform_input_to_output(
 
     let input_path = PathBuf::from(in_fname);
 
-    let parsed: TypedProgram = assert_parse_ok(
+    let parsed: CombinatedProgram = assert_parse_ok(
         input_path.clone(),
         input_path
             .ancestors()
@@ -63,6 +166,16 @@ pub fn transform_input_to_output(
             .to_path_buf(),
         input.trim(),
     );
+
+    parsed
+}
+
+pub fn transform_input_to_output(
+    in_fname: &str,
+    out_fname: &str,
+    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
+) {
+    let parsed = read_program(in_fname);
     let out = transformer(parsed);
 
     match out_fname {
@@ -98,10 +211,69 @@ pub fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> TypedProgram {
+fn assert_parse_literal_ok(input: &str) -> CombinatedProgram {
+    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
+        .parse(input)
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| e.with_label("lexing error"))
+                .collect::<Vec<_>>()
+        })
+        .and_then(|res| {
+            parser_combinators::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(
+                            e.found().unwrap().1.clone(),
+                            format!("{}", e.map(|x| x.0)),
+                        )
+                        .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
+        }) {
+        Ok(v) => {
+            return CombinatedProgram {
+                nets: v.into_iter().map(|x| x.0).collect(),
+            };
+        }
+        Err(e) => e,
+    };
+
+    let fname = "<repl>";
+
+    for err in errs {
+        Report::build(ReportKind::Error, (fname, err.span().clone()))
+            .with_message(err.to_string().clone())
+            .with_label(
+                Label::new((fname, err.span()))
+                    .with_message(if let Some(label) = err.label() {
+                        format!(
+                            "{}: {}",
+                            label,
+                            if let SimpleReason::Custom(s) = err.reason() {
+                                s.to_string()
+                            } else {
+                                err.to_string()
+                            }
+                        )
+                    } else {
+                        err.to_string()
+                    })
+                    .with_color(Color::Red),
+            )
+            .finish()
+            .eprint((fname, Source::from(input)))
+            .unwrap();
+    }
+
+    panic!()
+}
+
+pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> CombinatedProgram {
     let input = preprocessor::parser(working_dir, input);
 
-    let errs: Vec<Simple<char>> = match parser_lafont::lexer()
+    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
         .parse(input.as_str())
         .map_err(|e| {
             e.into_iter()
@@ -109,43 +281,22 @@ pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> Typ
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
-            parser_lafont::parser()
-                .parse(res.into_iter().flatten().collect::<Vec<_>>())
-                .map_err(|e| {
-                    e.into_iter()
-                        .map(|e| {
-                            Simple::<char>::custom(
-                                e.found().unwrap().1.clone(),
-                                format!("{}", e.map(|x| x.0)),
-                            )
-                            .with_label("parsing error")
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .and_then(|res| {
-                    let (output, errors) = heuristics::parse_typed_program(res);
-
-                    if !errors.is_empty() {
-                        Err(errors
-                            .into_iter()
-                            .map(|e| {
-                                Simple::<char>::custom(
-                                    e.span(),
-                                    match e.reason() {
-                                        SimpleReason::Custom(s) => s.to_string(),
-                                        _ => unreachable!(),
-                                    },
-                                )
-                                .with_label("typing error")
-                            })
-                            .collect::<Vec<_>>())
-                    } else {
-                        Ok(output)
-                    }
-                })
+            parser_combinators::parser().parse(res).map_err(|e| {
+                e.into_iter()
+                    .map(|e| {
+                        Simple::<char>::custom(
+                            e.found().unwrap().1.clone(),
+                            format!("{}", e.map(|x| x.0)),
+                        )
+                        .with_label("parsing error")
+                    })
+                    .collect::<Vec<_>>()
+            })
         }) {
         Ok(v) => {
-            return v;
+            return CombinatedProgram {
+                nets: v.into_iter().map(|x| x.0).collect(),
+            };
         }
         Err(e) => e,
     };

@@ -411,11 +411,4 @@ mod test {
             "Constr[@3](v5, Constr[@0](@3, Constr[@12](@3, Constr[@9](@12, Constr[@6](@9, Dup[@15](@9, @6, @6), @15), @15), @0), Era[@16](@0)), @12)"
         );
     }
-
-    #[test]
-    fn test_make_s_comb() {
-        let s = make_s_comb(&mut NameIter::default());
-
-        println!("{}", s);
-    }
 }

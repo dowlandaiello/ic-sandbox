@@ -3,6 +3,14 @@ name = "toyfp"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "toyfplib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "toyfp"
+path = "src/main.rs"
+
 [dependencies]
 chumsky = { workspace = true }
 ast-ext = { workspace = true }

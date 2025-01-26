@@ -1,9 +1,0 @@
-[package]
-name = "icviz"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-icc = { workspace = true, features = ["threadpool"] }
-ariadne = { workspace = true }
-chumsky = { workspace = true }

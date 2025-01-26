@@ -1,10 +1,9 @@
 use clap::Command;
 use inetlib::parser::naming::NameIter;
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use toyfplib::{compiler, parser, parser_sk};
 
 mod cli;
-mod compiler;
-mod parser;
 
 use cli::*;
 
