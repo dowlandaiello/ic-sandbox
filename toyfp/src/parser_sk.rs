@@ -2,7 +2,7 @@ use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
 use std::fmt;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Expr {
     S(Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>),
     K(Option<Box<Expr>>, Option<Box<Expr>>),

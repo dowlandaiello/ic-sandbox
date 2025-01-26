@@ -1,10 +1,23 @@
-use super::parser::Expr;
+use super::{parser::Expr, parser_sk::Expr as SkExpr};
 use inetlib::parser::{
     ast_combinators::{self as ast_icc, Constructor, Duplicator, Eraser, Port, Var},
     ast_lafont::Ident,
     naming::NameIter,
     parser_combinators,
 };
+
+pub fn compile_sk(e: SkExpr, names: &mut NameIter) -> Port {
+    match e {
+        SkExpr::K(a, b) => {
+            let k = make_k_comb(names);
+
+            let z_arg = make_z_comb(4, names);
+
+            let a_port = compile_sk(names);
+            let b_port = compile_sk(names);
+        }
+    }
+}
 
 pub fn compile(e: Expr, names: &mut NameIter) -> Port {
     match e {

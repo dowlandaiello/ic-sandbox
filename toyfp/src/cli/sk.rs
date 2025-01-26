@@ -1,37 +1,15 @@
-use super::{
-    compiler,
-    parser::{self, Expr},
-};
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use chumsky::{error::SimpleReason, prelude::*};
-use clap::{builder::OsStr, Arg, ArgAction};
-use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
+use chumsky::{
+    error::{Error, Simple, SimpleReason},
+    Parser,
+};
+use inetlib::parser::naming::NameIter;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{fs::OpenOptions, io::Read, path::PathBuf};
-
-pub fn arg_in_file() -> Arg {
-    Arg::new("source")
-        .value_name("SOURCE")
-        .require_equals(true)
-        .action(ArgAction::Set)
-}
-
-pub fn arg_out_file() -> Arg {
-    Arg::new("out")
-        .value_name("OUT")
-        .require_equals(false)
-        .action(ArgAction::Set)
-}
-
-pub fn arg_out_file_default(default: OsStr) -> Arg {
-    Arg::new("out")
-        .short('o')
-        .long("out")
-        .value_name("OUT")
-        .require_equals(true)
-        .default_value(default)
-        .action(ArgAction::Set)
-}
+use toyfplib::{
+    compiler,
+    parser_sk::{self, Expr},
+};
 
 pub fn read_program(in_fname: &str) -> Expr {
     let mut input = String::new();
@@ -49,42 +27,8 @@ pub fn read_program(in_fname: &str) -> Expr {
     parsed
 }
 
-pub fn repl() {
-    let mut rl = DefaultEditor::new().expect("failed to get readline editor");
-
-    loop {
-        let readline = rl.readline(">> ");
-
-        match readline {
-            Ok(line) => {
-                let parsed = assert_parse_literal_ok(line.as_str());
-                let combinated = super::compiler::compile(parsed.clone(), &mut NameIter::default());
-
-                if let Some(reduced) =
-                    reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))
-                {
-                    println!("{}", reduced);
-                } else {
-                    println!("{}", parsed);
-                }
-            }
-            Err(ReadlineError::Interrupted) => {
-                return;
-            }
-            Err(ReadlineError::Eof) => {
-                return;
-            }
-            Err(err) => {
-                eprintln!("Error: {:?}", err);
-
-                return;
-            }
-        }
-    }
-}
-
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
-    let errs: Vec<Simple<char>> = match parser::lexer()
+    let errs: Vec<Simple<char>> = match parser_sk::lexer()
         .parse(input)
         .map_err(|e| {
             e.into_iter()
@@ -92,7 +36,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
-            parser::parser().parse(res).map_err(|e| {
+            parser_sk::parser().parse(res).map_err(|e| {
                 e.into_iter()
                     .map(|e| {
                         Simple::<char>::custom(
@@ -105,7 +49,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
             })
         }) {
         Ok(v) => {
-            return v.0;
+            return v.into();
         }
         Err(e) => e,
     };
@@ -144,7 +88,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
 }
 
 pub fn assert_parse_literal_ok(input: &str) -> Expr {
-    let errs: Vec<Simple<char>> = match parser::lexer()
+    let errs: Vec<Simple<char>> = match parser_sk::lexer()
         .parse(input)
         .map_err(|e| {
             e.into_iter()
@@ -152,7 +96,7 @@ pub fn assert_parse_literal_ok(input: &str) -> Expr {
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
-            parser::parser().parse(res).map_err(|e| {
+            parser_sk::parser().parse(res).map_err(|e| {
                 e.into_iter()
                     .map(|e| {
                         Simple::<char>::custom(e.span(), format!("{}", e.map(|x| x.0)))
@@ -162,7 +106,7 @@ pub fn assert_parse_literal_ok(input: &str) -> Expr {
             })
         }) {
         Ok(v) => {
-            return v.0;
+            return v.into();
         }
         Err(e) => e,
     };
@@ -195,4 +139,38 @@ pub fn assert_parse_literal_ok(input: &str) -> Expr {
     }
 
     panic!()
+}
+
+pub fn repl() {
+    let mut rl = DefaultEditor::new().expect("failed to get readline editor");
+
+    loop {
+        let readline = rl.readline(">> ");
+
+        match readline {
+            Ok(line) => {
+                let parsed = assert_parse_literal_ok(line.as_str());
+                let combinated = compiler::compile_sk(parsed.clone(), &mut NameIter::default());
+
+                if let Some(reduced) =
+                    reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))
+                {
+                    println!("{}", reduced);
+                } else {
+                    println!("{}", parsed);
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                return;
+            }
+            Err(ReadlineError::Eof) => {
+                return;
+            }
+            Err(err) => {
+                eprintln!("Error: {:?}", err);
+
+                return;
+            }
+        }
+    }
 }
