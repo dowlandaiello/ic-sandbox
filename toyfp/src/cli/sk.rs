@@ -3,7 +3,7 @@ use chumsky::{
     error::{Error, Simple, SimpleReason},
     Parser,
 };
-use inetlib::parser::naming::NameIter;
+use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{fs::OpenOptions, io::Read, path::PathBuf};
 use toyfplib::{
