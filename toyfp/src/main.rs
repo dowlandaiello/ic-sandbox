@@ -69,7 +69,7 @@ fn main() {
 
             if arg_matches.get_one::<String>("sk").map(|s| s.as_ref()) == Some("true") {
                 let program = cli::sk::read_program(input_fname);
-                let compiled = compiler::compile_sk(program, &mut NameIter::default());
+                let compiled = compiler::compile_sk(program);
 
                 let mut out_f = OpenOptions::new()
                     .write(true)

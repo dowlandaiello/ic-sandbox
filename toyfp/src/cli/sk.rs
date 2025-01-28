@@ -150,7 +150,7 @@ pub fn repl() {
         match readline {
             Ok(line) => {
                 let parsed = assert_parse_literal_ok(line.as_str());
-                let combinated = compiler::compile_sk(parsed.clone(), &mut NameIter::default());
+                let combinated = compiler::compile_sk(parsed.clone());
 
                 if let Some(reduced) =
                     reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))

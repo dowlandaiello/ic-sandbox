@@ -1,5 +1,5 @@
 /// An iterator which generates a sequence of variable identifiers
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct NameIter {
     curr_var: usize,
     curr_agent: usize,

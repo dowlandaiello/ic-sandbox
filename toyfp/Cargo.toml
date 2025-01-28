@@ -19,3 +19,5 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 ariadne = { workspace = true }
 rustyline = { workspace = true }
+tracing = { workspace = true }
+test-log = { workspace = true }
