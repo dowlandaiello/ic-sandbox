@@ -73,45 +73,53 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
             let b_cc = b.map(|b| build_compilation_expr(*b, names));
             let c_cc = c.map(|c| build_compilation_expr(*c, names));
 
-            let constr_child = OwnedNetBuilder::new(
-                CombinatorBuilder::Constr {
-                    primary_port: Some((0, e.clone())),
-                    aux_ports: [None, a_cc.map(|a| (0, a))],
-                },
-                names,
-            );
+            if let Some(a_port) = a_cc.map(|a| (0, a)) {
+                let e_parent = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [None, Some(a_port)],
+                    },
+                    names,
+                );
 
-            let constr_parent = OwnedNetBuilder::new(
-                CombinatorBuilder::Constr {
-                    primary_port: Some((1, constr_child.clone())),
-                    aux_ports: [None, b_cc.map(|b| (0, b))],
-                },
-                names,
-            );
+                if let Some(b_port) = b_cc.map(|b| (0, b)) {
+                    let constr_parent = OwnedNetBuilder::new(
+                        CombinatorBuilder::Constr {
+                            primary_port: Some((0, e.clone())),
+                            aux_ports: [None, Some(b_port)],
+                        },
+                        names,
+                    );
 
-            let constr_parent_parent = OwnedNetBuilder::new(
-                CombinatorBuilder::Constr {
-                    primary_port: Some((1, constr_parent.clone())),
-                    aux_ports: [None, c_cc.map(|c| (0, c))],
-                },
-                names,
-            );
+                    e_parent.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_push_aux_port(Some((0, constr_parent.clone())))
+                    });
 
-            e.update_with(|builder| {
-                builder
-                    .clone()
-                    .with_primary_port(Some((0, constr_child.clone())))
-            });
-            constr_child.update_with(|builder| {
-                builder
-                    .clone()
-                    .with_push_aux_port(Some((0, constr_parent.clone())))
-            });
-            constr_parent.update_with(|builder| {
-                builder
-                    .clone()
-                    .with_push_aux_port(Some((0, constr_parent_parent.clone())))
-            });
+                    if let Some(c_port) = c_cc.map(|c| (0, c)) {
+                        let constr_parent_parent = OwnedNetBuilder::new(
+                            CombinatorBuilder::Constr {
+                                primary_port: Some((0, constr_parent.clone())),
+                                aux_ports: [None, Some(c_port)],
+                            },
+                            names,
+                        );
+
+                        constr_parent.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_push_aux_port(Some((0, constr_parent_parent.clone())))
+                        });
+                    }
+                }
+
+                e.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((0, e_parent.clone())))
+                });
+            };
 
             e
         }
@@ -134,7 +142,7 @@ mod test {
 
     #[test_log::test]
     fn test_compile_simple() {
-        let cases = ["(K)", "(K(a)(b))"];
+        let cases = ["(K)", "(K(a)(b))", "(S)"];
 
         for case in cases {
             let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();

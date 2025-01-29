@@ -108,14 +108,12 @@ impl OwnedNetBuilder {
         let old_primary_port = p.borrow().primary_port().cloned();
         p.borrow_mut().set_primary_port(None);
 
-        let s_tree = Self::new(
-            CombinatorBuilder::S { primary_port: None },
-            &mut Default::default(),
-        );
+        let mut names = Default::default();
+        let s_tree = Self::new(CombinatorBuilder::S { primary_port: None }, &mut names);
 
         if s_tree
-            .expand_step(&mut Default::default())
-            .combinate(&mut Default::default(), &mut Default::default())
+            .expand_step(&mut names)
+            .combinate(&mut Default::default(), &mut names)
             .alpha_eq(p)
         {
             tracing::trace!("found S");
@@ -248,7 +246,11 @@ impl OwnedNetBuilder {
 
                 e
             }
-            _ => unreachable!(),
+            x => {
+                tracing::trace!("attempted to build {}", x.name());
+
+                unreachable!()
+            }
         };
 
         e
@@ -647,17 +649,22 @@ impl OwnedNetBuilder {
                 });
 
                 self.update_with(|_| right_bottom_z);
+                d.expand_step(names);
+                d.expand_step(names);
+                right_bottom_z_ref.expand_step(names);
+                top_left_z.expand_step(names);
+                middle_left_z.expand_step(names);
             }
-            e @ CombinatorBuilder::Var { .. } => {
+            CombinatorBuilder::Var { .. } => {
                 tracing::trace!("expanding var");
             }
-            e @ CombinatorBuilder::Constr { .. } => {
+            CombinatorBuilder::Constr { .. } => {
                 tracing::trace!("expanding Constr");
             }
-            e @ CombinatorBuilder::Era { .. } => {
+            CombinatorBuilder::Era { .. } => {
                 tracing::trace!("expanding Era");
             }
-            e @ CombinatorBuilder::Dup { .. } => {
+            CombinatorBuilder::Dup { .. } => {
                 tracing::trace!("expanding Dup");
             }
         };
