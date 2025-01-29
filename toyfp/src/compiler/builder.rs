@@ -53,38 +53,55 @@ impl OwnedNetBuilder {
             _ => {}
         }
 
+        // Application requires an active pair
+        if let Some((lhs, rhs)) = p.try_as_active_pair() {
+            tracing::trace!("found application {}", lhs);
+
+            fn args(root: Option<&AstPort>) -> Option<Vec<AstPort>> {
+                match &*root?.borrow() {
+                    AstExpr::Constr(Constructor { aux_ports, .. }) => {
+                        let mut next_args = aux_ports.as_ref().iter();
+                        let (next, arg) = (next_args.next(), next_args.next());
+
+                        let mut res = vec![arg.map(|x| x.as_ref()).flatten()?.clone()];
+
+                        if let Some(others) = args(next.map(|x| x.as_ref()).flatten()) {
+                            res.extend(others);
+                        }
+
+                        Some(res)
+                    }
+                    _ => None,
+                }
+            }
+
+            let args = args(Some(&rhs)).expect("missing application args");
+
+            tracing::trace!(
+                "application has arg {}",
+                args.iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
+            lhs.borrow_mut().set_primary_port(None);
+
+            let mut to_call_dec =
+                Self::decombinate(&lhs).expect("combinator call missing valid applicand");
+
+            for arg in args {
+                to_call_dec = to_call_dec.with_push_argument(Some(Box::new(
+                    Self::decombinate(&arg).expect("invalid argument #1"),
+                )));
+            }
+
+            return Some(to_call_dec);
+        }
+
         Self::decombinate_k(p)
             .or_else(|| Self::decombinate_s(p))
-            .or_else(|| {
-                let (primary_port, aux_ports) = match &*p.borrow() {
-                    AstExpr::Constr(Constructor {
-                        primary_port,
-                        aux_ports,
-                    }) => (
-                        primary_port.as_ref().cloned(),
-                        aux_ports.as_ref().iter().cloned().collect::<Vec<_>>(),
-                    ),
-                    _ => {
-                        return None;
-                    }
-                };
-
-                let p = primary_port.as_ref().unwrap();
-
-                let mut to_call_dec =
-                    Self::decombinate(p).expect("combinator call missing valid applicand");
-
-                to_call_dec =
-                    to_call_dec
-                        .with_push_argument(aux_ports[0].as_ref().map(|aux| {
-                            Box::new(Self::decombinate(&aux).expect("invalid argument #1"))
-                        }))
-                        .with_push_argument(aux_ports[1].as_ref().map(|aux| {
-                            Box::new(Self::decombinate(&aux).expect("invalid argument #2"))
-                        }));
-
-                Some(to_call_dec)
-            })
+            .or_else(|| unreachable!())
     }
 
     fn decombinate_s(p: &AstPort) -> Option<SkExpr> {
@@ -101,6 +118,8 @@ impl OwnedNetBuilder {
             .combinate(&mut Default::default(), &mut Default::default())
             .alpha_eq(p)
         {
+            tracing::trace!("found S");
+
             // TODO: use some kind of hash tree for this (merkle tree)
             Some(SkExpr::S(None, None, None))
         } else {
@@ -123,6 +142,8 @@ impl OwnedNetBuilder {
             .combinate(&mut Default::default(), &mut names)
             .alpha_eq(&p)
         {
+            tracing::trace!("found K");
+
             // TODO: use some kind of hash tree for this (merkle tree)
             Some(SkExpr::K(None, None))
         } else {
@@ -148,7 +169,7 @@ impl OwnedNetBuilder {
                 primary_port,
                 aux_ports,
             } => {
-                tracing::trace!("building Constr");
+                tracing::trace!("building Constr @ 0x{}", name);
 
                 let e = AstExpr::Constr(Constructor::new()).into_port(names);
                 built.insert(name, e.clone());
