@@ -142,7 +142,7 @@ mod test {
 
     #[test_log::test]
     fn test_compile_simple() {
-        let cases = ["(K)", "(K(a)(b))", "(S)"];
+        let cases = ["(K)", "(K(a)(b))", "(S)", "(S(a)(b))", "(S(K))"];
 
         for case in cases {
             let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();

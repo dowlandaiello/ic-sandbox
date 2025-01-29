@@ -162,6 +162,8 @@ impl OwnedNetBuilder {
             return existing_combinated.clone();
         }
 
+        self.expand_step(names);
+
         let e = match &self.0.borrow().builder {
             CombinatorBuilder::Constr {
                 primary_port,
