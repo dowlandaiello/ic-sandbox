@@ -13,6 +13,10 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
         .combinate(&mut Default::default(), &mut names)
 }
 
+pub fn decode_sk(p: AstPort) -> SkExpr {
+    OwnedNetBuilder::decombinate(&p).expect("invalid SK expression")
+}
+
 fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
     match e {
         SkExpr::Var(v) => OwnedNetBuilder::new(
@@ -130,7 +134,7 @@ mod test {
         for case in cases {
             let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
 
-            println!("{}", compile_sk(parsed.into()));
+            println!("{}", decode_sk(compile_sk(parsed.into())));
         }
     }
 }

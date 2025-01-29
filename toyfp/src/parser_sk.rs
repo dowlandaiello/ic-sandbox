@@ -9,6 +9,32 @@ pub enum Expr {
     Var(String),
 }
 
+impl Expr {
+    pub(crate) fn with_push_argument(self, arg: Option<Box<Expr>>) -> Self {
+        match self {
+            Self::S(a, b, c) => {
+                if a.is_none() {
+                    return Self::S(arg, b, c);
+                }
+
+                if b.is_none() {
+                    return Self::S(a, arg, c);
+                }
+
+                Self::S(a, b, arg)
+            }
+            Self::K(a, b) => {
+                if a.is_none() {
+                    return Self::K(arg, b);
+                }
+
+                Self::K(a, arg)
+            }
+            v @ Self::Var(_) => v,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SpannedExpr {
     S {

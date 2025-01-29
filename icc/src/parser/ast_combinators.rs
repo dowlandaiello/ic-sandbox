@@ -30,6 +30,12 @@ pub struct Port {
 }
 
 impl Port {
+    pub fn alpha_eq(&self, other: &Port) -> bool {
+        self.iter_tree()
+            .zip(other.iter_tree())
+            .all(|(lhs, rhs)| lhs.borrow().alpha_eq(&rhs.borrow()))
+    }
+
     #[cfg(not(feature = "threadpool"))]
     pub fn as_ptr(&self) -> *const RefCell<Expr> {
         Rc::as_ptr(&self.e)
@@ -507,6 +513,16 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn alpha_eq(&self, other: &Expr) -> bool {
+        matches!(
+            (self, other),
+            (Self::Era(_), Self::Era(_))
+                | (Self::Dup(_), Self::Dup(_))
+                | (Self::Constr(_), Self::Constr(_))
+                | (Self::Var(_), Self::Var(_)),
+        )
+    }
+
     pub fn name(&self) -> String {
         match self {
             Self::Era(_) => String::from("Era"),
