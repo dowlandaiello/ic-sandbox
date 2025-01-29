@@ -9,7 +9,7 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
     build_compilation_expr(e, &mut names)
-        .expand_to_end(&mut names)
+        .expand_step(&mut names)
         .combinate(&mut Default::default(), &mut names)
 }
 

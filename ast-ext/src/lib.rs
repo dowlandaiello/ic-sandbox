@@ -24,7 +24,7 @@ pub trait TreeCursor<TValue>: Sized {
 
     fn value(&self) -> TValue;
 
-    fn children(&self) -> &mut dyn Iterator<Item = Self>;
+    fn children(&self) -> Box<dyn Iterator<Item = Self>>;
 }
 
 pub struct TreeVisitor<TValue, TCursor: TreeCursor<TValue>> {
@@ -32,6 +32,16 @@ pub struct TreeVisitor<TValue, TCursor: TreeCursor<TValue>> {
     seen: BTreeSet<usize>,
 
     bruh: PhantomData<TValue>,
+}
+
+impl<TCursor: TreeCursor<TValue>, TValue> TreeVisitor<TValue, TCursor> {
+    pub fn new(init: TCursor) -> Self {
+        Self {
+            to_visit: [init].into(),
+            seen: Default::default(),
+            bruh: Default::default(),
+        }
+    }
 }
 
 impl<TCursor: TreeCursor<TValue>, TValue> Iterator for TreeVisitor<TValue, TCursor> {

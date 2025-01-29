@@ -1,17 +1,46 @@
 use crate::parser_sk::Expr as SkExpr;
+use ast_ext::{TreeCursor, TreeVisitor};
 use inetlib::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr as AstExpr, Port as AstPort, Var},
     ast_lafont::Ident,
     naming::NameIter,
 };
-use std::{cell::RefCell, collections::BTreeMap, fmt, iter, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, iter, rc::Rc};
 
 type Port = (usize, OwnedNetBuilder);
 
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedNetBuilder(pub Rc<RefCell<NamedBuilder>>);
 
+impl TreeCursor<OwnedNetBuilder> for OwnedNetBuilder {
+    fn hash(&self) -> usize {
+        self.0.borrow().name
+    }
+
+    fn value(&self) -> OwnedNetBuilder {
+        self.clone()
+    }
+
+    fn children(&self) -> Box<dyn Iterator<Item = Self>> {
+        Box::new(
+            self.0
+                .borrow()
+                .builder
+                .iter_ports()
+                .filter_map(|x| x)
+                .map(|(_, p)| p)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter(),
+        )
+    }
+}
+
 impl OwnedNetBuilder {
+    pub(crate) fn iter_tree(&self) -> impl Iterator<Item = OwnedNetBuilder> {
+        TreeVisitor::new(self.clone())
+    }
+
     pub(crate) fn new(b: CombinatorBuilder, names: &mut NameIter) -> Self {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
@@ -228,7 +257,7 @@ impl OwnedNetBuilder {
     pub(crate) fn expand_step(&self, names: &mut NameIter) -> &Self {
         let builder = self.cloned();
 
-        let new_builder = match &builder {
+        match &builder {
             CombinatorBuilder::Z3 {
                 primary_port,
                 aux_ports,
@@ -291,12 +320,14 @@ impl OwnedNetBuilder {
                     });
                 }
 
-                child_constr
+                self.update_with(|_| child_constr);
             }
             CombinatorBuilder::Z4 {
                 primary_port,
                 aux_ports,
             } => {
+                self.iter_tree().for_each(|x| println!("{:?}", x));
+
                 tracing::trace!("expanding Z4");
 
                 let top_constr = OwnedNetBuilder::new(
@@ -336,7 +367,7 @@ impl OwnedNetBuilder {
                     p.update_with(|builder| {
                         builder
                             .clone()
-                            .with_port_i(*port, Some((2, child_constr_ref.clone())))
+                            .with_port_i(*port, Some((0, child_constr_ref.clone())))
                     });
                 }
 
@@ -357,7 +388,7 @@ impl OwnedNetBuilder {
                     });
                 }
 
-                // aux rightmost <-> child
+                // aux middle <-> child
                 if let Some((port, aux)) = &aux_ports[2] {
                     aux.update_with(|builder| {
                         builder
@@ -366,7 +397,7 @@ impl OwnedNetBuilder {
                     });
                 }
 
-                // aux middle <-> parent
+                // aux rightmost <-> parent
                 if let Some((port, aux)) = &aux_ports[3] {
                     aux.update_with(|builder| {
                         builder
@@ -375,7 +406,7 @@ impl OwnedNetBuilder {
                     });
                 }
 
-                child_constr
+                self.update_with(|_| child_constr);
             }
             CombinatorBuilder::D {
                 ref primary_port,
@@ -415,11 +446,11 @@ impl OwnedNetBuilder {
                     builder
                         .clone()
                         .with_primary_port(Some((3, root_ref.clone())))
-                        .with_aux_port_i(0, Some((2, root_ref.clone())))
-                        .with_aux_port_i(1, Some((1, root_ref.clone())))
+                        .with_aux_port_i(0, Some((1, root_ref.clone())))
+                        .with_aux_port_i(1, Some((2, root_ref.clone())))
                 });
 
-                root
+                self.update_with(|_| root);
             }
             CombinatorBuilder::K { primary_port } => {
                 tracing::trace!("expanding K");
@@ -463,7 +494,11 @@ impl OwnedNetBuilder {
                     });
                 };
 
-                root
+                self.update_with(|_| root);
+
+                d.expand_step(names);
+                root_ref.expand_step(names);
+                d.expand_step(names);
             }
             CombinatorBuilder::S { primary_port } => {
                 tracing::trace!("expanding S");
@@ -593,33 +628,25 @@ impl OwnedNetBuilder {
                         .with_aux_port_i(0, Some((4, top_left_z.clone())))
                 });
 
-                right_bottom_z
+                self.update_with(|_| right_bottom_z);
             }
             e @ CombinatorBuilder::Var { .. } => {
                 tracing::trace!("expanding var");
-
-                (*e).clone()
             }
             e @ CombinatorBuilder::Constr { .. } => {
                 tracing::trace!("expanding Constr");
-
-                (*e).clone()
             }
             e @ CombinatorBuilder::Era { .. } => {
                 tracing::trace!("expanding Era");
-
-                (*e).clone()
             }
             e @ CombinatorBuilder::Dup { .. } => {
                 tracing::trace!("expanding Dup");
-
-                (*e).clone()
             }
         };
 
         tracing::trace!("expansion finished");
 
-        self.update_with(move |_| new_builder)
+        self
     }
 }
 
@@ -681,21 +708,36 @@ pub(crate) enum CombinatorBuilder {
 impl std::fmt::Debug for CombinatorBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ports = self.iter_ports();
-        let ports_debug = &f
-            .debug_list()
-            .entries(ports.map(|p| p.map(|(_, p)| p.0.borrow().builder.name().to_owned())))
-            .finish()?;
+        let ports_debug = ports
+            .skip(1)
+            .map(|p| {
+                p.map(|(port, p)| {
+                    format!(
+                        "{} @ 0x{} in {}",
+                        p.0.borrow().builder.name().to_owned(),
+                        p.0.borrow().name,
+                        port,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
 
         f.debug_struct("CombinatorBuilder")
             .field("name", &self.name())
             .field(
                 "primary_port",
-                &self
-                    .iter_ports()
-                    .next()
-                    .map(|p| p.map(|(_, p)| p.0.borrow().builder.name().to_owned())),
+                &self.iter_ports().next().map(|p| {
+                    p.map(|(port, p)| {
+                        format!(
+                            "{} @ 0x{} in {}",
+                            p.0.borrow().builder.name().to_owned(),
+                            p.0.borrow().name,
+                            port,
+                        )
+                    })
+                }),
             )
-            .field("aux_ports", ports_debug)
+            .field("aux_ports", &ports_debug)
             .finish()
     }
 }
@@ -903,13 +945,11 @@ mod test {
 
     #[test_log::test]
     fn test_k_comb() {
-        let k_comb = OwnedNetBuilder::new(
-            CombinatorBuilder::K { primary_port: None },
-            &mut Default::default(),
-        )
-        .expand_step(&mut Default::default())
-        .combinate(&mut Default::default(), &mut Default::default());
+        let mut names = Default::default();
 
-        assert_eq!(k_comb.to_string(), "");
+        let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
+        k_comb.expand_step(&mut names);
+
+        k_comb.iter_tree().for_each(|x| println!("{:?}", x));
     }
 }
