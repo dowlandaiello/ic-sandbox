@@ -114,14 +114,13 @@ impl OwnedNetBuilder {
         let old_primary_port = p.borrow().primary_port().cloned();
         p.borrow_mut().set_primary_port(None);
 
-        let k_tree = Self::new(
-            CombinatorBuilder::K { primary_port: None },
-            &mut Default::default(),
-        );
+        let mut names = Default::default();
+
+        let k_tree = Self::new(CombinatorBuilder::K { primary_port: None }, &mut names);
+        k_tree.expand_step(&mut names);
 
         if k_tree
-            .expand_step(&mut Default::default())
-            .combinate(&mut Default::default(), &mut Default::default())
+            .combinate(&mut Default::default(), &mut names)
             .alpha_eq(&p)
         {
             // TODO: use some kind of hash tree for this (merkle tree)
@@ -326,8 +325,6 @@ impl OwnedNetBuilder {
                 primary_port,
                 aux_ports,
             } => {
-                self.iter_tree().for_each(|x| println!("{:?}", x));
-
                 tracing::trace!("expanding Z4");
 
                 let top_constr = OwnedNetBuilder::new(
@@ -950,6 +947,6 @@ mod test {
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
         k_comb.expand_step(&mut names);
 
-        k_comb.iter_tree().for_each(|x| println!("{:?}", x));
+        k_comb.combinate(&mut Default::default(), &mut names);
     }
 }
