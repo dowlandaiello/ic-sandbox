@@ -13,8 +13,8 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
         .combinate(&mut Default::default(), &mut names)
 }
 
-pub fn decode_sk(p: AstPort) -> SkExpr {
-    OwnedNetBuilder::decombinate(&p).expect("invalid SK expression")
+pub fn decode_sk(p: &AstPort) -> SkExpr {
+    OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
 fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
@@ -35,20 +35,32 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
             if let Some(a_port) = a_cc.map(|a| (0, a)) {
                 let e_parent = OwnedNetBuilder::new(
                     CombinatorBuilder::Constr {
-                        primary_port: None,
-                        aux_ports: [None, Some(a_port)],
+                        primary_port: Some((0, e.clone())),
+                        aux_ports: [None, Some(a_port.clone())],
                     },
                     names,
                 );
 
+                a_port.1.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((2, e_parent.clone())))
+                });
+
                 if let Some(b_port) = b_cc.map(|b| (0, b)) {
                     let constr_parent = OwnedNetBuilder::new(
                         CombinatorBuilder::Constr {
-                            primary_port: Some((0, e.clone())),
-                            aux_ports: [None, Some(b_port)],
+                            primary_port: Some((1, e_parent.clone())),
+                            aux_ports: [None, Some(b_port.clone())],
                         },
                         names,
                     );
+
+                    b_port.1.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((2, constr_parent.clone())))
+                    });
 
                     e_parent.update_with(|builder| {
                         builder
@@ -154,7 +166,7 @@ mod test {
         for case in cases {
             let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
 
-            assert_eq!(decode_sk(compile_sk(parsed.into())).to_string(), case);
+            assert_eq!(decode_sk(&compile_sk(parsed.into())).to_string(), case);
         }
     }
 }

@@ -3,7 +3,7 @@ use chumsky::{
     error::{Error, Simple, SimpleReason},
     Parser,
 };
-use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
+use inetlib::reducers::combinators::reduce_dyn;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{fs::OpenOptions, io::Read, path::PathBuf};
 use toyfplib::{
@@ -153,7 +153,7 @@ pub fn repl() {
                 let combinated = compiler::compile_sk(parsed.clone());
 
                 if let Some(reduced) =
-                    reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))
+                    reduce_dyn(&combinated).map(|res| compiler::decode_sk(res.get(0).unwrap()))
                 {
                     println!("{}", reduced);
                 } else {

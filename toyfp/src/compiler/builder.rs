@@ -1,5 +1,5 @@
 use crate::parser_sk::Expr as SkExpr;
-use ast_ext::{TreeCursor, TreeVisitor};
+use ast_ext::TreeCursor;
 use inetlib::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr as AstExpr, Port as AstPort, Var},
     ast_lafont::Ident,
@@ -37,10 +37,6 @@ impl TreeCursor<OwnedNetBuilder> for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
-    pub(crate) fn iter_tree(&self) -> impl Iterator<Item = OwnedNetBuilder> {
-        TreeVisitor::new(self.clone())
-    }
-
     pub(crate) fn new(b: CombinatorBuilder, names: &mut NameIter) -> Self {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
@@ -164,7 +160,9 @@ impl OwnedNetBuilder {
 
         self.expand_step(names);
 
-        let e = match &self.0.borrow().builder {
+        let builder = self.0.borrow().builder.clone();
+
+        let e = match builder {
             CombinatorBuilder::Constr {
                 primary_port,
                 aux_ports,
@@ -179,14 +177,13 @@ impl OwnedNetBuilder {
                         .set_primary_port(Some(p.1.clone().combinate(built, names)));
                 }
 
-                e.borrow_mut().set_aux_ports(
-                    aux_ports
-                        .iter()
-                        .map(|p| p.clone().map(|p| p.1.combinate(built, names)))
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .unwrap(),
-                );
+                let combinated_ports = aux_ports
+                    .iter()
+                    .map(|p| p.clone().map(|p| p.1.combinate(built, names)))
+                    .collect::<Vec<_>>()
+                    .try_into();
+
+                e.borrow_mut().set_aux_ports(combinated_ports.unwrap());
 
                 e
             }
@@ -782,13 +779,6 @@ impl CombinatorBuilder {
             Self::Dup { .. } => "Dup",
             Self::Era { .. } => "Era",
         }
-    }
-
-    pub(crate) fn is_primitive(&self) -> bool {
-        matches!(
-            self,
-            Self::Era { .. } | Self::Dup { .. } | Self::Constr { .. } | Self::Var { .. }
-        )
     }
 
     pub(crate) fn with_primary_port(self, primary_port: Option<Port>) -> Self {

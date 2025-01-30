@@ -130,7 +130,6 @@ mod test {
         ];
 
         for (case, expected) in cases {
-            println!("{}", case);
             assert_eq!(
                 parser()
                     .parse(lexer().parse(case).unwrap())
