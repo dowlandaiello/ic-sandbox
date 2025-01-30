@@ -98,9 +98,9 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
         (&Expr::Constr(ref c), &Expr::Constr(ref d)) => {
             let original_ports = [
                 c.aux_ports[0].clone(),
-                d.aux_ports[1].clone(),
-                c.aux_ports[1].clone(),
                 d.aux_ports[0].clone(),
+                c.aux_ports[1].clone(),
+                d.aux_ports[1].clone(),
             ];
 
             if let Some(p) = original_ports[0].as_ref() {
@@ -340,14 +340,59 @@ mod test {
     }
 
     #[test]
-    fn test_reduce_annihilate_symmetric() {
-        let cases = [
-            (
-                Expr::Constr(Constructor::new()),
-                Expr::Constr(Constructor::new()),
-            ),
-            (Expr::Dup(Duplicator::new()), Expr::Dup(Duplicator::new())),
-        ];
+    fn test_reduce_annihilate_constr() {
+        let cases = [(
+            Expr::Constr(Constructor::new()),
+            Expr::Constr(Constructor::new()),
+        )];
+
+        for (top_expr, bottom_expr) in cases {
+            let mut names_iter = NameIter::default();
+
+            let top: Port = top_expr.into_port(&mut names_iter);
+            let bottom: Port = bottom_expr.into_port(&mut names_iter);
+
+            top.borrow_mut().set_primary_port(Some(bottom.clone()));
+            bottom.borrow_mut().set_primary_port(Some(top.clone()));
+
+            let vars = [
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(top.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(bottom.clone()),
+                })
+                .into_port(&mut names_iter),
+                Expr::Var(Var {
+                    name: Ident(names_iter.next()),
+                    port: Some(bottom.clone()),
+                })
+                .into_port(&mut names_iter),
+            ];
+
+            top.borrow_mut()
+                .set_aux_ports([Some(vars[0].clone()), Some(vars[1].clone())]);
+            bottom
+                .borrow_mut()
+                .set_aux_ports([Some(vars[2].clone()), Some(vars[3].clone())]);
+
+            let res = reduce_dyn(&top).unwrap();
+            assert_eq!(res[0].to_string(), "0 ~ 2");
+            assert_eq!(res[1].to_string(), "1 ~ 3");
+        }
+    }
+
+    #[test]
+    fn test_reduce_annihilate_dup() {
+        let cases = [(Expr::Dup(Duplicator::new()), Expr::Dup(Duplicator::new()))];
 
         for (top_expr, bottom_expr) in cases {
             let mut names_iter = NameIter::default();
