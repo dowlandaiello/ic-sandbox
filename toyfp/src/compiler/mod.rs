@@ -8,9 +8,9 @@ mod builder;
 pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
-    build_compilation_expr(e, &mut names)
-        .expand_step(&mut names)
-        .combinate(&mut Default::default(), &mut names)
+    let cc = build_compilation_expr(e, &mut names);
+
+    cc.combinate(&mut Default::default(), &mut names)
 }
 
 pub fn decode_sk(p: &AstPort) -> SkExpr {
@@ -76,6 +76,8 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                 });
             };
 
+            e.expand_step(names);
+
             e
         }
         SkExpr::S(a, b, c) => {
@@ -132,6 +134,8 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                         .with_primary_port(Some((0, e_parent.clone())))
                 });
             };
+
+            e.expand_step(names);
 
             e
         }

@@ -13,7 +13,6 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(not(feature = "threadpool"))]
 use std::{
-    borrow::Borrow,
     cell::{Ref, RefCell},
     rc::Rc,
 };
@@ -79,12 +78,12 @@ impl Port {
 
     #[cfg(not(feature = "threadpool"))]
     pub fn borrow(&self) -> Ref<'_, Expr> {
-        <Rc<_> as Borrow<RefCell<_>>>::borrow(&self.e).borrow()
+        (&self.e).try_borrow().unwrap()
     }
 
     #[cfg(feature = "threadpool")]
     pub fn borrow_mut(&self) -> RwLockWriteGuard<'_, Expr> {
-        self.e.write().unwrap()
+        self.e.try_write().unwrap()
     }
 }
 

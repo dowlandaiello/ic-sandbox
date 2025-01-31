@@ -152,6 +152,8 @@ pub fn repl() {
                 let parsed = assert_parse_literal_ok(line.as_str());
                 let combinated = compiler::compile_sk(parsed.clone());
 
+                tracing::trace!("job: {}", combinated);
+
                 if let Some(reduced) =
                     reduce_dyn(&combinated).map(|res| compiler::decode_sk(res.get(0).unwrap()))
                 {

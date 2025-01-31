@@ -1,5 +1,5 @@
 use crate::parser_sk::Expr as SkExpr;
-use ast_ext::TreeCursor;
+use ast_ext::{TreeCursor, TreeVisitor};
 use inetlib::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr as AstExpr, Port as AstPort, Var},
     ast_lafont::Ident,
@@ -37,6 +37,10 @@ impl TreeCursor<OwnedNetBuilder> for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
+    pub(crate) fn iter_tree(self) -> impl Iterator<Item = OwnedNetBuilder> {
+        TreeVisitor::new(self)
+    }
+
     pub(crate) fn new(b: CombinatorBuilder, names: &mut NameIter) -> Self {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
