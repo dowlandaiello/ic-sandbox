@@ -1,10 +1,12 @@
 use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
+use std::fmt;
 
 const COMMENT_STR: &str = "--";
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Token {
+    Def,
     Lambda,
     LeftParen,
     RightParen,
@@ -17,6 +19,24 @@ pub enum Token {
     Dup,
 }
 
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Def => write!(f, "def"),
+            Self::Lambda => write!(f, "\\"),
+            Self::LeftParen => write!(f, "("),
+            Self::RightParen => write!(f, ")"),
+            Self::LeftBracket => write!(f, "{{"),
+            Self::RightBracket => write!(f, "}}"),
+            Self::Digit(n) => write!(f, "{}", n),
+            Self::Equals => write!(f, "="),
+            Self::Semicolon => write!(f, ";"),
+            Self::Ident(i) => write!(f, "{}", i),
+            Self::Dup => write!(f, "dup"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Expr {
     Abstraction(Abstraction),
@@ -24,6 +44,49 @@ pub enum Expr {
     Superposition(Superposition),
     Duplication(Duplication),
     Variable(Var),
+}
+
+impl fmt::Display for Expr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Abstraction(Abstraction { bind_var, body }) => {
+                write!(f, "\\{} {}", bind_var, body)
+            }
+            Self::Application(Application(lhs, rhs)) => write!(f, "({} {})", lhs, rhs),
+            Self::Superposition(Superposition(lhs, rhs)) => write!(f, "{{{} {}}}", lhs, rhs),
+            Self::Duplication(Duplication {
+                pair,
+                to_clone,
+                in_expr,
+            }) => write!(
+                f,
+                "dup {{{} {}}} = {}; {}",
+                pair.0, pair.1, to_clone, in_expr
+            ),
+            Self::Variable(v) => write!(f, "{}", v.0),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Stmt {
+    Def(Definition),
+}
+
+impl fmt::Display for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Def(Definition { name, definition }) => {
+                write!(f, "def {} = {}", name, definition)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Definition {
+    pub name: String,
+    pub definition: Expr,
 }
 
 #[derive(Debug)]
@@ -50,6 +113,7 @@ pub struct Var(pub String);
 
 pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<char>> {
     let comment = just(COMMENT_STR).then_ignore(text::newline().not().repeated());
+    let def = just("def").map(|_| Token::Def);
     let left_bracket = just("{").map(|_| Token::LeftBracket);
     let right_bracket = just("}").map(|_| Token::RightBracket);
     let left_paren = just("(").map(|_| Token::LeftParen);
@@ -68,6 +132,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         right_paren,
         lambda,
         dup,
+        def,
         digit,
         equals,
         semi,
@@ -75,7 +140,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     ));
 
     token
-        .padded_by(text::whitespace().repeated().or_not())
+        .padded_by(text::whitespace().repeated())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
         .separated_by(
@@ -91,7 +156,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spanned<Token>>> {
+pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simple<Spanned<Token>>> {
     let span_just = move |val: Token| {
         filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
             tok.0 == val
@@ -102,7 +167,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spa
     Spanned(Token::Ident(i), s) => Spanned(Expr::Variable(Var(i)), s),
     };
 
-    recursive(|expr| {
+    let expr = recursive(|expr| {
         let abstraction = span_just(Token::Lambda)
             .ignore_then(select! {
             Spanned(Token::Ident(i), s) => Spanned(i, s)
@@ -163,5 +228,45 @@ pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spa
             });
 
         choice((abstraction, application, superposition, duplication, var))
-    })
+    });
+
+    let stmt = select! {
+    Spanned(Token::Ident(i), _) => i
+    }
+    .then_ignore(span_just(Token::Equals))
+    .then(expr)
+    .map(|(name, definition)| {
+        Spanned(
+            Stmt::Def(Definition {
+                name,
+                definition: definition.0,
+            }),
+            definition.1,
+        )
+    });
+
+    stmt.repeated()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_parse_simple() {
+        let case = "def id = \\x x
+";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser().parse(lexed).unwrap()[0].0.to_string(),
+            case.to_string()
+        );
+    }
 }

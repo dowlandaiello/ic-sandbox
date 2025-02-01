@@ -102,9 +102,9 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
         (Expr::Constr(ref c), Expr::Constr(ref d)) => {
             let original_ports = [
                 c.aux_ports[0].clone(),
-                d.aux_ports[1].clone(),
-                c.aux_ports[1].clone(),
                 d.aux_ports[0].clone(),
+                c.aux_ports[1].clone(),
+                d.aux_ports[1].clone(),
             ];
 
             if let Some(p) = original_ports[0].as_ref() {
@@ -324,7 +324,7 @@ mod test {
         let cases = [
             (
                 "Constr[@1](a, b) >< Constr[@2](c, d)",
-                vec!["a ~ d", "b ~ c"],
+                vec!["a ~ c", "b ~ d"],
             ),
             ("Dup[@1](a, b) >< Dup[@2](c, d)", vec!["a ~ c", "b ~ d"]),
             ("Era[@1]() >< Era[@2]()", vec![]),
