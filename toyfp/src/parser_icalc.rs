@@ -52,7 +52,13 @@ impl fmt::Display for Expr {
             Self::Abstraction(Abstraction { bind_var, body }) => {
                 write!(f, "\\{} {}", bind_var, body)
             }
-            Self::Application(Application(lhs, rhs)) => write!(f, "({} {})", lhs, rhs),
+            Self::Application(Application(lhs, rhs)) => {
+                if let Some(rhs) = rhs {
+                    write!(f, "({} {})", lhs, rhs)
+                } else {
+                    write!(f, "({})", lhs)
+                }
+            }
             Self::Superposition(Superposition(lhs, rhs)) => write!(f, "{{{} {}}}", lhs, rhs),
             Self::Duplication(Duplication {
                 pair,
@@ -71,6 +77,7 @@ impl fmt::Display for Expr {
 #[derive(Debug)]
 pub enum Stmt {
     Def(Definition),
+    Expr(Expr),
 }
 
 impl fmt::Display for Stmt {
@@ -79,6 +86,7 @@ impl fmt::Display for Stmt {
             Self::Def(Definition { name, definition }) => {
                 write!(f, "def {} = {}", name, definition)
             }
+            Self::Expr(e) => write!(f, "{}", e),
         }
     }
 }
@@ -96,7 +104,7 @@ pub struct Abstraction {
 }
 
 #[derive(Debug)]
-pub struct Application(pub Box<Expr>, pub Box<Expr>);
+pub struct Application(pub Box<Expr>, pub Option<Box<Expr>>);
 
 #[derive(Debug)]
 pub struct Superposition(pub Box<Expr>, pub Box<Expr>);
@@ -140,7 +148,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     ));
 
     token
-        .padded_by(text::whitespace().repeated())
+        .padded_by(text::whitespace())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
         .separated_by(
@@ -182,18 +190,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
                     bind_id.1,
                 )
             });
-        let app_member = expr
+        let application = expr
             .clone()
+            .then(expr.clone().or_not())
+            .map(|(a, b)| Spanned(Application(Box::new(a.0), b.map(|x| Box::new(x.0))), a.1))
+            .map(|x| Spanned(Expr::Application(x.0), x.1))
             .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen));
-        let application = app_member
-            .clone()
-            .then(app_member.clone().repeated().at_least(1))
-            .foldl(|a: Spanned<Expr>, b: Spanned<Expr>| {
-                Spanned(
-                    Expr::Application(Application(Box::new(a.0), Box::new(b.0))),
-                    a.1,
-                )
-            });
         let superposition = span_just(Token::LeftBracket)
             .ignore_then(expr.clone())
             .then(expr.clone())
@@ -230,22 +232,32 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
         choice((abstraction, application, superposition, duplication, var))
     });
 
-    let stmt = select! {
-    Spanned(Token::Ident(i), _) => i
-    }
-    .then_ignore(span_just(Token::Equals))
-    .then(expr)
-    .map(|(name, definition)| {
-        Spanned(
-            Stmt::Def(Definition {
-                name,
-                definition: definition.0,
-            }),
-            definition.1,
-        )
-    });
+    let stmt = span_just(Token::Def)
+        .ignore_then(select! {
+        Spanned(Token::Ident(i), _) => i
+        })
+        .then_ignore(span_just(Token::Equals))
+        .then(expr.clone())
+        .map(|(name, definition)| {
+            Spanned(
+                Stmt::Def(Definition {
+                    name,
+                    definition: definition.0,
+                }),
+                definition.1,
+            )
+        });
 
     stmt.repeated()
+        .then(expr.map(|e| Spanned(Stmt::Expr(e.0), e.1)).or_not())
+        .map(|(mut defs, expr)| {
+            if let Some(e) = expr {
+                defs.push(e);
+                defs
+            } else {
+                defs
+            }
+        })
 }
 
 #[cfg(test)]
@@ -254,8 +266,7 @@ mod test {
 
     #[test]
     fn test_parse_simple() {
-        let case = "def id = \\x x
-";
+        let case = "def id = \\x x";
 
         let lexed = lexer()
             .parse(case)
@@ -266,6 +277,95 @@ mod test {
 
         assert_eq!(
             parser().parse(lexed).unwrap()[0].0.to_string(),
+            case.to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_one_app() {
+        let case = "\\s \\z (z)";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser().parse(lexed).unwrap()[0].0.to_string(),
+            case.to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_two_app() {
+        let case = "\\n \\s \\z (s n)";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser()
+                .parse(lexed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.0.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            case.to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_multiline() {
+        let case = "def Z = \\s \\z (z)
+def S = \\n \\s \\z (s n)";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser()
+                .parse(lexed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.0.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            case.to_string()
+        );
+    }
+
+    #[test]
+    fn test_parse_body() {
+        let case = "def Z = \\s \\z (z)
+def S = \\n \\s \\z (s n)
+((fnot p8) true)";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser()
+                .parse(lexed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.0.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
             case.to_string()
         );
     }
