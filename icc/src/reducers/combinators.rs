@@ -74,7 +74,7 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
                 d.aux_ports[1].clone(),
             ];
 
-            make_constr_dup_commutation_net(original_ports, e2.clone(), e.clone(), &mut names)
+            make_dup_constr_commutation_net(original_ports, e2.clone(), e.clone(), &mut names)
         }
         // commutation of constr >< era
         (Expr::Constr(ref c), Expr::Era(_)) => {
@@ -226,6 +226,65 @@ fn make_constr_dup_commutation_net(
     Some(vec![top_lhs])
 }
 
+fn make_dup_constr_commutation_net(
+    original_ports: [Option<Port>; 4],
+    lhs: Port,
+    rhs: Port,
+    names_iter: &mut NameIter,
+) -> Option<Vec<Port>> {
+    let bot_lhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
+    let bot_rhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
+
+    let top_lhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
+    let top_rhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
+
+    top_lhs
+        .borrow_mut()
+        .set_aux_ports([Some(bot_rhs.clone()), Some(bot_lhs.clone())]);
+    top_rhs
+        .borrow_mut()
+        .set_aux_ports([Some(bot_rhs.clone()), Some(bot_lhs.clone())]);
+    bot_lhs
+        .borrow_mut()
+        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
+    bot_rhs
+        .borrow_mut()
+        .set_aux_ports([Some(top_lhs.clone()), Some(top_rhs.clone())]);
+
+    // Connect original top left, top right, bottom left, bottom right vars
+    // to new agents
+    match &original_ports {
+        [a, b, c, d] => {
+            top_lhs.borrow_mut().set_primary_port(a.clone());
+            top_rhs.borrow_mut().set_primary_port(b.clone());
+            bot_lhs.borrow_mut().set_primary_port(d.clone());
+            bot_rhs.borrow_mut().set_primary_port(c.clone());
+        }
+    }
+
+    if let Some(top_left) = &original_ports[0] {
+        top_left.borrow_mut().swap_conn(&lhs, Some(top_lhs.clone()));
+    }
+
+    if let Some(top_right) = &original_ports[1] {
+        top_right
+            .borrow_mut()
+            .swap_conn(&lhs, Some(top_rhs.clone()));
+    }
+
+    if let Some(bot_left) = &original_ports[2] {
+        bot_left.borrow_mut().swap_conn(&rhs, Some(bot_rhs.clone()));
+    }
+
+    if let Some(bot_right) = &original_ports[3] {
+        bot_right
+            .borrow_mut()
+            .swap_conn(&rhs, Some(bot_lhs.clone()));
+    }
+
+    Some(vec![top_lhs])
+}
+
 fn make_constr_era_commutation_net(
     original_ports: [Option<Port>; 2],
     lhs: Port,
@@ -280,6 +339,10 @@ mod test {
             (
                 "Constr[@1](a, b) >< Dup[@2](d, c)",
                 vec!["Dup[@0](a, Constr[@3](d, @0, Dup[@1](b, @3, Constr[@2](c, @0, @1))), @2)"],
+            ),
+            (
+                "Dup[@1](a, b) >< Constr[@2](d, c)",
+                vec!["Constr[@2](a, Dup[@1](d, @2, Constr[@3](b, @1, Dup[@0](c, @2, @3))), @0)"],
             ),
         ];
 
