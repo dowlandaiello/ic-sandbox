@@ -1,0 +1,15 @@
+[package]
+name = "ic-derive"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ic_derive"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ic-train"
+path = "src/main.rs"
+
+[dependencies]
+icc = { workspace = true }

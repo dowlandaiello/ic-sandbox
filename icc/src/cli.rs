@@ -8,7 +8,7 @@ use inetlib::{
     bytecode::combinated::CombinatedProgram,
     parser::parser_combinators::{self},
     preprocessor,
-    reducers::combinators::reduce_dyn,
+    reducers::combinators::{reduce_dyn, reduce_step_dyn},
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -88,7 +88,7 @@ pub fn repl() {
 
                 loop {
                     let cmd = rl.readline(&format!(
-                        "[{}...] (reduce|print|exit) >> ",
+                        "[{}...] (step|reduce|print|exit) >> ",
                         &parsed.to_string().chars().take(10).collect::<String>()
                     ));
 
@@ -98,6 +98,18 @@ pub fn repl() {
                         }
                         Ok("print") => {
                             println!("{}", parsed);
+                        }
+                        Ok("step") => {
+                            let res =
+                                reduce_step_dyn(&parsed.nets[0]).expect("failed to reduce net");
+
+                            println!(
+                                "{}",
+                                res.iter()
+                                    .map(|n| n.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            );
                         }
                         Ok("reduce") => {
                             let res = reduce_dyn(&parsed.nets[0]).expect("failed to reduce net");

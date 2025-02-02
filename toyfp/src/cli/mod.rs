@@ -1,3 +1,4 @@
+pub mod icalc;
 pub mod lambda;
 pub mod sk;
 

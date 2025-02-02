@@ -53,11 +53,7 @@ impl fmt::Display for Expr {
                 write!(f, "\\{} {}", bind_var, body)
             }
             Self::Application(Application(lhs, rhs)) => {
-                if let Some(rhs) = rhs {
-                    write!(f, "({} {})", lhs, rhs)
-                } else {
-                    write!(f, "({})", lhs)
-                }
+                write!(f, "({} {})", lhs, rhs)
             }
             Self::Superposition(Superposition(lhs, rhs)) => write!(f, "{{{} {}}}", lhs, rhs),
             Self::Duplication(Duplication {
@@ -104,7 +100,7 @@ pub struct Abstraction {
 }
 
 #[derive(Debug)]
-pub struct Application(pub Box<Expr>, pub Option<Box<Expr>>);
+pub struct Application(pub Box<Expr>, pub Box<Expr>);
 
 #[derive(Debug)]
 pub struct Superposition(pub Box<Expr>, pub Box<Expr>);
@@ -192,8 +188,8 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
             });
         let application = expr
             .clone()
-            .then(expr.clone().or_not())
-            .map(|(a, b)| Spanned(Application(Box::new(a.0), b.map(|x| Box::new(x.0))), a.1))
+            .then(expr.clone())
+            .map(|(a, b)| Spanned(Application(Box::new(a.0), Box::new(b.0)), a.1))
             .map(|x| Spanned(Expr::Application(x.0), x.1))
             .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen));
         let superposition = span_just(Token::LeftBracket)

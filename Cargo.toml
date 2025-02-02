@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "ast-ext",
+    "ic-derive",
     "icc",
     "toyfp",
 ]
