@@ -15,6 +15,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let left_bracket = just("[").map(|_| Token::LeftBracket);
     let right_bracket = just("]").map(|_| Token::RightBracket);
     let at = just("@").map(|_| Token::At);
+    let hash = just("#").map(|_| Token::Idx);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let tilde = just("~").map(|_| Token::Tilde);
@@ -32,6 +33,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
         left_paren,
         right_paren,
         at,
+        hash,
         digits,
         left_bracket,
         right_bracket,
@@ -74,9 +76,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 		    name: 0,
 		    conns: Vec::new()
 		}, span)},
-		span_just(Token::At).ignore_then(select! {
-		    Spanned(Token::Digit(d), span) => Spanned(AgentBuilder::Ref(d), span)
-		})
+		span_just(Token::At)
+		    .ignore_then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
+		    .then_ignore(span_just(Token::Idx))
+		    .then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
+		    .map(|(idx, id)| (
+			Spanned(AgentBuilder::Ref { port: idx.0, agent_id: id.0 }, id.1)))
             ))
             .separated_by(span_just(Token::Comma))
         )
@@ -115,8 +120,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
             })
             .into_port(&mut names);
 
-            lhs_var.borrow_mut().set_primary_port(Some(rhs_var.clone()));
-            rhs_var.borrow_mut().set_primary_port(Some(lhs_var.clone()));
+            lhs_var
+                .borrow_mut()
+                .set_primary_port(Some((0, rhs_var.clone())));
+            rhs_var
+                .borrow_mut()
+                .set_primary_port(Some((0, lhs_var.clone())));
 
             vec![Spanned(lhs_var, lhs.1)]
         });
@@ -140,7 +149,10 @@ pub enum AgentBuilder {
         name: usize,
         conns: Vec<AgentBuilder>,
     },
-    Ref(usize),
+    Ref {
+        port: usize,
+        agent_id: usize,
+    },
 }
 
 impl AgentBuilder {
@@ -223,7 +235,7 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
     let mut built_agents: BTreeMap<usize, Spanned<Port>> = Default::default();
     let mut to_build: VecDeque<Spanned<AgentBuilder>> = VecDeque::from_iter([agent.clone()]);
     let mut to_build_later: VecDeque<Spanned<AgentBuilder>> = Default::default();
-    let mut var_namer = NameIter::default();
+    let mut names = NameIter::default();
 
     // First pass: build all agents
     // This will create ports for every expr that is not
@@ -238,7 +250,7 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
             continue;
         };
 
-        let agent = phrase.clone().into_port_named(*name);
+        let agent = phrase.clone().into_port(&mut names);
         built_agents.insert(*name, Spanned(agent, span.clone()));
 
         // Expression children will not be inserted inline
@@ -253,30 +265,31 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
     // they cannot be connected to more than one agent
     while let Some((_, name, children)) = to_build_later.pop_front().and_then(|x| x.0.into_agent())
     {
-        let Spanned(agent_port, span) = &built_agents[&name];
+        let Spanned(agent_port, _) = &built_agents[&name];
 
-        for child in children.into_iter() {
+        for (i, child) in children.into_iter().enumerate() {
             let to_insert = match child {
                 // We already have ports for agents, so we can
                 // look them up and connect them
                 AgentBuilder::Expr { phrase, name, .. } => {
                     if phrase.is_agent() {
-                        built_agents[&name].clone()
+                        (0, built_agents[&name].clone().0)
                     } else {
-                        let var = phrase.into_port_named(var_namer.next_var());
-                        var.borrow_mut().set_primary_port(Some(agent_port.clone()));
+                        let var = phrase.into_port(&mut names);
+                        var.borrow_mut()
+                            .set_primary_port(Some((i, agent_port.clone())));
 
-                        Spanned(var, span.clone())
+                        (0, var)
                     }
                 }
-                AgentBuilder::Ref(id) => built_agents[&id].clone(),
+                AgentBuilder::Ref { port, agent_id } => (port, built_agents[&agent_id].clone().0),
             };
 
             // Insert in the next available port
             if agent_port.borrow().primary_port().is_none() {
-                agent_port.borrow_mut().set_primary_port(Some(to_insert.0));
+                agent_port.borrow_mut().set_primary_port(Some(to_insert));
             } else {
-                agent_port.borrow_mut().push_aux_port(Some(to_insert.0));
+                agent_port.borrow_mut().push_aux_port(Some(to_insert));
             }
         }
     }
@@ -312,8 +325,8 @@ pub fn build_net(
         aux_port_rhs.get(0).map(|x| x.as_ref()).flatten().cloned(),
     ]);
 
-    lhs.borrow_mut().set_primary_port(Some(rhs.0.clone()));
-    rhs.borrow_mut().set_primary_port(Some(lhs.0.clone()));
+    lhs.borrow_mut().set_primary_port(Some((0, rhs.0.clone())));
+    rhs.borrow_mut().set_primary_port(Some((0, lhs.0.clone())));
 
     Some(vec![lhs])
 }

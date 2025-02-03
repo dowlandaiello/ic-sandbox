@@ -17,6 +17,8 @@ use std::{
     rc::Rc,
 };
 
+pub type IndexedPort = (usize, Port);
+
 #[derive(Clone)]
 pub struct Port {
     #[cfg(not(feature = "threadpool"))]
@@ -132,6 +134,7 @@ impl fmt::Display for Port {
                                     .into_iter()
                                     .chain(p.borrow().aux_ports().into_iter().cloned())
                                     .filter_map(|x| x)
+                                    .map(|(_, x)| x)
                                     .collect::<Vec<_>>(),
                             )
                         })
@@ -151,6 +154,7 @@ impl fmt::Display for Port {
                                 .into_iter()
                                 .chain(p.borrow().aux_ports().into_iter().cloned())
                                 .filter_map(|x| x)
+                                .map(|(_, x)| x)
                                 .collect::<Vec<_>>(),
                         ))
                         .filter_map(|x| x)
@@ -169,6 +173,7 @@ impl fmt::Display for Port {
                                 .into_iter()
                                 .chain(p.borrow().aux_ports().into_iter().cloned())
                                 .filter_map(|x| x)
+                                .map(|(_, x)| x)
                                 .collect::<Vec<_>>(),
                         ))
                         .filter_map(|x| x)
@@ -192,17 +197,20 @@ impl fmt::Display for Port {
                         .aux_ports()
                         .into_iter()
                         .filter_map(|x| x.as_ref())
+                        .map(|(_, x)| x)
                         .cloned()
                         .collect::<Vec<_>>()
                 )
                 .unwrap_or(UNIT_STR.to_owned()),
                 fmt_expr_ports(
                     &mut seen,
-                    &rhs,
-                    rhs.borrow()
+                    &rhs.1,
+                    rhs.1
+                        .borrow()
                         .aux_ports()
                         .into_iter()
                         .filter_map(|x| x.as_ref())
+                        .map(|(_, x)| x)
                         .cloned()
                         .collect::<Vec<_>>()
                 )
@@ -226,6 +234,7 @@ impl fmt::Display for Port {
                         .into_iter()
                         .chain(self.borrow().aux_ports().into_iter().cloned())
                         .filter_map(|x| x)
+                        .map(|(_, x)| x)
                         .collect::<Vec<_>>()
                 )
                 .unwrap_or(UNIT_STR.to_owned())
@@ -240,7 +249,14 @@ impl fmt::Debug for Port {
         let ports_debug = ports
             .into_iter()
             .skip(1)
-            .map(|port| format!("{} @ 0x{}", port.borrow().name().to_owned(), port.id))
+            .map(|(p, port)| {
+                format!(
+                    "{} @ 0x{} in {}",
+                    port.borrow().name().to_owned(),
+                    port.id,
+                    p
+                )
+            })
             .collect::<Vec<_>>();
 
         f.debug_struct("Port")
@@ -248,11 +264,14 @@ impl fmt::Debug for Port {
             .field("id", &self.id)
             .field(
                 "primary_port",
-                &self
-                    .iter_ports()
-                    .into_iter()
-                    .next()
-                    .map(|port| format!("{} @ 0x{}", port.borrow().name().to_owned(), port.id)),
+                &self.iter_ports().into_iter().next().map(|(p, port)| {
+                    format!(
+                        "{} @ 0x{} in {}",
+                        port.borrow().name().to_owned(),
+                        port.id,
+                        p
+                    )
+                }),
             )
             .field("aux_ports", &ports_debug)
             .finish()
@@ -260,7 +279,7 @@ impl fmt::Debug for Port {
 }
 
 impl Port {
-    pub fn iter_ports(&self) -> impl IntoIterator<Item = Port> {
+    pub fn iter_ports(&self) -> impl IntoIterator<Item = IndexedPort> {
         [self.borrow().primary_port()]
             .into_iter()
             .chain(self.borrow().aux_ports().into_iter().map(|x| x.as_ref()))
@@ -273,58 +292,23 @@ impl Port {
         PortTreeWalker::new([self.clone()])
     }
 
-    /// Creatse a new copy of the graph.
-    pub fn deep_clone_tree(&self) -> Self {
-        match &*self.borrow() {
-            Expr::Var(v) => {
-                let mut cloned_phrase = v.clone();
-                cloned_phrase.port = cloned_phrase.port.map(|p| p.deep_clone_tree());
-
-                Self::new(Expr::Var(cloned_phrase), self.id)
-            }
-            Expr::Constr(c) => {
-                let mut cloned_phrase = c.clone();
-                cloned_phrase.primary_port =
-                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
-                cloned_phrase.aux_ports.iter_mut().for_each(|p| {
-                    *p = p.as_ref().map(|p| p.deep_clone_tree());
-                });
-
-                Self::new(Expr::Constr(cloned_phrase), self.id)
-            }
-            Expr::Dup(c) => {
-                let mut cloned_phrase = c.clone();
-                cloned_phrase.primary_port =
-                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
-                cloned_phrase.aux_ports.iter_mut().for_each(|p| {
-                    *p = p.as_ref().map(|p| p.deep_clone_tree());
-                });
-
-                Self::new(Expr::Dup(cloned_phrase), self.id)
-            }
-            Expr::Era(c) => {
-                let mut cloned_phrase = c.clone();
-                cloned_phrase.primary_port =
-                    cloned_phrase.primary_port.map(|p| p.deep_clone_tree());
-
-                Self::new(Expr::Era(cloned_phrase), self.id)
-            }
-        }
-    }
-
     pub fn try_as_wired_vars(&self) -> Option<(Port, Port)> {
         let self_port = self.borrow();
         let primary_port = self_port.primary_port()?;
-        let port = primary_port.borrow();
+        let port = primary_port.1.borrow();
 
-        if !primary_port.borrow().is_var() || !self_port.is_var() {
+        if !primary_port.1.borrow().is_var() || !self_port.is_var() {
             return None;
         }
 
         match &*port {
             Expr::Var(v) => {
-                if v.port.as_ref().map(|p| self.ptr_eq(&p)).unwrap_or_default() {
-                    Some((self.clone(), primary_port.clone()))
+                if v.port
+                    .as_ref()
+                    .map(|p| self.ptr_eq(&p.1))
+                    .unwrap_or_default()
+                {
+                    Some((self.clone(), primary_port.1.clone()))
                 } else {
                     None
                 }
@@ -333,101 +317,15 @@ impl Port {
         }
     }
 
-    /// Gets the index of the wire in the ports of the agent, where primary port = 0,
-    /// aux ports are 1..n
-    pub fn wire_position(&self, other: &Port) -> Option<usize> {
-        match &*self.borrow() {
-            Expr::Constr(c) => {
-                if c.primary_port
-                    .as_ref()
-                    .map(|p| p.ptr_eq(other))
-                    .unwrap_or_default()
-                {
-                    return Some(0);
-                }
-
-                c.aux_ports
-                    .iter()
-                    .filter_map(|x| x.as_ref())
-                    .position(|p| p.ptr_eq(other))
-                    .map(|p| p + 1)
-            }
-            Expr::Era(e) => {
-                if e.primary_port
-                    .as_ref()
-                    .map(|p| p.ptr_eq(other))
-                    .unwrap_or_default()
-                {
-                    Some(0)
-                } else {
-                    None
-                }
-            }
-            Expr::Dup(d) => {
-                if d.primary_port
-                    .as_ref()
-                    .map(|p| p.ptr_eq(other))
-                    .unwrap_or_default()
-                {
-                    return Some(0);
-                }
-
-                d.aux_ports
-                    .iter()
-                    .filter_map(|x| x.as_ref())
-                    .position(|p| p.ptr_eq(other))
-                    .map(|p| p + 1)
-            }
-            Expr::Var(v) => {
-                if v.port.as_ref().map(|p| p.ptr_eq(other)).unwrap_or_default() {
-                    Some(0)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    pub fn try_as_active_pair(&self) -> Option<(Port, Port)> {
+    pub fn try_as_active_pair(&self) -> Option<(IndexedPort, IndexedPort)> {
         let self_port = self.borrow();
         let primary_port = self_port.primary_port()?;
-        let port = primary_port.borrow();
+        let port = primary_port;
 
-        match &*port {
-            Expr::Var(_) => None,
-            Expr::Constr(c) => {
-                if c.primary_port
-                    .as_ref()
-                    .map(|p| self.ptr_eq(&p))
-                    .unwrap_or_default()
-                {
-                    Some((self.clone(), primary_port.clone()))
-                } else {
-                    None
-                }
-            }
-            Expr::Dup(d) => {
-                if d.primary_port
-                    .as_ref()
-                    .map(|p| self.ptr_eq(&p))
-                    .unwrap_or_default()
-                {
-                    Some((self.clone(), primary_port.clone()))
-                } else {
-                    None
-                }
-            }
-            Expr::Era(e) => {
-                if e.primary_port
-                    .as_ref()
-                    .map(|p| self.ptr_eq(p))
-                    .unwrap_or_default()
-                {
-                    Some((self.clone(), primary_port.clone()))
-                } else {
-                    None
-                }
-            }
+        if port.0 == 0 && primary_port.1.borrow().as_var().is_none() {
+            Some(((0, self.clone()), primary_port.clone()))
+        } else {
+            None
         }
     }
 
@@ -435,23 +333,21 @@ impl Port {
     pub fn fill_aux_vars(&self, names: &mut NameIter) {
         let n_ports = self.borrow().aux_ports().len();
 
-        for _ in 0..n_ports {
+        for i in 0..n_ports {
             let v: Port = Expr::Var(Var {
                 name: Ident(names.next()),
-                port: Some(self.clone()),
+                port: Some((i, self.clone())),
             })
             .into_port(names);
 
-            self.borrow_mut().push_aux_port(Some(v));
+            self.borrow_mut().push_aux_port(Some((0, v)));
         }
     }
 }
 
 pub struct PortTreeWalker {
     #[cfg(not(feature = "threadpool"))]
-    seen: HashSet<*const RefCell<Expr>>,
-    #[cfg(feature = "threadpool")]
-    seen: HashSet<*const RwLock<Expr>>,
+    seen: HashSet<usize>,
 
     to_visit: VecDeque<Port>,
 }
@@ -472,23 +368,24 @@ impl Iterator for PortTreeWalker {
         self.to_visit = self
             .to_visit
             .drain(..)
-            .skip_while(|n| !n.borrow().is_var() && self.seen.contains(&n.as_ptr()))
+            .skip_while(|n| !n.borrow().is_var() && self.seen.contains(&n.id))
             .collect();
         let next = self.to_visit.pop_front()?;
 
-        self.seen.insert(next.as_ptr());
+        self.seen.insert(next.id);
 
         self.to_visit.extend(
             next.iter_ports()
                 .into_iter()
-                .filter(|p| p.borrow().is_var() || !self.seen.contains(&p.as_ptr())),
+                .filter(|(_, p)| !self.seen.contains(&p.id))
+                .map(|(_, x)| x),
         );
 
         Some(next)
     }
 }
 
-const EMPTY_AUX_PORTS: [Option<Port>; 2] = [None, None];
+const EMPTY_AUX_PORTS: [Option<IndexedPort>; 2] = [None, None];
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub enum Token {
@@ -500,6 +397,7 @@ pub enum Token {
     LeftParen,
     RightParen,
     At,
+    Idx,
     LeftBracket,
     RightBracket,
     Comma,
@@ -510,6 +408,7 @@ pub enum Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Idx => write!(f, "#"),
             Self::Era => write!(f, "Era"),
             Self::Constr => write!(f, "Constr"),
             Self::Dup => write!(f, "Dup"),
@@ -588,7 +487,7 @@ impl Expr {
         Port::new(self, id)
     }
 
-    pub fn set_aux_ports(&mut self, ports: [Option<Port>; 2]) {
+    pub fn set_aux_ports(&mut self, ports: [Option<IndexedPort>; 2]) {
         match self {
             Self::Era(_) => {}
             Self::Constr(c) => {
@@ -601,7 +500,7 @@ impl Expr {
         }
     }
 
-    pub fn set_primary_port(&mut self, port: Option<Port>) {
+    pub fn set_primary_port(&mut self, port: Option<IndexedPort>) {
         match self {
             Self::Era(e) => {
                 e.primary_port = port;
@@ -619,7 +518,7 @@ impl Expr {
     }
 
     /// Gets the agent's primary port, whether it is a variable or an agent
-    pub fn primary_port(&self) -> Option<&Port> {
+    pub fn primary_port(&self) -> Option<&IndexedPort> {
         match &self {
             Self::Era(e) => &e.primary_port,
             Self::Dup(d) => &d.primary_port,
@@ -629,7 +528,7 @@ impl Expr {
         .as_ref()
     }
 
-    pub fn aux_ports(&self) -> &[Option<Port>] {
+    pub fn aux_ports(&self) -> &[Option<IndexedPort>] {
         match self {
             Self::Era(_) => &[],
             Self::Dup(d) => &d.aux_ports,
@@ -638,7 +537,7 @@ impl Expr {
         }
     }
 
-    pub fn push_aux_port(&mut self, val: Option<Port>) {
+    pub fn push_aux_port(&mut self, val: Option<IndexedPort>) {
         match self {
             Self::Era(_) => {}
             Self::Dup(d) => {
@@ -659,7 +558,7 @@ impl Expr {
         }
     }
 
-    pub fn insert_aux_port(&mut self, index: usize, val: Option<Port>) {
+    pub fn insert_aux_port(&mut self, index: usize, val: Option<IndexedPort>) {
         match self {
             Self::Era(_) => {}
             Self::Dup(d) => {
@@ -672,71 +571,31 @@ impl Expr {
         }
     }
 
-    pub fn swap_conn(&mut self, initial: &Port, new: Option<Port>) {
-        fn swap_conn_maybe(slf: &mut Expr, initial: &Port, new: Option<Port>) -> Option<()> {
-            match slf {
-                Expr::Era(e) => {
-                    if e.primary_port.as_ref()?.ptr_eq(&initial) {
-                        e.primary_port = new;
-                    }
-                }
-                Expr::Constr(c) => {
-                    if c.primary_port.as_ref()?.ptr_eq(&initial) {
-                        c.primary_port = new.clone();
-                    }
+    pub fn swap_conn(&mut self, pos: usize, new: Option<IndexedPort>) {
+        if pos == 0 {
+            self.set_primary_port(new);
 
-                    c.aux_ports = c
-                        .aux_ports
-                        .iter()
-                        .cloned()
-                        .map(|p| {
-                            if p.as_ref()?.ptr_eq(&initial) {
-                                new.clone()
-                            } else {
-                                p
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .unwrap_or([None, None]);
-                }
-                Expr::Dup(d) => {
-                    if d.primary_port.as_ref()?.ptr_eq(&initial) {
-                        d.primary_port = new.clone();
-                    }
-
-                    d.aux_ports = d
-                        .aux_ports
-                        .iter()
-                        .cloned()
-                        .map(|p| {
-                            if p.as_ref()?.ptr_eq(&initial) {
-                                new.clone()
-                            } else {
-                                p
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .try_into()
-                        .unwrap_or([None, None]);
-                }
-                Expr::Var(v) => {
-                    if v.port.as_ref()?.ptr_eq(&initial) {
-                        v.port = new;
-                    }
-                }
-            };
-
-            Some(())
+            return;
         }
 
-        let _ = swap_conn_maybe(self, initial, new);
+        match self {
+            Self::Era(_) | Self::Var(_) => {}
+            Self::Constr(_) | Self::Dup(_) => match pos {
+                1 => {
+                    self.set_aux_ports([new, self.aux_ports()[1].clone()]);
+                }
+                2 => {
+                    self.set_aux_ports([self.aux_ports()[0].clone(), new]);
+                }
+                _ => {}
+            },
+        }
     }
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct Eraser {
-    pub primary_port: Option<Port>,
+    pub primary_port: Option<IndexedPort>,
 }
 
 impl Eraser {
@@ -747,8 +606,8 @@ impl Eraser {
 
 #[derive(Default, Debug, Clone)]
 pub struct Duplicator {
-    pub primary_port: Option<Port>,
-    pub aux_ports: [Option<Port>; 2],
+    pub primary_port: Option<IndexedPort>,
+    pub aux_ports: [Option<IndexedPort>; 2],
 }
 
 impl Duplicator {
@@ -762,8 +621,8 @@ impl Duplicator {
 
 #[derive(Default, Debug, Clone)]
 pub struct Constructor {
-    pub primary_port: Option<Port>,
-    pub aux_ports: [Option<Port>; 2],
+    pub primary_port: Option<IndexedPort>,
+    pub aux_ports: [Option<IndexedPort>; 2],
 }
 
 impl Constructor {
@@ -778,5 +637,5 @@ impl Constructor {
 #[derive(Debug, Clone)]
 pub struct Var {
     pub name: Ident,
-    pub port: Option<Port>,
+    pub port: Option<IndexedPort>,
 }
