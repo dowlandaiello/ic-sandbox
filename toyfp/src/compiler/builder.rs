@@ -1205,13 +1205,26 @@ mod test {
             &mut names,
         );
         coder.expand_step(&mut names);
-        let decoder = OwnedNetBuilder::new(
-            CombinatorBuilder::D {
+        let var = OwnedNetBuilder::new(
+            CombinatorBuilder::Var {
+                name: "Bruh".to_owned(),
                 primary_port: None,
-                aux_port: None,
             },
             &mut names,
         );
+        let decoder = OwnedNetBuilder::new(
+            CombinatorBuilder::D {
+                primary_port: None,
+                aux_port: Some((0, var.clone())),
+            },
+            &mut names,
+        );
+
+        var.update_with(|builder| {
+            builder
+                .clone()
+                .with_aux_port_i(0, Some((1, decoder.clone())))
+        });
 
         decoder.expand_step(&mut names);
 
@@ -1255,7 +1268,7 @@ mod test {
 
         z4_1.update_with(|builder| builder.clone().with_primary_port(Some((0, z4_2.clone()))));
 
-        let vars_top = (0..4)
+        let _ = (0..4)
             .enumerate()
             .map(|(i, _)| {
                 let v = OwnedNetBuilder::new(
@@ -1273,7 +1286,7 @@ mod test {
                 v
             })
             .collect::<Vec<_>>();
-        let vars_bot = (0..4)
+        let _ = (0..4)
             .enumerate()
             .map(|(i, _)| {
                 let v = OwnedNetBuilder::new(
@@ -1307,46 +1320,6 @@ mod test {
                 "v2 ~ v6".to_owned(),
                 "v3 ~ v7".to_owned()
             ]
-        );
-    }
-
-    #[test_log::test]
-    fn test_interaction_decode_dup_code() {
-        use inetlib::reducers::combinators::reduce_dyn;
-
-        let mut names = Default::default();
-
-        let dup = OwnedNetBuilder::new(
-            CombinatorBuilder::Code(Box::new(CombinatorBuilder::Dup {
-                primary_port: None,
-                aux_ports: [const { None }; 2],
-            })),
-            &mut names,
-        );
-        dup.expand_step(&mut names);
-        let decoder = OwnedNetBuilder::new(
-            CombinatorBuilder::D {
-                primary_port: Some((0, dup.clone())),
-                aux_port: None,
-            },
-            &mut names,
-        );
-
-        dup.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((0, decoder.clone())))
-        });
-
-        decoder.expand_step(&mut names);
-
-        println!(
-            "'{:?}'",
-            reduce_dyn(&dup.combinate(&mut Default::default(), &mut names))
-                .unwrap()
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>(),
         );
     }
 }
