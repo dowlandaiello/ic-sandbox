@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Port {
     #[cfg(not(feature = "threadpool"))]
     pub e: Rc<RefCell<Expr>>,
@@ -231,6 +231,31 @@ impl fmt::Display for Port {
                 .unwrap_or(UNIT_STR.to_owned())
             )
         }
+    }
+}
+
+impl fmt::Debug for Port {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ports = self.iter_ports();
+        let ports_debug = ports
+            .into_iter()
+            .skip(1)
+            .map(|port| format!("{} @ 0x{}", port.borrow().name().to_owned(), port.id))
+            .collect::<Vec<_>>();
+
+        f.debug_struct("Port")
+            .field("name", &self.borrow().name())
+            .field("id", &self.id)
+            .field(
+                "primary_port",
+                &self
+                    .iter_ports()
+                    .into_iter()
+                    .next()
+                    .map(|port| format!("{} @ 0x{}", port.borrow().name().to_owned(), port.id)),
+            )
+            .field("aux_ports", &ports_debug)
+            .finish()
     }
 }
 

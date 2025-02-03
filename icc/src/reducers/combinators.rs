@@ -5,7 +5,12 @@ use crate::parser::{
 
 #[cfg(not(feature = "threadpool"))]
 pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
-    tracing::trace!("reducing {}", e);
+    tracing::trace!("-- begin reduction tree");
+
+    e.iter_tree()
+        .for_each(|p| tracing::trace!("reducing: {:?}", p));
+
+    tracing::trace!("-- end reduction tree");
 
     let reduced = reduce_step_dyn(e)?;
 
@@ -24,7 +29,10 @@ pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
 
 #[cfg(feature = "threadpool")]
 pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
-    tracing::trace!("reducing {}", e);
+    e.iter_tree()
+        .for_each(|p| tracing::trace!("reducing: {:?}", p));
+
+    tracing::trace!("\n");
 
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 

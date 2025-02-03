@@ -258,10 +258,121 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
         match &builder {
             CombinatorBuilder::Code(inner) => match &**inner {
-                CombinatorBuilder::K { primary_port } => {
-                    make_k(primary_port);
+                CombinatorBuilder::Dup {
+                    primary_port,
+                    aux_ports: _,
+                } => {
+                    //  TODO: Don't use this
 
-                    let dup_ref = self
+                    let top_constr = OwnedNetBuilder::new(
+                        CombinatorBuilder::Constr {
+                            aux_ports: [None, None],
+                            primary_port: None,
+                        },
+                        names,
+                    );
+                    let parent_constr = OwnedNetBuilder::new(
+                        CombinatorBuilder::Constr {
+                            aux_ports: [Some((0, top_constr.clone())), None],
+                            primary_port: None,
+                        },
+                        names,
+                    );
+                    let child_constr = CombinatorBuilder::Constr {
+                        aux_ports: [
+                            Some((0, parent_constr.clone())),
+                            Some((2, parent_constr.clone())),
+                        ],
+                        primary_port: primary_port.clone(),
+                    };
+                    let child_constr_ref = self;
+
+                    parent_constr.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_port_i(2, Some((2, child_constr_ref.clone())))
+                    });
+                    top_constr.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_port_i(1, Some((2, top_constr.clone())))
+                            .with_port_i(2, Some((1, top_constr.clone())))
+                    });
+
+                    // Parent <-> child
+                    parent_constr.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((1, child_constr_ref.clone())))
+                    });
+                    top_constr.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((1, parent_constr.clone())))
+                    });
+
+                    // Primary port <-> child
+                    if let Some((port, p)) = primary_port {
+                        p.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_port_i(*port, Some((0, child_constr_ref.clone())))
+                        });
+                    }
+
+                    self.update_with(|_| child_constr);
+                }
+                CombinatorBuilder::K { primary_port } => {
+                    let d = OwnedNetBuilder::new(
+                        CombinatorBuilder::D {
+                            primary_port: None,
+                            aux_port: None,
+                        },
+                        names,
+                    );
+                    let e =
+                        OwnedNetBuilder::new(CombinatorBuilder::Era { primary_port: None }, names);
+                    let k_root = OwnedNetBuilder::new(
+                        CombinatorBuilder::Z3 {
+                            primary_port: primary_port.clone(),
+                            aux_ports: [
+                                Some((1, d.clone())),
+                                Some((0, e.clone())),
+                                Some((0, d.clone())),
+                            ],
+                        },
+                        names,
+                    );
+                    let root_ref = k_root;
+
+                    d.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((3, root_ref.clone())))
+                            .with_aux_port_i(0, Some((1, root_ref.clone())))
+                    });
+                    e.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((2, root_ref.clone())))
+                    });
+
+                    // primary port <-> Z
+                    if let Some((port, p)) = primary_port {
+                        p.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_port_i(*port, Some((0, root_ref.clone())))
+                        });
+                    };
+
+                    d.expand_step(names);
+                    root_ref.expand_step(names);
+                    d.expand_step(names);
+
+                    //self.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
+                    let dup_ref = root_ref
                         .clone()
                         .iter_tree()
                         .filter(|p| matches!(&p.0.borrow().builder, CombinatorBuilder::Dup { .. }))
@@ -277,20 +388,32 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         .collect::<Vec<_>>();
                     let dup_ref_primary_port = dup_ref.0.borrow().builder.primary_port().cloned();
                     dup_ref_aux_ports.push(dup_ref_primary_port);
-                    dup_ref_aux_ports.push(Some((0, self.clone())));
+                    dup_ref_aux_ports.push(Some((0, root_ref.clone())));
 
                     let z4_child = OwnedNetBuilder::new(
                         CombinatorBuilder::Z4 {
                             primary_port: primary_port.clone(),
-                            aux_ports: dup_ref_aux_ports.try_into().unwrap(),
+                            aux_ports: dup_ref_aux_ports.clone().try_into().unwrap(),
                         },
                         names,
                     );
+
+                    dup_ref_aux_ports
+                        .into_iter()
+                        .filter_map(|x| x)
+                        .for_each(|(port, builder)| {
+                            builder.update_with(|b| {
+                                b.clone().with_port_i(port, Some((1, z4_child.clone())))
+                            });
+                        });
+
                     self.update_with(|builder| {
                         builder
                             .clone()
                             .with_primary_port(Some((4, z4_child.clone())))
                     });
+
+                    self.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
                     z4_child.expand_step(names);
                 }
@@ -1037,7 +1160,8 @@ mod test {
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
         k_comb.expand_step(&mut names);
 
-        k_comb.combinate(&mut Default::default(), &mut names);
+        let combinated = k_comb.combinate(&mut Default::default(), &mut names);
+        println!("{}", combinated);
     }
 
     #[test_log::test]
@@ -1049,9 +1173,182 @@ mod test {
             &mut names,
         );
         k_comb.expand_step(&mut names);
+        println!("{:?}", k_comb);
 
-        let combinated = k_comb.combinate(&mut Default::default(), &mut names);
+        k_comb.combinate(&mut Default::default(), &mut names);
+    }
+
+    #[test_log::test]
+    fn test_decoder() {
+        let mut names = Default::default();
+
+        let d_comb = OwnedNetBuilder::new(
+            CombinatorBuilder::D {
+                primary_port: None,
+                aux_port: None,
+            },
+            &mut names,
+        );
+        d_comb.expand_step(&mut names);
+
+        let combinated = d_comb.combinate(&mut Default::default(), &mut names);
 
         println!("{}", combinated);
+    }
+
+    #[test_log::test]
+    fn test_interaction_code_k_decoder() {
+        use inetlib::reducers::combinators::reduce_dyn;
+
+        let mut names = Default::default();
+
+        let coder = OwnedNetBuilder::new(
+            CombinatorBuilder::Code(Box::new(CombinatorBuilder::K { primary_port: None })),
+            &mut names,
+        );
+        coder.expand_step(&mut names);
+        let decoder = OwnedNetBuilder::new(
+            CombinatorBuilder::D {
+                primary_port: None,
+                aux_port: None,
+            },
+            &mut names,
+        );
+
+        decoder.expand_step(&mut names);
+
+        coder.update_with(|builder| {
+            builder
+                .clone()
+                .with_primary_port(Some((0, decoder.clone())))
+        });
+        decoder.update_with(|builder| builder.clone().with_primary_port(Some((0, coder.clone()))));
+
+        let comb_coder = coder.combinate(&mut Default::default(), &mut names);
+        let _ = decoder.combinate(&mut Default::default(), &mut names);
+
+        coder.iter_tree().for_each(|x| println!("{:?}", x));
+
+        let res = reduce_dyn(&comb_coder).unwrap().remove(0);
+
+        println!("{}", res);
+    }
+
+    #[test_log::test]
+    fn test_interaction_z_4() {
+        use inetlib::reducers::combinators::reduce_dyn;
+
+        let mut names = Default::default();
+
+        let z4_1 = OwnedNetBuilder::new(
+            CombinatorBuilder::Z4 {
+                primary_port: None,
+                aux_ports: [None, None, None, None],
+            },
+            &mut names,
+        );
+        let z4_2 = OwnedNetBuilder::new(
+            CombinatorBuilder::Z4 {
+                primary_port: Some((0, z4_1.clone())),
+                aux_ports: [None, None, None, None],
+            },
+            &mut names,
+        );
+
+        z4_1.update_with(|builder| builder.clone().with_primary_port(Some((0, z4_2.clone()))));
+
+        let vars_top = (0..4)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z4_1.clone())),
+                    },
+                    &mut names,
+                );
+
+                z4_1.update_with(|builder| {
+                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                });
+
+                v
+            })
+            .collect::<Vec<_>>();
+        let vars_bot = (0..4)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z4_2.clone())),
+                    },
+                    &mut names,
+                );
+
+                z4_2.update_with(|builder| {
+                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                });
+
+                v
+            })
+            .collect::<Vec<_>>();
+
+        z4_1.expand_step(&mut names);
+        z4_2.expand_step(&mut names);
+
+        assert_eq!(
+            reduce_dyn(&z4_1.combinate(&mut Default::default(), &mut names))
+                .unwrap()
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "v0 ~ v4".to_owned(),
+                "v1 ~ v5".to_owned(),
+                "v2 ~ v6".to_owned(),
+                "v3 ~ v7".to_owned()
+            ]
+        );
+    }
+
+    #[test_log::test]
+    fn test_interaction_decode_dup_code() {
+        use inetlib::reducers::combinators::reduce_dyn;
+
+        let mut names = Default::default();
+
+        let dup = OwnedNetBuilder::new(
+            CombinatorBuilder::Code(Box::new(CombinatorBuilder::Dup {
+                primary_port: None,
+                aux_ports: [const { None }; 2],
+            })),
+            &mut names,
+        );
+        dup.expand_step(&mut names);
+        let decoder = OwnedNetBuilder::new(
+            CombinatorBuilder::D {
+                primary_port: Some((0, dup.clone())),
+                aux_port: None,
+            },
+            &mut names,
+        );
+
+        dup.update_with(|builder| {
+            builder
+                .clone()
+                .with_primary_port(Some((0, decoder.clone())))
+        });
+
+        decoder.expand_step(&mut names);
+
+        println!(
+            "{:?}",
+            reduce_dyn(&dup.combinate(&mut Default::default(), &mut names))
+                .unwrap()
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>(),
+        );
     }
 }

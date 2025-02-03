@@ -33,6 +33,186 @@ pub fn decode_sk(p: &AstPort) -> SkExpr {
     OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
+fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
+    match e {
+        SkExpr::Var(v) => OwnedNetBuilder::new(
+            SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::Var {
+                name: v,
+                primary_port: None,
+            })),
+            names,
+        ),
+        SkExpr::K(a, b) => {
+            let e = OwnedNetBuilder::new(
+                SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::K { primary_port: None })),
+                names,
+            );
+
+            let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
+            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
+
+            if let Some(a_port) = a_cc.map(|a| (0, a)) {
+                let empty_port_var = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Var {
+                        name: names.next(),
+                        primary_port: None,
+                    },
+                    names,
+                );
+                let e_parent = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Constr {
+                        primary_port: Some((0, e.clone())),
+                        aux_ports: [Some((0, empty_port_var.clone())), Some(a_port.clone())],
+                    },
+                    names,
+                );
+                empty_port_var.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((1, e_parent.clone())))
+                });
+
+                a_port.1.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((2, e_parent.clone())))
+                });
+
+                if let Some(b_port) = b_cc.map(|b| (0, b)) {
+                    let empty_port_var = OwnedNetBuilder::new(
+                        SkCombinatorBuilder::Var {
+                            name: names.next(),
+                            primary_port: None,
+                        },
+                        names,
+                    );
+                    let constr_parent = OwnedNetBuilder::new(
+                        SkCombinatorBuilder::Constr {
+                            primary_port: Some((1, e_parent.clone())),
+                            aux_ports: [Some((0, empty_port_var.clone())), Some(b_port.clone())],
+                        },
+                        names,
+                    );
+
+                    empty_port_var.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((1, constr_parent.clone())))
+                    });
+
+                    b_port.1.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((2, constr_parent.clone())))
+                    });
+
+                    e_parent.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_push_aux_port(Some((0, constr_parent.clone())))
+                    });
+                }
+
+                e.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((0, e_parent.clone())))
+                });
+            };
+
+            e.expand_step(names);
+
+            e
+        }
+        SkExpr::S(a, b, c) => {
+            let e = OwnedNetBuilder::new(
+                SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::S { primary_port: None })),
+                names,
+            );
+
+            let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
+            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
+            let c_cc = c.map(|c| build_arg_compilation_expr(*c, names));
+
+            if let Some(a_port) = a_cc.map(|a| (0, a)) {
+                let empty_port_var = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: None,
+                    },
+                    names,
+                );
+                let e_parent = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [Some((0, empty_port_var.clone())), Some(a_port)],
+                    },
+                    names,
+                );
+                empty_port_var.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((1, e_parent.clone())))
+                });
+
+                if let Some(b_port) = b_cc.map(|b| (0, b)) {
+                    let empty_port_var = OwnedNetBuilder::new(
+                        SkCombinatorBuilder::Var {
+                            name: names.next_var_name(),
+                            primary_port: None,
+                        },
+                        names,
+                    );
+                    let constr_parent = OwnedNetBuilder::new(
+                        SkCombinatorBuilder::Constr {
+                            primary_port: Some((0, e.clone())),
+                            aux_ports: [Some((0, empty_port_var.clone())), Some(b_port)],
+                        },
+                        names,
+                    );
+
+                    e_parent.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_push_aux_port(Some((0, constr_parent.clone())))
+                    });
+                    empty_port_var.update_with(|builder| {
+                        builder
+                            .clone()
+                            .with_primary_port(Some((1, constr_parent.clone())))
+                    });
+
+                    if let Some(c_port) = c_cc.map(|c| (0, c)) {
+                        let constr_parent_parent = OwnedNetBuilder::new(
+                            SkCombinatorBuilder::Constr {
+                                primary_port: Some((0, constr_parent.clone())),
+                                aux_ports: [None, Some(c_port)],
+                            },
+                            names,
+                        );
+
+                        constr_parent.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_push_aux_port(Some((0, constr_parent_parent.clone())))
+                        });
+                    }
+                }
+
+                e.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((0, e_parent.clone())))
+                });
+            };
+
+            e.expand_step(names);
+
+            e
+        }
+    }
+}
+
 fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
     match e {
         SkExpr::Var(v) => OwnedNetBuilder::new(
@@ -45,8 +225,8 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
         SkExpr::K(a, b) => {
             let e = OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names);
 
-            let a_cc = a.map(|a| build_compilation_expr(*a, names));
-            let b_cc = b.map(|b| build_compilation_expr(*b, names));
+            let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
+            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
 
             if let Some(a_port) = a_cc.map(|a| (0, a)) {
                 let empty_port_var = OwnedNetBuilder::new(
@@ -124,9 +304,9 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
         SkExpr::S(a, b, c) => {
             let e = OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names);
 
-            let a_cc = a.map(|a| build_compilation_expr(*a, names));
-            let b_cc = b.map(|b| build_compilation_expr(*b, names));
-            let c_cc = c.map(|c| build_compilation_expr(*c, names));
+            let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
+            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
+            let c_cc = c.map(|c| build_arg_compilation_expr(*c, names));
 
             if let Some(a_port) = a_cc.map(|a| (0, a)) {
                 let empty_port_var = OwnedNetBuilder::new(
