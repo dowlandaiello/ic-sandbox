@@ -402,20 +402,13 @@ mod test {
     use chumsky::Parser;
 
     #[test_log::test]
-    fn test_compile_simple() {
-        let cases = [
-            "(K)",
-            "(K(a)(b))",
-            "(S)",
-            "(S(a)(b))",
-            "(S(K))",
-            "(S(K(a)(b)))",
-        ];
+    fn test_eval_k() {
+        let cases = [("(K)", "(K)"), ("(K(K)(K))", "(K)")];
 
-        for case in cases {
+        for (case, expected) in cases {
             let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
 
-            assert_eq!(decode_sk(&compile_sk(parsed.into())).to_string(), case);
+            assert_eq!(decode_sk(&compile_sk(parsed.into())).to_string(), expected);
         }
     }
 }

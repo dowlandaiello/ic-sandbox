@@ -47,6 +47,10 @@ impl Port {
     }
 
     pub fn alpha_eq(&self, other: &Port) -> bool {
+        if self.iter_tree().count() != other.iter_tree().count() {
+            return false;
+        }
+
         self.iter_tree()
             .zip(other.iter_tree())
             .all(|(lhs, rhs)| lhs.borrow().alpha_eq(&rhs.borrow()))

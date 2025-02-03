@@ -814,16 +814,12 @@ impl OwnedNetBuilder {
         let k_tree = Self::new(CombinatorBuilder::K { primary_port: None }, &mut names);
         k_tree.expand_step(&mut names);
 
-        println!(
-            "{} vs {}",
-            p,
-            k_tree.combinate(&mut Default::default(), &mut names)
-        );
+        let combinated = k_tree.combinate(&mut Default::default(), &mut names);
 
-        if k_tree
-            .combinate(&mut Default::default(), &mut names)
-            .alpha_eq(&p)
-        {
+        tracing::trace!("found {}", p);
+        tracing::trace!("found {}", combinated);
+
+        if combinated.alpha_eq(&p) {
             tracing::trace!("found K");
 
             // TODO: use some kind of hash tree for this (merkle tree)
