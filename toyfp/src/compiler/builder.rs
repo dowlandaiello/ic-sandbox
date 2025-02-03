@@ -8,6 +8,8 @@ use inetlib::parser::{
 };
 use std::{cell::RefCell, collections::BTreeMap, iter, rc::Rc};
 
+const ROOT_VAR: &str = "bruh";
+
 type Port = (usize, OwnedNetBuilder);
 
 #[derive(Debug, Clone)]
@@ -42,11 +44,8 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type EExpr = SkExpr;
 
     fn decombinate(p: &AstPort) -> Option<SkExpr> {
-        match &*p.borrow() {
-            AstExpr::Var(v) => {
-                return Some(SkExpr::Var(v.name.0.clone()));
-            }
-            _ => {}
+        if let Some(root_expr) = Self::decombinate_k(&p).or_else(|| Self::decombinate_s(&p)) {
+            return Some(root_expr);
         }
 
         // Application requires an active pair
@@ -768,6 +767,13 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
+    pub(crate) fn orient(self) -> Self {
+        self.iter_tree()
+            .filter(|x| matches!(x.0.borrow().builder, CombinatorBuilder::Var { .. }))
+            .next()
+            .expect("no root found")
+    }
+
     pub(crate) fn iter_tree(self) -> impl Iterator<Item = OwnedNetBuilder> {
         TreeVisitor::new(self)
     }
@@ -807,6 +813,12 @@ impl OwnedNetBuilder {
 
         let k_tree = Self::new(CombinatorBuilder::K { primary_port: None }, &mut names);
         k_tree.expand_step(&mut names);
+
+        println!(
+            "{} vs {}",
+            p,
+            k_tree.combinate(&mut Default::default(), &mut names)
+        );
 
         if k_tree
             .combinate(&mut Default::default(), &mut names)
@@ -1241,8 +1253,9 @@ mod test {
         coder.iter_tree().for_each(|x| println!("{:?}", x));
 
         let res = reduce_dyn(&comb_coder).unwrap().remove(0);
+        let dec = OwnedNetBuilder::decombinate(&res.orient());
 
-        println!("{}", res);
+        println!("{:?}", dec);
     }
 
     #[test_log::test]

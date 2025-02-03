@@ -31,6 +31,21 @@ pub struct Port {
 }
 
 impl Port {
+    pub fn orient(&self) -> Self {
+        let root = self
+            .iter_tree()
+            .filter(|x| x.borrow().is_var())
+            .next()
+            .expect("missing root");
+
+        let borrow = root.borrow();
+        borrow
+            .primary_port()
+            .expect("missing root parent")
+            .1
+            .clone()
+    }
+
     pub fn alpha_eq(&self, other: &Port) -> bool {
         self.iter_tree()
             .zip(other.iter_tree())
