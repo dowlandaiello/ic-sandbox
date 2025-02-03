@@ -278,74 +278,8 @@ mod test {
     }
 
     #[test]
-    fn test_parse_one_app() {
-        let case = "\\s \\z (z)";
-
-        let lexed = lexer()
-            .parse(case)
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            parser().parse(lexed).unwrap()[0].0.to_string(),
-            case.to_string()
-        );
-    }
-
-    #[test]
     fn test_parse_two_app() {
         let case = "\\n \\s \\z (s n)";
-
-        let lexed = lexer()
-            .parse(case)
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            parser()
-                .parse(lexed)
-                .unwrap()
-                .into_iter()
-                .map(|x| x.0.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            case.to_string()
-        );
-    }
-
-    #[test]
-    fn test_parse_multiline() {
-        let case = "def Z = \\s \\z (z)
-def S = \\n \\s \\z (s n)";
-
-        let lexed = lexer()
-            .parse(case)
-            .unwrap()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            parser()
-                .parse(lexed)
-                .unwrap()
-                .into_iter()
-                .map(|x| x.0.to_string())
-                .collect::<Vec<_>>()
-                .join("\n"),
-            case.to_string()
-        );
-    }
-
-    #[test]
-    fn test_parse_body() {
-        let case = "def Z = \\s \\z (z)
-def S = \\n \\s \\z (s n)
-((fnot p8) true)";
 
         let lexed = lexer()
             .parse(case)

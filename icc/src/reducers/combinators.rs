@@ -5,7 +5,7 @@ use crate::parser::{
 
 #[cfg(not(feature = "threadpool"))]
 pub fn reduce_dyn(e: &Port) -> Option<Vec<Port>> {
-    tracing::trace!("-- begin reduction tree");
+    tracing::debug!("-- begin reduction tree: {}", e);
 
     e.iter_tree()
         .for_each(|p| tracing::trace!("reducing: {:?}", p));
@@ -114,6 +114,10 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
                 c.aux_ports[1].clone(),
                 d.aux_ports[1].clone(),
             ];
+
+            for p in original_ports.iter().filter_map(|x| x.as_ref()) {
+                println!("{:?}", p.1);
+            }
 
             if let Some((port, p)) = original_ports[0].as_ref() {
                 p.borrow_mut().swap_conn(*port, original_ports[1].clone());
