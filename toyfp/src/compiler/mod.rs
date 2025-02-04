@@ -404,8 +404,6 @@ mod test {
     fn test_eval_k_simple() {
         let (case, expected) = ("(K)", "(K)");
 
-        println!("{}", case);
-
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
 
@@ -418,21 +416,10 @@ mod test {
     fn test_eval_k_call() {
         let (case, expected) = ("(K(K)(K))", "(K)");
 
-        println!("{}", case);
-
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
 
         let result = reduce_dyn(&compiled).unwrap();
-
-        println!(
-            "{}",
-            result
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
 
         assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
     }

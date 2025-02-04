@@ -154,8 +154,8 @@ pub fn repl() {
 
                 tracing::trace!("job: {}", combinated);
 
-                if let Some(reduced) =
-                    reduce_dyn(&combinated).map(|res| compiler::decode_sk(res.get(0).unwrap()))
+                if let Some(reduced) = reduce_dyn(&combinated)
+                    .map(|res| compiler::decode_sk(&res.get(0).unwrap().orient()))
                 {
                     println!("{}", reduced);
                 } else {
