@@ -261,56 +261,26 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
         };
 
         match &builder {
-            CombinatorBuilder::Code(inner) => {
-                if !matches!(
-                    **inner,
-                    CombinatorBuilder::K { .. } | CombinatorBuilder::S { .. }
-                ) {
-                    self.update_with(|_| *inner.clone());
+            CombinatorBuilder::ZN {
+                primary_port,
+                aux_ports,
+            } => {
+                tracing::trace!("expanding Z of arity {}", aux_ports.len());
 
-                    return self;
-                }
+                match aux_ports.len() {
+                    1 => {
+                        let (p, aux) =
+                            (primary_port.clone().unwrap(), aux_ports[0].clone().unwrap());
 
-                // TODO: so far cannot support codes of agents with multiple dups
-                // but this is not necessary in SK combinator impl.
-
-                let root_ref = OwnedNetBuilder::new(inner.clone().with_primary_port(None), names);
-                root_ref.expand_step(names);
-
-                let dup_ref = root_ref
-                    .clone()
-                    .iter_tree()
-                    .filter(|p| matches!(&p.0.borrow().builder, CombinatorBuilder::Dup { .. }))
-                    .next()
-                    .expect("K must have a center dup element; this K is malformed")
-                    .clone();
-                let mut dup_ref_aux_ports = dup_ref
-                    .0
-                    .borrow()
-                    .builder
-                    .iter_aux_ports()
-                    .map(|x| x.cloned())
-                    .collect::<Vec<_>>();
-                let dup_ref_primary_port = dup_ref.0.borrow().builder.primary_port().cloned();
-                dup_ref_aux_ports.push(dup_ref_primary_port);
-                dup_ref_aux_ports.push(Some((0, root_ref.clone())));
-
-                self.update_with(|_| CombinatorBuilder::Z4 {
-                    primary_port: inner.primary_port().cloned(),
-                    aux_ports: dup_ref_aux_ports.clone().try_into().unwrap(),
-                });
-
-                dup_ref_aux_ports
-                    .into_iter()
-                    .filter_map(|x| x)
-                    .enumerate()
-                    .for_each(|(i, (port, builder))| {
-                        builder.update_with(|b| {
-                            b.clone().with_port_i(port, Some((1 + i, self.clone())))
+                        p.1.update_with(|builder| {
+                            builder.clone().with_port_i(p.0, Some(aux.clone()))
                         });
-                    });
-
-                self.expand_step(names);
+                        aux.1.update_with(|builder| {
+                            builder.clone().with_port_i(aux.0, Some(p.clone()))
+                        });
+                    }
+                    _ => unimplemented!(),
+                }
             }
             CombinatorBuilder::Z3 {
                 primary_port,
@@ -663,11 +633,115 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
-    pub(crate) fn orient(self) -> Self {
-        self.iter_tree()
-            .filter(|x| matches!(x.0.borrow().builder, CombinatorBuilder::Var { .. }))
-            .next()
-            .expect("no root found")
+    pub(crate) fn encode(self, names: &mut NameIter) -> Self {
+        self.expand_step(names);
+
+        let dup_refs = self
+            .clone()
+            .iter_tree()
+            .filter(|p| matches!(&p.0.borrow().builder, CombinatorBuilder::Dup { .. }))
+            .collect::<Vec<_>>();
+        let n_dup_refs = dup_refs.len();
+
+        let mut dup_ref_ports = dup_refs
+            .iter()
+            .map(|x| {
+                let mut auxes =
+                    x.0.borrow()
+                        .builder
+                        .iter_aux_ports()
+                        .map(|x| x.cloned())
+                        .collect::<Vec<_>>();
+                auxes.push(x.0.borrow().builder.primary_port().cloned());
+
+                auxes
+            })
+            .collect::<Vec<_>>();
+
+        let new_root = OwnedNetBuilder::new(
+            CombinatorBuilder::Z4 {
+                primary_port: self.0.borrow().builder.primary_port().cloned(),
+                aux_ports: [const { None }; 4],
+            },
+            names,
+        );
+
+        new_root.update_with(|builder| builder.clone().with_aux_port_i(3, Some((0, self.clone()))));
+        self.update_with(|builder| {
+            builder
+                .clone()
+                .with_primary_port(Some((4, new_root.clone())))
+        });
+
+        let z_combs: [OwnedNetBuilder; 3] = (0..3)
+            .map(|i| {
+                let comb = OwnedNetBuilder::new(
+                    CombinatorBuilder::mk_z_n(n_dup_refs)
+                        .with_primary_port(Some((1 + i, new_root.clone()))),
+                    names,
+                );
+
+                new_root.update_with(|builder| {
+                    builder.clone().with_aux_port_i(i, Some((0, comb.clone())))
+                });
+
+                comb
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        for ports in dup_ref_ports.iter_mut() {
+            let (p1, p2, p3) = (ports.remove(0), ports.remove(0), ports.remove(0));
+
+            z_combs[0].update_with(|builder| builder.clone().with_push_aux_port(p1.clone()));
+
+            if let Some((port, p)) = p1 {
+                p.update_with(|builder| {
+                    builder.clone().with_port_i(
+                        port,
+                        Some((
+                            z_combs[0].0.borrow().builder.iter_ports().count() - 1,
+                            z_combs[0].clone(),
+                        )),
+                    )
+                });
+            }
+
+            z_combs[1].update_with(|builder| builder.clone().with_push_aux_port(p2.clone()));
+
+            if let Some((port, p)) = p2 {
+                p.update_with(|builder| {
+                    builder.clone().with_port_i(
+                        port,
+                        Some((
+                            z_combs[1].0.borrow().builder.iter_ports().count() - 1,
+                            z_combs[1].clone(),
+                        )),
+                    )
+                });
+            }
+
+            z_combs[2].update_with(|builder| builder.clone().with_push_aux_port(p3.clone()));
+
+            if let Some((port, p)) = p3 {
+                p.update_with(|builder| {
+                    builder.clone().with_port_i(
+                        port,
+                        Some((
+                            z_combs[2].0.borrow().builder.iter_ports().count() - 1,
+                            z_combs[2].clone(),
+                        )),
+                    )
+                });
+            }
+        }
+
+        for comb in z_combs {
+            comb.expand_step(names);
+        }
+
+        new_root
     }
 
     pub(crate) fn iter_tree(self) -> impl Iterator<Item = OwnedNetBuilder> {
@@ -768,7 +842,10 @@ impl AsMut<CombinatorBuilder> for NamedBuilder {
 
 #[derive(Clone)]
 pub(crate) enum CombinatorBuilder {
-    Code(Box<CombinatorBuilder>),
+    ZN {
+        primary_port: Option<Port>,
+        aux_ports: Vec<Option<Port>>,
+    },
     Z4 {
         primary_port: Option<Port>,
         aux_ports: [Option<Port>; 4],
@@ -842,9 +919,16 @@ impl std::fmt::Debug for CombinatorBuilder {
 }
 
 impl CombinatorBuilder {
+    pub(crate) fn mk_z_n(n: usize) -> Self {
+        Self::ZN {
+            primary_port: None,
+            aux_ports: vec![None; n],
+        }
+    }
+
     pub(crate) fn name(&self) -> String {
         match self {
-            Self::Code(inner) => format!("!{}", inner.name()),
+            Self::ZN { aux_ports, .. } => format!("Z{}", aux_ports.len()),
             Self::Z4 { .. } => "Z4".to_owned(),
             Self::Z3 { .. } => "Z3".to_owned(),
             Self::D { .. } => "D".to_owned(),
@@ -859,7 +943,10 @@ impl CombinatorBuilder {
 
     pub(crate) fn with_primary_port(self, primary_port: Option<Port>) -> Self {
         match self {
-            Self::Code(inner) => Self::Code(Box::new(inner.with_primary_port(primary_port))),
+            Self::ZN { aux_ports, .. } => Self::ZN {
+                aux_ports,
+                primary_port,
+            },
             Self::Z3 { aux_ports, .. } => Self::Z3 {
                 aux_ports,
                 primary_port,
@@ -889,7 +976,17 @@ impl CombinatorBuilder {
 
     pub(crate) fn with_aux_port_i(self, i: usize, aux_port: Option<Port>) -> Self {
         match self {
-            Self::Code(inner) => inner.with_aux_port_i(i, aux_port),
+            Self::ZN {
+                primary_port,
+                mut aux_ports,
+            } => {
+                aux_ports[i] = aux_port;
+
+                Self::ZN {
+                    primary_port,
+                    aux_ports,
+                }
+            }
             e @ Self::Era { .. } => e,
             Self::Constr {
                 mut aux_ports,
@@ -959,7 +1056,14 @@ impl CombinatorBuilder {
 
     pub(crate) fn iter_ports<'a>(&'a self) -> Box<dyn Iterator<Item = Option<&'a Port>> + 'a> {
         match self {
-            Self::Code(inner) => inner.iter_ports(),
+            Self::ZN {
+                primary_port,
+                aux_ports,
+            } => Box::new(
+                [primary_port.as_ref()]
+                    .into_iter()
+                    .chain(aux_ports.iter().map(|x| x.as_ref())),
+            ),
             Self::Z3 {
                 aux_ports,
                 primary_port,
@@ -1005,8 +1109,8 @@ impl CombinatorBuilder {
 
     pub(crate) fn primary_port<'a>(&'a self) -> Option<&'a Port> {
         match self {
-            Self::Code(inner) => inner.primary_port(),
             Self::Z3 { primary_port, .. }
+            | Self::ZN { primary_port, .. }
             | Self::Z4 { primary_port, .. }
             | Self::Constr { primary_port, .. }
             | Self::Dup { primary_port, .. }
@@ -1020,7 +1124,7 @@ impl CombinatorBuilder {
 
     pub(crate) fn iter_aux_ports<'a>(&'a self) -> Box<dyn Iterator<Item = Option<&'a Port>> + 'a> {
         match self {
-            Self::Code(inner) => inner.iter_aux_ports(),
+            Self::ZN { aux_ports, .. } => Box::new(aux_ports.iter().map(|elem| elem.as_ref())),
             Self::Z3 { aux_ports, .. } => Box::new(aux_ports.iter().map(|elem| elem.as_ref())),
             Self::Z4 { aux_ports, .. } => Box::new(aux_ports.iter().map(|elem| elem.as_ref())),
             Self::Constr { aux_ports, .. } | Self::Dup { aux_ports, .. } => {
@@ -1070,10 +1174,8 @@ mod test {
     fn test_k_code() {
         let mut names = Default::default();
 
-        let k_comb = OwnedNetBuilder::new(
-            CombinatorBuilder::Code(Box::new(CombinatorBuilder::K { primary_port: None })),
-            &mut names,
-        );
+        let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
+            .encode(&mut names);
         k_comb.expand_step(&mut names);
         let res = k_comb.combinate(&mut Default::default(), &mut names);
 
@@ -1104,10 +1206,12 @@ mod test {
 
         let mut names = Default::default();
 
-        let coder = OwnedNetBuilder::new(
-            CombinatorBuilder::Code(Box::new(CombinatorBuilder::K { primary_port: None })),
-            &mut names,
-        );
+        let coder = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
+            .encode(&mut names);
+
+        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
+        println!("bruh");
+
         coder.expand_step(&mut names);
         let var = OwnedNetBuilder::new(
             CombinatorBuilder::Var {
@@ -1156,10 +1260,9 @@ mod test {
 
         let mut names = Default::default();
 
-        let coder = OwnedNetBuilder::new(
-            CombinatorBuilder::Code(Box::new(CombinatorBuilder::S { primary_port: None })),
-            &mut names,
-        );
+        let coder = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names)
+            .encode(&mut names);
+
         coder.expand_step(&mut names);
         let var = OwnedNetBuilder::new(
             CombinatorBuilder::Var {

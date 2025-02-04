@@ -24,7 +24,7 @@ pub trait CombinatorBuilder: Sized {
 pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
-    let cc = build_compilation_expr(e, false, &mut names);
+    let cc = build_compilation_expr(e, &mut names);
 
     cc.expand_step(&mut names);
 
@@ -37,7 +37,7 @@ pub fn decode_sk(p: &AstPort) -> SkExpr {
     OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
-fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> OwnedNetBuilder {
+fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
     tracing::trace!("compiling {:?}", e);
 
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
@@ -72,8 +72,6 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
             names,
         ),
         SkExpr::K(a, b) => {
-            let code = is_arg;
-
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
                     name: names.next(),
@@ -82,21 +80,15 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
                 names,
             );
             let e = OwnedNetBuilder::new(
-                if code {
-                    SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::K {
-                        primary_port: Some((0, temp_empty_var.clone())),
-                    }))
-                } else {
-                    SkCombinatorBuilder::K {
-                        primary_port: Some((0, temp_empty_var.clone())),
-                    }
+                SkCombinatorBuilder::K {
+                    primary_port: Some((0, temp_empty_var.clone())),
                 },
                 names,
             );
             temp_empty_var
                 .update_with(|builder| builder.clone().with_primary_port(Some((0, e.clone()))));
 
-            let a_cc = a.map(|a| build_compilation_expr(*a, true, names));
+            let a_cc = a.map(|a| build_compilation_expr(*a, names));
 
             if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
@@ -125,7 +117,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
                 });
 
                 let b_port = b
-                    .map(|b| build_compilation_expr(*b, true, names))
+                    .map(|b| build_compilation_expr(*b, names))
                     .map(|b| best_port(&b))
                     .expect("malformed expr");
 
@@ -172,8 +164,6 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
             e
         }
         SkExpr::S(a, b, c) => {
-            let code = is_arg;
-
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
                     name: names.next(),
@@ -182,21 +172,15 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
                 names,
             );
             let e = OwnedNetBuilder::new(
-                if code {
-                    SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::S {
-                        primary_port: Some((0, temp_empty_var.clone())),
-                    }))
-                } else {
-                    SkCombinatorBuilder::S {
-                        primary_port: Some((0, temp_empty_var.clone())),
-                    }
+                SkCombinatorBuilder::S {
+                    primary_port: Some((0, temp_empty_var.clone())),
                 },
                 names,
             );
             temp_empty_var
                 .update_with(|builder| builder.clone().with_primary_port(Some((0, e.clone()))));
 
-            let a_cc = a.map(|a| build_compilation_expr(*a, true, names));
+            let a_cc = a.map(|a| build_compilation_expr(*a, names));
 
             if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
@@ -225,7 +209,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
                 });
 
                 let b_port = b
-                    .map(|b| build_compilation_expr(*b, true, names))
+                    .map(|b| build_compilation_expr(*b, names))
                     .map(|b| best_port(&b))
                     .expect("malformed expr");
 
@@ -269,7 +253,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> Owne
                 });
 
                 let c_port = c
-                    .map(|c| build_compilation_expr(*c, true, names))
+                    .map(|c| build_compilation_expr(*c, names))
                     .map(|c| best_port(&c))
                     .expect("malformed expr");
 
