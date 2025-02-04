@@ -226,10 +226,23 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
             names,
         ),
         SkExpr::K(a, b) => {
-            let e = OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names);
+            let temp_empty_var = OwnedNetBuilder::new(
+                SkCombinatorBuilder::Var {
+                    name: names.next(),
+                    primary_port: None,
+                },
+                names,
+            );
+            let e = OwnedNetBuilder::new(
+                SkCombinatorBuilder::K {
+                    primary_port: Some((0, temp_empty_var.clone())),
+                },
+                names,
+            );
+            temp_empty_var
+                .update_with(|builder| builder.clone().with_primary_port(Some((0, e.clone()))));
 
             let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
-            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
 
             if let Some(a_port) = a_cc.map(|a| (0, a)) {
                 let empty_port_var = OwnedNetBuilder::new(
@@ -257,40 +270,43 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                         .with_primary_port(Some((2, e_parent.clone())))
                 });
 
-                if let Some(b_port) = b_cc.map(|b| (0, b)) {
-                    let empty_port_var = OwnedNetBuilder::new(
-                        SkCombinatorBuilder::Var {
-                            name: names.next(),
-                            primary_port: None,
-                        },
-                        names,
-                    );
-                    let constr_parent = OwnedNetBuilder::new(
-                        SkCombinatorBuilder::Constr {
-                            primary_port: Some((1, e_parent.clone())),
-                            aux_ports: [Some((0, empty_port_var.clone())), Some(b_port.clone())],
-                        },
-                        names,
-                    );
+                let b_port = b
+                    .map(|b| build_arg_compilation_expr(*b, names))
+                    .map(|b| (0, b))
+                    .expect("malformed expr");
 
-                    empty_port_var.update_with(|builder| {
-                        builder
-                            .clone()
-                            .with_primary_port(Some((1, constr_parent.clone())))
-                    });
+                let empty_port_var = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Var {
+                        name: names.next(),
+                        primary_port: None,
+                    },
+                    names,
+                );
+                let constr_parent = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Constr {
+                        primary_port: Some((1, e_parent.clone())),
+                        aux_ports: [Some((0, empty_port_var.clone())), Some(b_port.clone())],
+                    },
+                    names,
+                );
 
-                    b_port.1.update_with(|builder| {
-                        builder
-                            .clone()
-                            .with_primary_port(Some((2, constr_parent.clone())))
-                    });
+                empty_port_var.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((1, constr_parent.clone())))
+                });
 
-                    e_parent.update_with(|builder| {
-                        builder
-                            .clone()
-                            .with_aux_port_i(0, Some((0, constr_parent.clone())))
-                    });
-                }
+                b_port.1.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_primary_port(Some((2, constr_parent.clone())))
+                });
+
+                e_parent.update_with(|builder| {
+                    builder
+                        .clone()
+                        .with_aux_port_i(0, Some((0, constr_parent.clone())))
+                });
 
                 e.update_with(|builder| {
                     builder
