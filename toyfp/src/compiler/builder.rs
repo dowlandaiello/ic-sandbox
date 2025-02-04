@@ -262,6 +262,18 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
         match &builder {
             CombinatorBuilder::Code(inner) => {
+                if !matches!(
+                    **inner,
+                    CombinatorBuilder::K { .. } | CombinatorBuilder::S { .. }
+                ) {
+                    self.update_with(|_| *inner.clone());
+
+                    return self;
+                }
+
+                // TODO: so far cannot support codes of agents with multiple dups
+                // but this is not necessary in SK combinator impl.
+
                 let root_ref = OwnedNetBuilder::new(inner.clone().with_primary_port(None), names);
                 root_ref.expand_step(names);
 
