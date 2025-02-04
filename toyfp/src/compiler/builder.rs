@@ -963,7 +963,7 @@ impl CombinatorBuilder {
 
     pub(crate) fn with_primary_port(self, primary_port: Option<Port>) -> Self {
         match self {
-            Self::Code(inner) => inner.with_primary_port(primary_port),
+            Self::Code(inner) => Self::Code(Box::new(inner.with_primary_port(primary_port))),
             Self::Z3 { aux_ports, .. } => Self::Z3 {
                 aux_ports,
                 primary_port,

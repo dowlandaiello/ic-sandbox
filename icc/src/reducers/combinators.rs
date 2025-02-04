@@ -115,10 +115,6 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Vec<Port>> {
                 d.aux_ports[1].clone(),
             ];
 
-            for p in original_ports.iter().filter_map(|x| x.as_ref()) {
-                println!("{:?}", p.1);
-            }
-
             if let Some((port, p)) = original_ports[0].as_ref() {
                 p.borrow_mut().swap_conn(*port, original_ports[1].clone());
             }

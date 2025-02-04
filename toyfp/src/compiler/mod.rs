@@ -25,15 +25,20 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
     let cc = build_compilation_expr(e, &mut names);
+    cc.expand_step(&mut names);
 
     cc.combinate(&mut Default::default(), &mut names)
 }
 
 pub fn decode_sk(p: &AstPort) -> SkExpr {
+    tracing::trace!("decoding {}", p);
+
     OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
 fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
+    tracing::trace!("compiling arg {:?}", e);
+
     match e {
         SkExpr::Var(v) => OwnedNetBuilder::new(
             SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::Var {
@@ -48,8 +53,8 @@ fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilde
                 names,
             );
 
-            let a_cc = a.map(|a| build_arg_compilation_expr(*a, names));
-            let b_cc = b.map(|b| build_arg_compilation_expr(*b, names));
+            let a_cc = a.clone().map(|a| build_arg_compilation_expr(*a, names));
+            let b_cc = b.clone().map(|b| build_arg_compilation_expr(*b, names));
 
             if let Some(a_port) = a_cc.map(|a| (0, a)) {
                 let empty_port_var = OwnedNetBuilder::new(
@@ -109,7 +114,7 @@ fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilde
                     e_parent.update_with(|builder| {
                         builder
                             .clone()
-                            .with_push_aux_port(Some((0, constr_parent.clone())))
+                            .with_aux_port_i(0, Some((0, constr_parent.clone())))
                     });
                 }
 
@@ -119,8 +124,6 @@ fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilde
                         .with_primary_port(Some((0, e_parent.clone())))
                 });
             };
-
-            e.expand_step(names);
 
             e
         }
@@ -206,14 +209,14 @@ fn build_arg_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilde
                 });
             };
 
-            e.expand_step(names);
-
             e
         }
     }
 }
 
 fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
+    tracing::trace!("compiling {:?}", e);
+
     match e {
         SkExpr::Var(v) => OwnedNetBuilder::new(
             SkCombinatorBuilder::Var {
@@ -248,7 +251,6 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                         .clone()
                         .with_primary_port(Some((1, e_parent.clone())))
                 });
-
                 a_port.1.update_with(|builder| {
                     builder
                         .clone()
@@ -286,7 +288,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                     e_parent.update_with(|builder| {
                         builder
                             .clone()
-                            .with_push_aux_port(Some((0, constr_parent.clone())))
+                            .with_aux_port_i(0, Some((0, constr_parent.clone())))
                     });
                 }
 
@@ -296,8 +298,6 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                         .with_primary_port(Some((0, e_parent.clone())))
                 });
             };
-
-            e.expand_step(names);
 
             e
         }
@@ -380,8 +380,6 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
                 });
             };
 
-            e.expand_step(names);
-
             e
         }
     }
@@ -400,15 +398,42 @@ mod test {
     use super::*;
     use crate::parser_sk::{lexer, parser};
     use chumsky::Parser;
+    use inetlib::reducers::combinators::reduce_dyn;
 
     #[test_log::test]
-    fn test_eval_k() {
-        let cases = [("(K)", "(K)"), ("(K(K)(K))", "(K)")];
+    fn test_eval_k_simple() {
+        let (case, expected) = ("(K)", "(K)");
 
-        for (case, expected) in cases {
-            let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        println!("{}", case);
 
-            assert_eq!(decode_sk(&compile_sk(parsed.into())).to_string(), expected);
-        }
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into());
+
+        let result = reduce_dyn(&compiled).unwrap();
+
+        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_k_call() {
+        let (case, expected) = ("(K(K)(K))", "(K)");
+
+        println!("{}", case);
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into());
+
+        let result = reduce_dyn(&compiled).unwrap();
+
+        println!(
+            "{}",
+            result
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+
+        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
     }
 }
