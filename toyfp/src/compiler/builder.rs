@@ -272,14 +272,105 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         let (p, aux) =
                             (primary_port.clone().unwrap(), aux_ports[0].clone().unwrap());
 
-                        p.1.update_with(|builder| {
-                            builder.clone().with_port_i(p.0, Some(aux.clone()))
+                        self.update_with(|_| {
+                            p.1 .0
+                                .borrow()
+                                .builder
+                                .clone()
+                                .with_port_i(p.0, Some(aux.clone()))
                         });
                         aux.1.update_with(|builder| {
-                            builder.clone().with_port_i(aux.0, Some(p.clone()))
+                            builder
+                                .clone()
+                                .with_port_i(aux.0, Some((p.0, self.clone())))
                         });
                     }
-                    _ => unimplemented!(),
+                    2 => {
+                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
+                            primary_port: primary_port.clone(),
+                            aux_ports: aux_ports.clone().try_into().unwrap(),
+                        });
+
+                        constr_child
+                            .0
+                            .borrow()
+                            .builder
+                            .iter_aux_ports()
+                            .enumerate()
+                            .filter_map(|(i, x)| Some((i, x?)))
+                            .for_each(|(i, p)| {
+                                p.1.update_with(|builder| {
+                                    builder
+                                        .clone()
+                                        .with_port_i(p.0, Some((i + 1, constr_child.clone())))
+                                });
+                            });
+
+                        if let Some((port, p)) = primary_port {
+                            p.update_with(|builder| {
+                                builder
+                                    .clone()
+                                    .with_port_i(*port, Some((0, constr_child.clone())))
+                            });
+                        }
+                    }
+                    n => {
+                        let parent = OwnedNetBuilder::new(
+                            CombinatorBuilder::ZN {
+                                primary_port: None,
+                                aux_ports: aux_ports
+                                    .iter()
+                                    .cloned()
+                                    .take(n - 1)
+                                    .collect::<Vec<_>>(),
+                            },
+                            names,
+                        );
+
+                        parent
+                            .0
+                            .borrow()
+                            .builder
+                            .iter_aux_ports()
+                            .enumerate()
+                            .filter_map(|(i, x)| Some((i, x?)))
+                            .for_each(|(i, p)| {
+                                p.1.update_with(|builder| {
+                                    builder
+                                        .clone()
+                                        .with_port_i(p.0, Some((i + 1, parent.clone())))
+                                });
+                            });
+
+                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
+                            primary_port: primary_port.clone(),
+                            aux_ports: [Some((0, parent.clone())), aux_ports[n - 1].clone()],
+                        });
+
+                        if let Some((port, p)) = aux_ports[n - 1].clone() {
+                            p.update_with(|builder| {
+                                builder
+                                    .clone()
+                                    .with_port_i(port, Some((2, constr_child.clone())))
+                            });
+                        }
+
+                        parent.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_primary_port(Some((1, constr_child.clone())))
+                        });
+
+                        if let Some((port, p)) = primary_port {
+                            p.update_with(|builder| {
+                                builder
+                                    .clone()
+                                    .with_port_i(*port, Some((0, constr_child.clone())))
+                            });
+                        }
+
+                        parent.expand_step(names);
+                    }
                 }
             }
             CombinatorBuilder::Z3 {
@@ -736,6 +827,11 @@ impl OwnedNetBuilder {
                 });
             }
         }
+
+        new_root
+            .clone()
+            .iter_tree()
+            .for_each(|x| println!("{:?}", x));
 
         for comb in z_combs {
             comb.expand_step(names);
@@ -1381,5 +1477,85 @@ mod test {
                 "v3 ~ v7".to_owned()
             ]
         );
+    }
+
+    #[test_log::test]
+    fn test_interaction_z_n() {
+        use inetlib::reducers::combinators::reduce_dyn;
+
+        for i in 1..10 {
+            let mut names = Default::default();
+            let mut names_b: NameIter = Default::default();
+
+            let zn_1 = OwnedNetBuilder::new(
+                CombinatorBuilder::ZN {
+                    primary_port: None,
+                    aux_ports: vec![None; i],
+                },
+                &mut names,
+            );
+            let zn_2 = OwnedNetBuilder::new(
+                CombinatorBuilder::ZN {
+                    primary_port: Some((0, zn_1.clone())),
+                    aux_ports: vec![None; i],
+                },
+                &mut names,
+            );
+
+            zn_1.update_with(|builder| builder.clone().with_primary_port(Some((0, zn_2.clone()))));
+
+            let _ = (0..i)
+                .enumerate()
+                .map(|(i, _)| {
+                    let v = OwnedNetBuilder::new(
+                        CombinatorBuilder::Var {
+                            name: names.next_var_name(),
+                            primary_port: Some((i + 1, zn_1.clone())),
+                        },
+                        &mut names,
+                    );
+
+                    zn_1.update_with(|builder| {
+                        builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                    });
+
+                    v
+                })
+                .collect::<Vec<_>>();
+            let _ = (0..i)
+                .enumerate()
+                .map(|(i, _)| {
+                    let v = OwnedNetBuilder::new(
+                        CombinatorBuilder::Var {
+                            name: format!("_{}", names_b.next_var_name()),
+                            primary_port: Some((i + 1, zn_2.clone())),
+                        },
+                        &mut names,
+                    );
+
+                    zn_2.update_with(|builder| {
+                        builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                    });
+
+                    v
+                })
+                .collect::<Vec<_>>();
+
+            zn_1.expand_step(&mut names);
+            zn_2.expand_step(&mut names);
+
+            zn_1.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
+            assert_eq!(
+                reduce_dyn(&zn_1.combinate(&mut Default::default(), &mut names))
+                    .unwrap()
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>(),
+                (0..i)
+                    .map(|j| { format!("v{} ~ _v{}", j, j) })
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 }
