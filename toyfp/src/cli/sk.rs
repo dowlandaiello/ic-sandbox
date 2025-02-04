@@ -27,6 +27,17 @@ pub fn read_program(in_fname: &str) -> Expr {
     parsed
 }
 
+pub fn eval(f_name: &str) -> Expr {
+    let parsed = read_program(f_name);
+    let combinated = compiler::compile_sk(parsed.clone());
+
+    tracing::trace!("job: {}", combinated);
+
+    reduce_dyn(&combinated)
+        .map(|res| compiler::decode_sk(&res.get(0).unwrap().orient()))
+        .expect("reduction failed")
+}
+
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
     let errs: Vec<Simple<char>> = match parser_sk::lexer()
         .parse(input)

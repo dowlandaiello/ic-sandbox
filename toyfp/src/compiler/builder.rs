@@ -750,8 +750,8 @@ impl OwnedNetBuilder {
 
 #[derive(Debug, Clone)]
 pub(crate) struct NamedBuilder {
-    name: usize,
-    builder: CombinatorBuilder,
+    pub(crate) name: usize,
+    pub(crate) builder: CombinatorBuilder,
 }
 
 impl AsRef<CombinatorBuilder> for NamedBuilder {

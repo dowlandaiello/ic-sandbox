@@ -40,6 +40,19 @@ fn main() {
                 ),
         )
         .subcommand(
+            Command::new("eval")
+                .about("Evaluates a DVM interaction combinator program from the input .fp file")
+                .arg(cli::arg_in_file())
+                .arg(cli::arg_out_file())
+                .arg(
+                    Arg::new("sk")
+                        .long("sk")
+                        .short('s')
+                        .action(ArgAction::SetTrue)
+                        .help("use SK combinators as the input mode"),
+                ),
+        )
+        .subcommand(
             Command::new("dev")
                 .about("Initiates an interactive REPL prototyping environment")
                 .arg(cli::arg_in_file())
@@ -74,6 +87,21 @@ fn main() {
             }
 
             cli::lambda::repl()
+        }
+        Some(("eval", arg_matches)) => {
+            let input_fname = arg_matches
+                .get_one::<String>("source")
+                .expect("missing source file name");
+
+            if arg_matches.get_flag("sk") {
+                let res = cli::sk::eval(input_fname);
+
+                println!("{}", res);
+
+                return;
+            }
+
+            todo!()
         }
         Some(("compile", arg_matches)) => {
             let input_fname = arg_matches

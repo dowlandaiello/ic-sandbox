@@ -25,6 +25,7 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
     let cc = build_compilation_expr(e, false, &mut names);
+
     cc.expand_step(&mut names);
 
     cc.combinate(&mut Default::default(), &mut names)
@@ -36,25 +37,43 @@ pub fn decode_sk(p: &AstPort) -> SkExpr {
     OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
-fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedNetBuilder {
+fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &mut NameIter) -> OwnedNetBuilder {
     tracing::trace!("compiling {:?}", e);
 
-    match e {
+    let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
+        p.clone()
+            .iter_tree()
+            .map(|x| {
+                x.0.borrow()
+                    .builder
+                    .iter_ports()
+                    .enumerate()
+                    .filter(|(_, p)| {
+                        p.is_none()
+                            || p.map(|p| {
+                                matches!(p.1 .0.borrow().builder, SkCombinatorBuilder::Var { .. })
+                            })
+                            .unwrap_or_default()
+                    })
+                    .map(|(i, _)| (i, x.clone()))
+                    .next()
+            })
+            .flatten()
+            .next()
+            .unwrap_or((1, p.clone()))
+    };
+
+    let e_trans = match e.clone() {
         SkExpr::Var(v) => OwnedNetBuilder::new(
-            if code {
-                SkCombinatorBuilder::Code(Box::new(SkCombinatorBuilder::Var {
-                    name: v,
-                    primary_port: None,
-                }))
-            } else {
-                SkCombinatorBuilder::Var {
-                    name: v,
-                    primary_port: None,
-                }
+            SkCombinatorBuilder::Var {
+                name: v,
+                primary_port: None,
             },
             names,
         ),
         SkExpr::K(a, b) => {
+            let code = is_arg;
+
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
                     name: names.next(),
@@ -79,7 +98,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
 
             let a_cc = a.map(|a| build_compilation_expr(*a, true, names));
 
-            if let Some(a_port) = a_cc.map(|a| (0, a)) {
+            if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
                         name: names.next(),
@@ -102,12 +121,12 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
                 a_port.1.update_with(|builder| {
                     builder
                         .clone()
-                        .with_primary_port(Some((2, e_parent.clone())))
+                        .with_port_i(a_port.0, Some((2, e_parent.clone())))
                 });
 
                 let b_port = b
                     .map(|b| build_compilation_expr(*b, true, names))
-                    .map(|b| (0, b))
+                    .map(|b| best_port(&b))
                     .expect("malformed expr");
 
                 let empty_port_var = OwnedNetBuilder::new(
@@ -134,7 +153,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
                 b_port.1.update_with(|builder| {
                     builder
                         .clone()
-                        .with_primary_port(Some((2, constr_parent.clone())))
+                        .with_port_i(b_port.0, Some((2, constr_parent.clone())))
                 });
 
                 e_parent.update_with(|builder| {
@@ -153,6 +172,8 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
             e
         }
         SkExpr::S(a, b, c) => {
+            let code = is_arg;
+
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
                     name: names.next(),
@@ -177,7 +198,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
 
             let a_cc = a.map(|a| build_compilation_expr(*a, true, names));
 
-            if let Some(a_port) = a_cc.map(|a| (0, a)) {
+            if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
                         name: names.next(),
@@ -200,12 +221,12 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
                 a_port.1.update_with(|builder| {
                     builder
                         .clone()
-                        .with_primary_port(Some((2, e_parent.clone())))
+                        .with_port_i(a_port.0, Some((2, e_parent.clone())))
                 });
 
                 let b_port = b
                     .map(|b| build_compilation_expr(*b, true, names))
-                    .map(|b| (0, b))
+                    .map(|b| best_port(&b))
                     .expect("malformed expr");
 
                 let empty_port_var = OwnedNetBuilder::new(
@@ -232,7 +253,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
                 b_port.1.update_with(|builder| {
                     builder
                         .clone()
-                        .with_primary_port(Some((2, constr_parent.clone())))
+                        .with_port_i(b_port.0, Some((2, constr_parent.clone())))
                 });
 
                 e_parent.update_with(|builder| {
@@ -249,7 +270,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
 
                 let c_port = c
                     .map(|c| build_compilation_expr(*c, true, names))
-                    .map(|c| (0, c))
+                    .map(|c| best_port(&c))
                     .expect("malformed expr");
 
                 let empty_port_var = OwnedNetBuilder::new(
@@ -276,7 +297,7 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
                 c_port.1.update_with(|builder| {
                     builder
                         .clone()
-                        .with_primary_port(Some((2, constr_parent_parent.clone())))
+                        .with_port_i(c_port.0, Some((2, constr_parent_parent.clone())))
                 });
 
                 constr_parent.update_with(|builder| {
@@ -294,7 +315,14 @@ fn build_compilation_expr(e: SkExpr, code: bool, names: &mut NameIter) -> OwnedN
 
             e
         }
-    }
+    };
+
+    e_trans
+        .clone()
+        .iter_tree()
+        .for_each(|x| tracing::trace!("encoding {} -> {:?}", e.clone(), x));
+
+    e_trans
 }
 
 pub fn compile(e: Expr, names: &mut NameIter) -> AstPort {
