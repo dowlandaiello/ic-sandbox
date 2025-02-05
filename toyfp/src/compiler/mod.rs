@@ -18,7 +18,7 @@ pub trait CombinatorBuilder: Sized {
         names: &mut NameIter,
     ) -> Self::CPort;
 
-    fn expand_step(&self, names: &mut NameIter) -> &Self;
+    fn expand_step(&self, names: &mut NameIter) -> Self;
 }
 
 pub fn compile_sk(e: SkExpr) -> AstPort {
