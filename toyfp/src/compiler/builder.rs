@@ -221,18 +221,21 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         let (p1, aux) =
                             (primary_port.clone().unwrap(), aux_ports[0].clone().unwrap());
 
-                        self.update_with(|_| p1.1 .0.borrow().clone().builder);
-                        self.update_with(|builder| {
+                        p1.1.update_with(|builder| {
                             builder.clone().with_port_i(p1.0, Some(aux.clone()))
                         });
-
                         aux.1.update_with(|builder| {
-                            builder
-                                .clone()
-                                .with_port_i(aux.0, Some((p1.0, self.clone())))
+                            builder.clone().with_port_i(aux.0, Some(p1.clone()))
                         });
 
-                        self.clone()
+                        self.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_primary_port(None)
+                                .with_aux_port_i(0, None)
+                        });
+
+                        p1.1.clone()
                     }
                     2 => {
                         let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
