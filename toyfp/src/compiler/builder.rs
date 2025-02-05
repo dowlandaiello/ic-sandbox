@@ -218,28 +218,21 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 match aux_ports.len() {
                     1 => {
-                        let z_2 = primary_port.clone().unwrap();
-                        let (aux_z1, aux_z2) = (
-                            aux_ports[0].clone().unwrap(),
-                            z_2.1
-                                 .0
-                                .borrow()
-                                .builder
-                                .iter_aux_ports()
-                                .next()
-                                .flatten()
-                                .cloned()
-                                .unwrap(),
-                        );
+                        let (p1, aux) =
+                            (primary_port.clone().unwrap(), aux_ports[0].clone().unwrap());
 
-                        aux_z1.1.update_with(|builder| {
-                            builder.clone().with_port_i(aux_z1.0, Some(aux_z2.clone()))
-                        });
-                        aux_z2.1.update_with(|builder| {
-                            builder.clone().with_port_i(aux_z2.0, Some(aux_z1.clone()))
+                        self.update_with(|_| p1.1 .0.borrow().clone().builder);
+                        self.update_with(|builder| {
+                            builder.clone().with_port_i(p1.0, Some(aux.clone()))
                         });
 
-                        aux_z1.1
+                        aux.1.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_port_i(aux.0, Some((p1.0, self.clone())))
+                        });
+
+                        self.clone()
                     }
                     2 => {
                         let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
@@ -844,11 +837,6 @@ impl OwnedNetBuilder {
                 });
             }
         }
-
-        new_root
-            .clone()
-            .iter_tree()
-            .for_each(|x| println!("{:?}", x));
 
         for comb in z_combs {
             comb.expand_step(names);
@@ -1560,7 +1548,7 @@ mod test {
                 })
                 .collect::<Vec<_>>();
 
-            let zn_1 = zn_1.expand_step(&mut names);
+            let zn_1 = zn_1.expand_step(&mut names).expand_step(&mut names);
 
             zn_1.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
