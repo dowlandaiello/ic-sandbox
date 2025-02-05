@@ -57,9 +57,9 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
     };
     let agent = recursive(|expr| {
         select! {
-            Spanned(Token::Era, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Era(Eraser::new()), name: 0, conns: Vec::new() }, span),
-	    Spanned(Token::Constr, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Constr(Constructor::new()), name: 0, conns: Vec::new() }, span),
-	    Spanned(Token::Dup, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Dup(Duplicator::new()), name: 0, conns: Vec::new()}, span),
+            Spanned(Token::Era, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Era(Eraser::new()), name: 0, conns: Vec::new(), port: 0 }, span),
+	    Spanned(Token::Constr, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Constr(Constructor::new()), name: 0, conns: Vec::new(), port: 0 }, span),
+	    Spanned(Token::Dup, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Dup(Duplicator::new()), name: 0, conns: Vec::new(), port: 0}, span),
         }
         .then_ignore(span_just(Token::LeftBracket))
         .then_ignore(span_just(Token::At))
@@ -70,11 +70,22 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .then_ignore(span_just(Token::LeftParen))
         .then(
             choice((
-                expr,
+                expr
+		    .then(
+			span_just(Token::Idx)
+			    .ignore_then(
+				select!{
+				    Spanned(Token::Digit(d), span) => Spanned(d, span)
+				})
+			    .or_not())
+		    .map(|(e, pos): (Spanned<AgentBuilder>, Option<Spanned<usize>>)| {
+			pos.map(|p| Spanned(e.0.clone().with_port(p.0), e.1.clone())).unwrap_or(e)
+		    }),
                 select! {Spanned(Token::Ident(s), span) => Spanned(AgentBuilder::Expr {
 		    phrase: Expr::Var(Var { name: Ident(s), port: None}),
 		    name: 0,
-		    conns: Vec::new()
+		    conns: Vec::new(),
+		    port: 0,
 		}, span)},
 		span_just(Token::At)
 		    .ignore_then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
@@ -148,6 +159,7 @@ pub enum AgentBuilder {
         phrase: Expr,
         name: usize,
         conns: Vec<AgentBuilder>,
+        port: usize,
     },
     Ref {
         port: usize,
@@ -156,12 +168,32 @@ pub enum AgentBuilder {
 }
 
 impl AgentBuilder {
+    pub fn with_port(self, port: usize) -> Self {
+        match self {
+            Self::Expr {
+                phrase,
+                name,
+                conns,
+                port: _,
+            } => Self::Expr {
+                phrase,
+                name,
+                conns,
+                port,
+            },
+            Self::Ref { agent_id, port: _ } => Self::Ref { agent_id, port },
+        }
+    }
+
     pub fn with_children(self, c: Vec<AgentBuilder>) -> Self {
         match self {
-            Self::Expr { phrase, name, .. } => Self::Expr {
+            Self::Expr {
+                port, phrase, name, ..
+            } => Self::Expr {
                 phrase,
                 name,
                 conns: c,
+                port,
             },
             c => c,
         }
@@ -169,10 +201,16 @@ impl AgentBuilder {
 
     pub fn with_name(self, name: usize) -> Self {
         match self {
-            Self::Expr { phrase, conns, .. } => Self::Expr {
+            Self::Expr {
+                port,
+                phrase,
+                conns,
+                ..
+            } => Self::Expr {
                 phrase,
                 conns,
                 name,
+                port,
             },
             c => c,
         }
@@ -191,6 +229,7 @@ impl AgentBuilder {
                 phrase,
                 name,
                 conns,
+                ..
             } => {
                 if phrase.is_agent() {
                     Some((phrase, name, conns))
@@ -208,6 +247,7 @@ impl AgentBuilder {
                 phrase,
                 name,
                 conns,
+                ..
             } => {
                 if phrase.is_agent() {
                     Some((phrase, name, conns))
@@ -219,13 +259,14 @@ impl AgentBuilder {
         }
     }
 
-    pub fn into_expr(self) -> Option<(Expr, usize, Vec<AgentBuilder>)> {
+    pub fn into_expr(self) -> Option<(Expr, usize, Vec<AgentBuilder>, usize)> {
         match self {
             AgentBuilder::Expr {
                 phrase,
                 name,
                 conns,
-            } => Some((phrase, name, conns)),
+                port,
+            } => Some((phrase, name, conns, port)),
             _ => None,
         }
     }

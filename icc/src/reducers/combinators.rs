@@ -345,19 +345,19 @@ mod test {
             ("Era[@1]() >< Era[@2]()", vec![]),
             (
                 "Constr[@1](a, b) >< Era[@2]()",
-                vec!["Era[@0](a in 0)", "Era[@1](b in 0)"],
+                vec!["Era[@0](a#0)", "Era[@1](b#0)"],
             ),
             (
                 "Dup[@1](a, b) >< Era[@2]()",
-                vec!["Era[@0](a in 0)", "Era[@1](b in 0)"],
+                vec!["Era[@0](a#0)", "Era[@1](b#0)"],
             ),
             (
                 "Constr[@1](a, b) >< Dup[@2](d, c)",
-                vec!["Dup[@2](a in 0, Constr[@1](d in 0, @2 in 1, Dup[@3](b in 0, @1 in 2, Constr[@0](c in 0, @2 in 2, @3 in 2) in 2) in 1) in 1, @0 in 1)"],
+                vec!["Dup[@2](a#0, Constr[@1](d#0, @2#1, Dup[@3](b#0, @1#2, Constr[@0](c#0, @2#2, @3#2)#2)#1)#1, @0#1)"],
             ),
             (
                 "Dup[@1](a, b) >< Constr[@2](d, c)",
-                vec!["Constr[@2](a in 0, Dup[@1](d in 0, @2 in 1, Constr[@3](b in 0, @1 in 2, Dup[@0](c in 0, @2 in 2, @3 in 2) in 2) in 1) in 1, @0 in 1)"],
+                vec!["Constr[@2](a#0, Dup[@1](d#0, @2#1, Constr[@3](b#0, @1#2, Dup[@0](c#0, @2#2, @3#2)#2)#1)#1, @0#1)"],
             ),
         ];
 

@@ -1408,7 +1408,7 @@ mod test {
         let comb_coder = coder.combinate(&mut Default::default(), &mut names);
         let _ = decoder.combinate(&mut Default::default(), &mut names);
 
-        println!("{}", comb_coder);
+        println!("combinated: {}", comb_coder);
 
         let res = reduce_dyn(&comb_coder).unwrap().remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient());
