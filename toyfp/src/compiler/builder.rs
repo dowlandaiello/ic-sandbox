@@ -1369,6 +1369,11 @@ mod test {
         let coder = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names)
             .encode(&mut names);
 
+        coder
+            .clone()
+            .iter_tree()
+            .for_each(|x| println!("expanded coder: {:?}", x));
+
         coder.expand_step(&mut names);
         let var = OwnedNetBuilder::new(
             CombinatorBuilder::Var {
@@ -1403,7 +1408,7 @@ mod test {
         let comb_coder = coder.combinate(&mut Default::default(), &mut names);
         let _ = decoder.combinate(&mut Default::default(), &mut names);
 
-        coder.iter_tree().for_each(|x| println!("{:?}", x));
+        println!("{}", comb_coder);
 
         let res = reduce_dyn(&comb_coder).unwrap().remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient());

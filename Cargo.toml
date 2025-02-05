@@ -2,7 +2,7 @@
 members = [
     "ast-ext",
     "ic-derive",
-    "icc",
+    "icc", "icviz",
     "toyfp",
 ]
 resolver = "2"

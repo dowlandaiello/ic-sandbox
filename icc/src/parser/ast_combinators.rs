@@ -130,7 +130,11 @@ impl fmt::Display for Port {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut seen: HashSet<usize> = Default::default();
 
-        fn fmt_expr_ports(seen: &mut HashSet<usize>, e: &Port, ports: Vec<Port>) -> Option<String> {
+        fn fmt_expr_ports(
+            seen: &mut HashSet<usize>,
+            e: &Port,
+            ports: Vec<IndexedPort>,
+        ) -> Option<String> {
             if !e.borrow().is_var() {
                 if seen.contains(&e.id) {
                     return Some(format!("@{}", e.id));
@@ -145,7 +149,7 @@ impl fmt::Display for Port {
                     e.id,
                     ports
                         .iter()
-                        .map(|p| {
+                        .map(|(port, p)| {
                             fmt_expr_ports(
                                 seen,
                                 p,
@@ -153,9 +157,9 @@ impl fmt::Display for Port {
                                     .into_iter()
                                     .chain(p.borrow().aux_ports().into_iter().cloned())
                                     .filter_map(|x| x)
-                                    .map(|(_, x)| x)
                                     .collect::<Vec<_>>(),
                             )
+                            .map(|port_str| format!("{} in {}", port_str, port))
                         })
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
@@ -166,16 +170,16 @@ impl fmt::Display for Port {
                     e.id,
                     ports
                         .iter()
-                        .map(|p| fmt_expr_ports(
+                        .map(|(port, p)| fmt_expr_ports(
                             seen,
                             p,
                             [p.borrow().primary_port().cloned()]
                                 .into_iter()
                                 .chain(p.borrow().aux_ports().into_iter().cloned())
                                 .filter_map(|x| x)
-                                .map(|(_, x)| x)
                                 .collect::<Vec<_>>(),
-                        ))
+                        )
+                        .map(|port_str| format!("{} in {}", port_str, port)))
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
                         .join(", "),
@@ -185,16 +189,16 @@ impl fmt::Display for Port {
                     e.id,
                     ports
                         .iter()
-                        .map(|p| fmt_expr_ports(
+                        .map(|(port, p)| fmt_expr_ports(
                             seen,
                             p,
                             [p.borrow().primary_port().cloned()]
                                 .into_iter()
                                 .chain(p.borrow().aux_ports().into_iter().cloned())
                                 .filter_map(|x| x)
-                                .map(|(_, x)| x)
                                 .collect::<Vec<_>>(),
-                        ))
+                        )
+                        .map(|port_str| format!("{} in {}", port_str, port)))
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
                         .join(", "),
@@ -216,7 +220,6 @@ impl fmt::Display for Port {
                         .aux_ports()
                         .into_iter()
                         .filter_map(|x| x.as_ref())
-                        .map(|(_, x)| x)
                         .cloned()
                         .collect::<Vec<_>>()
                 )
@@ -229,7 +232,6 @@ impl fmt::Display for Port {
                         .aux_ports()
                         .into_iter()
                         .filter_map(|x| x.as_ref())
-                        .map(|(_, x)| x)
                         .cloned()
                         .collect::<Vec<_>>()
                 )
@@ -253,7 +255,6 @@ impl fmt::Display for Port {
                         .into_iter()
                         .chain(self.borrow().aux_ports().into_iter().cloned())
                         .filter_map(|x| x)
-                        .map(|(_, x)| x)
                         .collect::<Vec<_>>()
                 )
                 .unwrap_or(UNIT_STR.to_owned())

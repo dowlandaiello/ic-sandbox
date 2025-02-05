@@ -115,14 +115,7 @@ fn main() {
                 let program = cli::sk::read_program(input_fname);
                 let compiled = compiler::compile_sk(program);
 
-                let mut out_f = OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .open(out_fname)
-                    .expect("failed to open compiled .d file");
-                out_f
-                    .write_all(compiled.to_string().as_bytes())
-                    .expect("failed to write compiled combinator program");
+                println!("{}", compiled);
 
                 return;
             }
@@ -130,14 +123,7 @@ fn main() {
             let program = cli::lambda::read_program(input_fname);
             let compiled = compiler::compile(program, &mut NameIter::default());
 
-            let mut out_f = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(out_fname)
-                .expect("failed to open compiled .d file");
-            out_f
-                .write_all(compiled.to_string().as_bytes())
-                .expect("failed to write compiled combinator program");
+            println!("{}", compiled);
         }
         _ => unreachable!("clap should ensure we don't get here"),
     };
