@@ -104,6 +104,33 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     }
 
     fn combinate(&self, names: &mut NameIter) -> Self::CPort {
+        // Normalize ZN_1 agents
+        self.clone()
+            .iter_tree()
+            .filter_map(|x| {
+                if let CombinatorBuilder::ZN {
+                    primary_port,
+                    aux_ports,
+                } = x.0.borrow().builder.clone()
+                {
+                    Some((primary_port, aux_ports))
+                } else {
+                    None
+                }
+            })
+            .for_each(|(primary_port, aux_ports)| {
+                // Need to wire the primary and aux ports
+                let (p, aux) = primary_port
+                    .as_ref()
+                    .cloned()
+                    .zip(aux_ports.get(0).cloned().flatten())
+                    .expect("ZN_1 expansion must have set primary and aux ports");
+
+                p.1.update_with(|builder| builder.clone().with_port_i(p.0, Some(aux.clone())));
+                aux.1
+                    .update_with(|builder| builder.clone().with_port_i(aux.0, Some(p.clone())));
+            });
+
         let mut agents_for_id: BTreeMap<usize, AstPort> = self
             .clone()
             .iter_tree()
@@ -155,12 +182,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             if let Some((port, p)) = builder.primary_port() {
                 let other_id = p.0.borrow().name;
-                let other_node = agents_for_id.get(&other_id).unwrap().clone();
+                let other_node = agents_for_id.get(&other_id).cloned();
 
                 let node = agents_for_id.get_mut(&id).unwrap();
 
                 node.borrow_mut()
-                    .set_primary_port(Some((*port, other_node)));
+                    .set_primary_port(other_node.map(|p| (*port, p)));
             }
 
             let mut aux_ports = builder.iter_aux_ports().map(|p| {
@@ -185,38 +212,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             node.borrow_mut().set_aux_ports(all_aux_ports);
         });
-
-        self.clone()
-            .iter_tree()
-            .filter_map(|x| {
-                if let CombinatorBuilder::ZN {
-                    primary_port,
-                    aux_ports,
-                } = x.0.borrow().builder.clone()
-                {
-                    Some((primary_port, aux_ports))
-                } else {
-                    None
-                }
-            })
-            .for_each(|(primary_port, aux_ports)| {
-                // Need to wire the primary and aux ports
-                let (p, aux) = primary_port
-                    .as_ref()
-                    .cloned()
-                    .zip(aux_ports.get(0).cloned().flatten())
-                    .expect("ZN_1 expansion must have set primary and aux ports");
-
-                let aux_agent = agents_for_id.get(&aux.1 .0.borrow().name).unwrap();
-                let p_agent = agents_for_id.get(&p.1 .0.borrow().name).unwrap();
-
-                p_agent
-                    .borrow_mut()
-                    .insert_port_i(p.0, Some((aux.0, aux_agent.clone())));
-                aux_agent
-                    .borrow_mut()
-                    .insert_port_i(aux.0, Some((p.0, p_agent.clone())));
-            });
 
         let active_pair_or_roots = agents_for_id.values();
         active_pair_or_roots
