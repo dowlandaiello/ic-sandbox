@@ -181,7 +181,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 let (port, p) = p?;
 
                 let other_id = p.0.borrow().name;
-                let other_node = agents_for_id.get(&other_id).unwrap().clone();
+                let other_node = agents_for_id.get(&other_id)?.clone();
 
                 Some((*port, other_node))
             });
@@ -197,7 +197,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             let node = agents_for_id.get_mut(&id).unwrap();
 
-            node.borrow_mut().set_aux_ports(all_aux_ports);
+            node.borrow_mut().set_aux_ports(all_aux_sports);
         });
 
         let active_pair_or_roots = agents_for_id.values();
