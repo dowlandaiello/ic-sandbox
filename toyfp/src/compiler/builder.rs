@@ -108,9 +108,9 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .clone()
             .iter_tree()
             .filter_map(|x| match &x.0.borrow().builder {
-                /// ZN_1 itself will never be combinated, and if it is found,
-                /// it must have attached ports, otherwise we can ignore it.
-                /// ZN_1 will be handled during wiring
+                // ZN_1 itself will never be combinated, and if it is found,
+                // it must have attached ports, otherwise we can ignore it.
+                // ZN_1 will be handled during wiring
                 CombinatorBuilder::ZN { aux_ports, .. } => {
                     assert_eq!(aux_ports.len(), 1);
 
@@ -200,14 +200,19 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             node.borrow_mut().set_aux_ports(all_aux_ports);
         });
 
-        let active_pair_or_roots = agents_for_id
-            .values()
-            .filter(|x| x.try_as_active_pair().is_some() || x.borrow().is_var());
+        let active_pair_or_roots = agents_for_id.values();
         active_pair_or_roots
             .clone()
-            .filter(|x| x.try_as_active_pair().is_some())
+            .filter(|x| {
+                x.try_as_active_pair().is_some() || {
+                    let bor = x.borrow();
+                    let pp = bor.primary_port();
+
+                    bor.is_agent() || pp.map(|p| p.1.borrow().is_var()).unwrap_or(true)
+                }
+            })
             .next()
-            .or(active_pair_or_roots.filter(|x| x.borrow().is_var()).next())
+            .or_else(|| active_pair_or_roots.filter(|x| x.borrow().is_var()).next())
             .expect("no root for combinated expression")
             .clone()
     }
@@ -739,6 +744,28 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
+    pub(crate) fn make_root(self, names: &mut NameIter) -> Self {
+        let slf = self.clone();
+
+        self.update_with(|builder| {
+            let next_port_idx = builder
+                .next_empty_port()
+                .unwrap_or_else(|| builder.len_ports());
+
+            builder.clone().with_push_port(Some((
+                0,
+                OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((next_port_idx, slf)),
+                    },
+                    names,
+                ),
+            )))
+        })
+        .clone()
+    }
+
     /// Finds all mismatched ports in the tree (i.e., one agent connected to another agent that is not connected to its parent)
     pub(crate) fn checksum(&self) -> Vec<(Self, Self)> {
         self.clone()
@@ -889,12 +916,12 @@ impl OwnedNetBuilder {
 
         let mut names = Default::default();
         let s_tree = Self::new(CombinatorBuilder::S { primary_port: None }, &mut names);
+        let combinated = s_tree.expand_step(&mut names).combinate(&mut names);
 
-        if s_tree
-            .expand_step(&mut names)
-            .combinate(&mut names)
-            .alpha_eq(p)
-        {
+        tracing::trace!("found {}", p);
+        tracing::trace!("found {}", combinated);
+
+        if combinated.alpha_eq(p) {
             tracing::trace!("found S");
 
             // TODO: use some kind of hash tree for this (merkle tree)
@@ -1193,6 +1220,10 @@ impl CombinatorBuilder {
             .next()
     }
 
+    pub(crate) fn len_ports(&self) -> usize {
+        self.iter_ports().count()
+    }
+
     pub(crate) fn last_empty_port(&self) -> Option<usize> {
         self.iter_ports()
             .enumerate()
@@ -1294,6 +1325,16 @@ impl CombinatorBuilder {
         }
     }
 
+    pub(crate) fn with_push_port(self, aux_port: Option<Port>) -> Self {
+        let first_empty_slot = self.iter_ports().position(|elem| elem.is_none());
+
+        if let Some(pos) = first_empty_slot {
+            self.with_port_i(pos, aux_port)
+        } else {
+            self
+        }
+    }
+
     pub(crate) fn to_named(self, names: &mut NameIter) -> NamedBuilder {
         NamedBuilder {
             name: names.next_id(),
@@ -1310,10 +1351,12 @@ mod test {
     fn test_k_comb() {
         let mut names = Default::default();
 
-        let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
+        let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
+            .make_root(&mut names);
         k_comb.expand_step(&mut names);
 
         let combinated = k_comb.combinate(&mut names);
+
         assert!(matches!(
             OwnedNetBuilder::decombinate(&combinated).unwrap(),
             SkExpr::K(None, None)
