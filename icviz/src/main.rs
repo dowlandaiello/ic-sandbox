@@ -23,10 +23,10 @@ fn main() {
         .iter_tree()
         .map(|x| {
             format!(
-                r#"<div className="agent">
+                r#"<div class="agent">
 {}
-<h1>{}</h1>
-<div className="body-port">
+<h2>{}</h2>
+<div class="body-port">
 {}
 </div>
 </div>"#,
@@ -47,13 +47,44 @@ fn main() {
         .join("\n");
 
     println!(
-        "<html>
+        r#"<html>
 <head>
+<style>
+.agent {{
+  display: flex;
+  flex-flow: column;
+  flex-wrap: wrap;
+
+  background-color: black;
+  color: white;
+
+  border-radius: 5px;
+  padding: 2em;
+}}
+
+.agents {{
+  display: flex;
+  flex-flow: row;
+  flex-wrap: wrap;
+  gap: 2em;
+  justify-content: center;
+}}
+
+.body-port {{
+  display: flex;
+  flex-flow: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5em;
+}}
+</style>
 <title>{}</title>
 <body>
+<div class="agents">
 {}
+</div>
 </body>
-</html>",
+</html>"#,
         raw_expr.chars().take(20).collect::<String>(),
         agents
     );

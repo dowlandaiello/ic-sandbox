@@ -159,7 +159,13 @@ impl fmt::Display for Port {
                                     .filter_map(|x| x)
                                     .collect::<Vec<_>>(),
                             )
-                            .map(|port_str| format!("{}#{}", port_str, port))
+                            .map(|port_str| {
+                                if p.borrow().is_var() {
+                                    port_str
+                                } else {
+                                    format!("{}#{}", port_str, port)
+                                }
+                            })
                         })
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
@@ -179,7 +185,13 @@ impl fmt::Display for Port {
                                 .filter_map(|x| x)
                                 .collect::<Vec<_>>(),
                         )
-                        .map(|port_str| format!("{}#{}", port_str, port)))
+                        .map(|port_str| {
+                            if p.borrow().is_var() {
+                                port_str
+                            } else {
+                                format!("{}#{}", port_str, port)
+                            }
+                        }))
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
                         .join(", "),
@@ -198,7 +210,13 @@ impl fmt::Display for Port {
                                 .filter_map(|x| x)
                                 .collect::<Vec<_>>(),
                         )
-                        .map(|port_str| format!("{}#{}", port_str, port)))
+                        .map(|port_str| {
+                            if p.borrow().is_var() {
+                                port_str
+                            } else {
+                                format!("{}#{}", port_str, port)
+                            }
+                        }))
                         .filter_map(|x| x)
                         .collect::<Vec<_>>()
                         .join(", "),

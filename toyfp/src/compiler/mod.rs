@@ -1,7 +1,6 @@
 use super::{parser::Expr, parser_sk::Expr as SkExpr};
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
 use inetlib::parser::{ast_combinators::Port as AstPort, naming::NameIter};
-use std::collections::BTreeMap;
 
 mod builder;
 mod icalc;
@@ -12,11 +11,7 @@ pub trait CombinatorBuilder: Sized {
 
     fn decombinate(p: &Self::CPort) -> Option<Self::EExpr>;
 
-    fn combinate(
-        &self,
-        built: &mut BTreeMap<usize, Self::CPort>,
-        names: &mut NameIter,
-    ) -> Self::CPort;
+    fn combinate(&self, names: &mut NameIter) -> Self::CPort;
 
     fn expand_step(&self, names: &mut NameIter) -> Self;
 }
@@ -28,7 +23,7 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
 
     cc.expand_step(&mut names);
 
-    cc.combinate(&mut Default::default(), &mut names)
+    cc.combinate(&mut names)
 }
 
 pub fn decode_sk(p: &AstPort) -> SkExpr {

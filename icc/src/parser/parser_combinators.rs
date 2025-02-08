@@ -91,7 +91,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 		    .ignore_then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
 		    .then_ignore(span_just(Token::Idx))
 		    .then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
-		    .map(|(idx, id)| (
+		    .map(|(id, idx)| (
 			Spanned(AgentBuilder::Ref { port: idx.0, agent_id: id.0 }, id.1)))
             ))
             .separated_by(span_just(Token::Comma))
@@ -145,7 +145,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         net,
         wiring,
         agent.try_map(|agent, span| {
-            build_agent(agent)
+            build_agent(agent, &mut Default::default())
                 .ok_or(Simple::custom(span, "couldn't build agent"))
                 .map(|a| vec![a])
         }),
@@ -272,11 +272,10 @@ impl AgentBuilder {
     }
 }
 
-pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
+pub fn build_agent(agent: Spanned<AgentBuilder>, names: &mut NameIter) -> Option<Spanned<Port>> {
     let mut built_agents: BTreeMap<usize, Spanned<Port>> = Default::default();
     let mut to_build: VecDeque<Spanned<AgentBuilder>> = VecDeque::from_iter([agent.clone()]);
     let mut to_build_later: VecDeque<Spanned<AgentBuilder>> = Default::default();
-    let mut names = NameIter::default();
 
     // First pass: build all agents
     // This will create ports for every expr that is not
@@ -291,7 +290,7 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
             continue;
         };
 
-        let agent = phrase.clone().into_port(&mut names);
+        let agent = phrase.clone().into_port(names);
         built_agents.insert(*name, Spanned(agent, span.clone()));
 
         // Expression children will not be inserted inline
@@ -312,11 +311,13 @@ pub fn build_agent(agent: Spanned<AgentBuilder>) -> Option<Spanned<Port>> {
             let to_insert = match child {
                 // We already have ports for agents, so we can
                 // look them up and connect them
-                AgentBuilder::Expr { phrase, name, .. } => {
+                AgentBuilder::Expr {
+                    port, phrase, name, ..
+                } => {
                     if phrase.is_agent() {
-                        (0, built_agents[&name].clone().0)
+                        (port, built_agents[&name].clone().0)
                     } else {
-                        let var = phrase.into_port(&mut names);
+                        let var = phrase.into_port(names);
                         var.borrow_mut()
                             .set_primary_port(Some((i, agent_port.clone())));
 
@@ -344,8 +345,10 @@ pub fn build_net(
     lhs: Spanned<AgentBuilder>,
     rhs: Spanned<AgentBuilder>,
 ) -> Option<Vec<Spanned<Port>>> {
-    let lhs = build_agent(lhs)?;
-    let rhs = build_agent(rhs)?;
+    let mut names = Default::default();
+
+    let lhs = build_agent(lhs, &mut names)?;
+    let rhs = build_agent(rhs, &mut names)?;
 
     // Shift down primary port to aux port
     let (aux_port_lhs, aux_port_rhs) = (
