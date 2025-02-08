@@ -596,6 +596,45 @@ impl Expr {
         }
     }
 
+    pub fn insert_port_i(&mut self, index: usize, val: Option<IndexedPort>) {
+        match self {
+            Self::Era(e) => {
+                assert_eq!(index, 0);
+
+                e.primary_port = val;
+            }
+            Self::Constr(c) => match index {
+                0 => {
+                    c.primary_port = val;
+                }
+                1 => {
+                    c.aux_ports[0] = val;
+                }
+                2 => {
+                    c.aux_ports[1] = val;
+                }
+                _ => panic!("invalid port"),
+            },
+            Self::Dup(c) => match index {
+                0 => {
+                    c.primary_port = val;
+                }
+                1 => {
+                    c.aux_ports[0] = val;
+                }
+                2 => {
+                    c.aux_ports[1] = val;
+                }
+                _ => panic!("invalid port"),
+            },
+            Self::Var(v) => {
+                assert_eq!(index, 0);
+
+                v.port = val;
+            }
+        }
+    }
+
     pub fn insert_aux_port(&mut self, index: usize, val: Option<IndexedPort>) {
         match self {
             Self::Era(_) => {}

@@ -149,21 +149,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             let builder = &x.0.borrow().builder;
 
-            // Need to wire the primary and aux ports
-            if let CombinatorBuilder::ZN {
-                primary_port,
-                aux_ports,
-            } = builder
-            {
-                let (p, aux) = primary_port
-                    .as_ref()
-                    .cloned()
-                    .zip(aux_ports.get(0).cloned().flatten())
-                    .expect("ZN_1 expansion must have set primary and aux ports");
-                p.1.update_with(|builder| builder.clone().with_port_i(p.0, Some(aux.clone())));
-                aux.1
-                    .update_with(|builder| builder.clone().with_port_i(aux.0, Some(p.clone())));
-
+            if matches!(builder, CombinatorBuilder::ZN { .. }) {
                 return;
             }
 
@@ -200,18 +186,54 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             node.borrow_mut().set_aux_ports(all_aux_ports);
         });
 
+        self.clone()
+            .iter_tree()
+            .filter_map(|x| {
+                if let CombinatorBuilder::ZN {
+                    primary_port,
+                    aux_ports,
+                } = x.0.borrow().builder.clone()
+                {
+                    Some((primary_port, aux_ports))
+                } else {
+                    None
+                }
+            })
+            .for_each(|(primary_port, aux_ports)| {
+                // Need to wire the primary and aux ports
+                let (p, aux) = primary_port
+                    .as_ref()
+                    .cloned()
+                    .zip(aux_ports.get(0).cloned().flatten())
+                    .expect("ZN_1 expansion must have set primary and aux ports");
+
+                let aux_agent = agents_for_id.get(&aux.1 .0.borrow().name).unwrap();
+                let p_agent = agents_for_id.get(&p.1 .0.borrow().name).unwrap();
+
+                p_agent
+                    .borrow_mut()
+                    .insert_port_i(p.0, Some((aux.0, aux_agent.clone())));
+                aux_agent
+                    .borrow_mut()
+                    .insert_port_i(aux.0, Some((p.0, p_agent.clone())));
+            });
+
         let active_pair_or_roots = agents_for_id.values();
         active_pair_or_roots
             .clone()
-            .filter(|x| {
-                x.try_as_active_pair().is_some() || {
-                    let bor = x.borrow();
-                    let pp = bor.primary_port();
-
-                    bor.is_agent() || pp.map(|p| p.1.borrow().is_var()).unwrap_or(true)
-                }
-            })
+            .filter(|x| x.try_as_active_pair().is_some())
             .next()
+            .or_else(|| {
+                active_pair_or_roots
+                    .clone()
+                    .filter(|x| {
+                        let bor = x.borrow();
+                        let pp = bor.primary_port();
+
+                        bor.is_agent() || pp.map(|p| p.1.borrow().is_var()).unwrap_or(true)
+                    })
+                    .next()
+            })
             .or_else(|| active_pair_or_roots.filter(|x| x.borrow().is_var()).next())
             .expect("no root for combinated expression")
             .clone()
@@ -1536,6 +1558,8 @@ mod test {
                 .with_primary_port(Some((0, decoder.clone())))
         });
         decoder.update_with(|builder| builder.clone().with_primary_port(Some((0, coder.clone()))));
+
+        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
         let comb_coder = coder.combinate(&mut names);
         let _ = decoder.combinate(&mut names);
