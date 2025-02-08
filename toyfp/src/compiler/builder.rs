@@ -197,7 +197,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             let node = agents_for_id.get_mut(&id).unwrap();
 
-            node.borrow_mut().set_aux_ports(all_aux_sports);
+            node.borrow_mut().set_aux_ports(all_aux_ports);
         });
 
         let active_pair_or_roots = agents_for_id.values();
