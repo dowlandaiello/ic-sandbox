@@ -6,7 +6,10 @@ use chumsky::{
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
     bytecode::combinated::CombinatedProgram,
-    parser::parser_combinators::{self},
+    parser::{
+        naming::NameIter,
+        parser_combinators::{self},
+    },
     preprocessor,
     reducers::combinators::{reduce_dyn, reduce_step_dyn},
 };
@@ -20,6 +23,7 @@ use std::{
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
+    sync::Arc,
 };
 
 #[derive(Helper, Validator, Highlighter)]
@@ -100,8 +104,10 @@ pub fn repl() {
                             println!("{}", parsed);
                         }
                         Ok("step") => {
-                            let res =
-                                reduce_step_dyn(&parsed.nets[0]).expect("failed to reduce net");
+                            let names = Arc::new(NameIter::default());
+
+                            let res = reduce_step_dyn(&parsed.nets[0], names)
+                                .expect("failed to reduce net");
 
                             println!(
                                 "{}",

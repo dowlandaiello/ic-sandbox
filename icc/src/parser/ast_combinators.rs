@@ -6,6 +6,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeSet, VecDeque},
     fmt,
+    hash::Hash,
     ops::Deref,
 };
 
@@ -549,7 +550,7 @@ impl Expr {
 }
 
 impl Expr {
-    pub fn into_port(self, namer: &mut NameIter) -> Port {
+    pub fn into_port(self, namer: &NameIter) -> Port {
         Port::new(self, namer.next_id())
     }
 

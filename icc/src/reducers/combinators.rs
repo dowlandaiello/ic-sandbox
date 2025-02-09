@@ -2,7 +2,7 @@ use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, IndexedPort, Port},
     naming::NameIter,
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 #[cfg(feature = "threadpool")]
 use rayon::prelude::*;
@@ -19,7 +19,8 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
         .iter_tree()
         .filter(|x| x.try_as_active_pair().is_some())
         .collect::<Vec<_>>();
-    let mut nets = Vec::new();
+    let mut nets = BTreeSet::new();
+    let names = Arc::new(NameIter::default());
 
     while !redex_bag.is_empty() {
         let Reduction {
@@ -27,7 +28,7 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
             nets: c_nets,
         } = redex_bag
             .par_drain(..)
-            .filter_map(|x| reduce_step_dyn(&x))
+            .filter_map(|x| reduce_step_dyn(&x, names.clone()))
             .reduce(
                 || Reduction::default(),
                 |mut acc, res| {
@@ -40,9 +41,11 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
                 },
             );
 
-        nets.extend(c_nets);
+        nets.extend(c_nets.into_iter().map(|x| x.orient()));
         redex_bag.extend(c_active_pairs);
     }
+
+    nets.into_iter().collect()
 }
 
 #[cfg(not(feature = "threadpool"))]
@@ -51,7 +54,8 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
         .iter_tree()
         .filter(|x| x.try_as_active_pair().is_some())
         .collect::<Vec<_>>();
-    let mut nets = Vec::new();
+    let mut nets = BTreeSet::new();
+    let names = Arc::new(NameIter::default());
 
     while !redex_bag.is_empty() {
         let Reduction {
@@ -59,32 +63,24 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
             nets: c_nets,
         } = redex_bag
             .drain(..)
-            .fold(Reduction::default(), |mut acc, mut x| {
-                let res = reduce_step_dyn(&x);
+            .filter_map(|x| reduce_step_dyn(&x, names.clone()))
+            .fold(Reduction::default(), |mut acc, res| {
+                let Reduction { nets, active_pairs } = res;
 
-                if let Some(Reduction { nets, active_pairs }) = res {
-                    acc.nets.extend(nets);
-                    acc.active_pairs.extend(active_pairs);
-                }
+                acc.nets.extend(nets);
+                acc.active_pairs.extend(active_pairs);
 
                 acc
             });
 
-        nets.extend(c_nets);
+        nets.extend(c_nets.into_iter().map(|x| x.orient()));
         redex_bag.extend(c_active_pairs);
     }
 
-    nets.iter()
-        .map(|x: &Port| x.orient())
-        .collect::<BTreeSet<_>>()
-        .iter()
-        .cloned()
-        .collect::<Vec<_>>()
+    nets.into_iter().collect()
 }
 
-pub fn reduce_step_dyn(e: &Port) -> Option<Reduction> {
-    let mut names = NameIter::default();
-
+pub fn reduce_step_dyn(e: &Port, names: Arc<NameIter>) -> Option<Reduction> {
     let (e, e2) = if let Some(active_pair) = e.try_as_active_pair() {
         active_pair
     } else {
@@ -118,7 +114,7 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Reduction> {
                 d.aux_ports[0].clone(),
             ];
 
-            make_constr_dup_commutation_net(original_ports, &mut names, connect)
+            make_constr_dup_commutation_net(original_ports, names, connect)
         }
         (Expr::Dup(ref c), Expr::Constr(ref d)) => {
             let original_ports = [
@@ -128,29 +124,29 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Reduction> {
                 d.aux_ports[0].clone(),
             ];
 
-            make_dup_constr_commutation_net(original_ports, &mut names, connect)
+            make_dup_constr_commutation_net(original_ports, names, connect)
         }
         // commutation of constr >< era
         (Expr::Constr(ref c), Expr::Era(_)) => {
             let original_ports = [c.aux_ports[0].clone(), c.aux_ports[1].clone()];
 
-            make_constr_era_commutation_net(original_ports, &mut names, connect)
+            make_constr_era_commutation_net(original_ports, names, connect)
         }
         (Expr::Era(_), Expr::Constr(ref c)) => {
             let original_ports = [c.aux_ports[0].clone(), c.aux_ports[1].clone()];
 
-            make_constr_era_commutation_net(original_ports, &mut names, connect)
+            make_constr_era_commutation_net(original_ports, names, connect)
         }
         // Commutation of dup >< era
         (Expr::Dup(ref c), Expr::Era(_)) => {
             let original_ports = [c.aux_ports[0].clone(), c.aux_ports[1].clone()];
 
-            make_constr_era_commutation_net(original_ports, &mut names, connect)
+            make_constr_era_commutation_net(original_ports, names, connect)
         }
         (Expr::Era(_), Expr::Dup(ref c)) => {
             let original_ports = [c.aux_ports[0].clone(), c.aux_ports[1].clone()];
 
-            make_constr_era_commutation_net(original_ports, &mut names, connect)
+            make_constr_era_commutation_net(original_ports, names, connect)
         }
         // Annihiliation of Constr
         (Expr::Constr(ref c), Expr::Constr(ref d)) => {
@@ -230,14 +226,14 @@ pub fn reduce_step_dyn(e: &Port) -> Option<Reduction> {
 // for a single owner, no refcell necessary
 fn make_dup_constr_commutation_net(
     original_ports: [Option<IndexedPort>; 4],
-    names_iter: &mut NameIter,
+    names_iter: Arc<NameIter>,
     mut connect: impl FnMut(&Port, usize, Option<(usize, Port)>),
 ) -> Option<Vec<Port>> {
-    let bot_lhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
-    let bot_rhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
+    let bot_lhs: Port = Expr::Dup(Duplicator::new()).into_port(&names_iter);
+    let bot_rhs: Port = Expr::Dup(Duplicator::new()).into_port(&names_iter);
 
-    let top_lhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
-    let top_rhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
+    let top_lhs: Port = Expr::Constr(Constructor::new()).into_port(&names_iter);
+    let top_rhs: Port = Expr::Constr(Constructor::new()).into_port(&names_iter);
 
     top_lhs
         .borrow_mut()
@@ -284,14 +280,14 @@ fn make_dup_constr_commutation_net(
 
 fn make_constr_dup_commutation_net(
     original_ports: [Option<IndexedPort>; 4],
-    names_iter: &mut NameIter,
+    names_iter: Arc<NameIter>,
     mut connect: impl FnMut(&Port, usize, Option<(usize, Port)>),
 ) -> Option<Vec<Port>> {
-    let bot_lhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
-    let bot_rhs: Port = Expr::Constr(Constructor::new()).into_port(names_iter);
+    let bot_lhs: Port = Expr::Constr(Constructor::new()).into_port(&names_iter);
+    let bot_rhs: Port = Expr::Constr(Constructor::new()).into_port(&names_iter);
 
-    let top_lhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
-    let top_rhs: Port = Expr::Dup(Duplicator::new()).into_port(names_iter);
+    let top_lhs: Port = Expr::Dup(Duplicator::new()).into_port(&names_iter);
+    let top_rhs: Port = Expr::Dup(Duplicator::new()).into_port(&names_iter);
 
     top_lhs
         .borrow_mut()
@@ -338,11 +334,11 @@ fn make_constr_dup_commutation_net(
 
 fn make_constr_era_commutation_net(
     original_ports: [Option<IndexedPort>; 2],
-    names_iter: &mut NameIter,
+    names_iter: Arc<NameIter>,
     mut connect: impl FnMut(&Port, usize, Option<(usize, Port)>),
 ) -> Option<Vec<Port>> {
-    let era_lhs: Port = Expr::Era(Eraser::new()).into_port(names_iter);
-    let era_rhs: Port = Expr::Era(Eraser::new()).into_port(names_iter);
+    let era_lhs: Port = Expr::Era(Eraser::new()).into_port(&names_iter);
+    let era_rhs: Port = Expr::Era(Eraser::new()).into_port(&names_iter);
 
     era_lhs
         .borrow_mut()
@@ -379,23 +375,24 @@ mod test {
             ("Era[@1]() >< Era[@2]()", BTreeSet::from_iter([])),
             (
                 "Constr[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@0](a)", "Era[@1](b)"]),
+                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
             ),
             (
                 "Dup[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@0](a)", "Era[@1](b)"]),
+                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
             ),
             (
                 "Constr[@1](a, b) >< Dup[@2](d, c)",
-                BTreeSet::from_iter(["Constr[@3](c, Dup[@1](a, Constr[@2](d, @1#1, Dup[@0](b, @2#2, @3#2)#1)#1, @3#1)#2, @0#2)", "Dup[@1](a, Constr[@2](d, @1#1, Dup[@0](b, @2#2, Constr[@3](c, @1#2, @0#2)#2)#1)#1, @3#1)"]),
+                BTreeSet::from_iter(["Dup[@5](a, Constr[@6](d, @5#1, Dup[@4](b, @6#2, Constr[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
             ),
             (
                 "Dup[@1](a, b) >< Constr[@2](d, c)",
-                BTreeSet::from_iter(["Constr[@0](b, Dup[@2](d, Constr[@1](a, @2#1, Dup[@3](c, @1#2, @0#2)#1)#1, @0#1)#2, @3#2)", "Constr[@1](a, Dup[@2](d, @1#1, Constr[@0](b, @2#2, Dup[@3](c, @1#2, @0#2)#2)#1)#1, @3#1)", "Dup[@3](c, Constr[@1](a, Dup[@2](d, @1#1, Constr[@0](b, @2#2, @3#2)#1)#1, @3#1)#2, @0#2)"]),
+                BTreeSet::from_iter(["Constr[@5](a, Dup[@6](d, @5#1, Constr[@4](b, @6#2, Dup[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
             ),
         ];
 
         for (case, expected) in cases {
+            println!("{}", case);
             let parsed = parser::parser()
                 .parse(parser::lexer().parse(case).unwrap())
                 .unwrap();
