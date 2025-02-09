@@ -326,7 +326,7 @@ mod test {
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
 
-        let result = reduce_dyn(&compiled).unwrap();
+        let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
     }
@@ -338,7 +338,7 @@ mod test {
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
 
-        let result = reduce_dyn(&compiled).unwrap();
+        let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
     }

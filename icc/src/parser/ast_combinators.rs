@@ -3,7 +3,8 @@ use crate::{
     UNIT_STR,
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    cmp::Ordering,
+    collections::{BTreeSet, VecDeque},
     fmt,
     ops::Deref,
 };
@@ -30,13 +31,40 @@ pub struct Port {
     pub id: usize,
 }
 
+impl Eq for Port {}
+
+impl Ord for Port {
+    fn cmp(&self, o: &Self) -> Ordering {
+        self.id.cmp(&o.id)
+    }
+}
+
+impl PartialEq for Port {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl PartialOrd for Port {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.id.partial_cmp(&other.id)
+    }
+}
+
 impl Port {
     pub fn orient(&self) -> Self {
-        let root = self
+        let mut roots = self
             .iter_tree()
             .filter(|x| x.borrow().is_var())
-            .next()
-            .expect("missing root");
+            .collect::<Vec<_>>();
+        roots.sort_by(|a, b| {
+            let (a_bor, b_bor) = (a.borrow(), b.borrow());
+            let (a_var, b_var) = a_bor.as_var().zip(b_bor.as_var()).unwrap();
+
+            a_var.name.cmp(&b_var.name)
+        });
+
+        let root = roots.into_iter().next().unwrap();
 
         let borrow = root.borrow();
         borrow
@@ -104,7 +132,7 @@ impl Port {
 
     #[cfg(feature = "threadpool")]
     pub fn borrow_mut(&self) -> RwLockWriteGuard<'_, Expr> {
-        self.e.try_write().unwrap()
+        self.e.write().unwrap()
     }
 }
 
@@ -128,10 +156,10 @@ impl Deref for Port {
 
 impl fmt::Display for Port {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut seen: HashSet<usize> = Default::default();
+        let mut seen: BTreeSet<usize> = Default::default();
 
         fn fmt_expr_ports(
-            seen: &mut HashSet<usize>,
+            seen: &mut BTreeSet<usize>,
             e: &Port,
             ports: Vec<IndexedPort>,
         ) -> Option<String> {
@@ -287,13 +315,16 @@ impl fmt::Debug for Port {
         let ports_debug = ports
             .into_iter()
             .skip(1)
-            .map(|(p, port)| {
-                format!(
-                    "{} @ 0x{} in {}",
-                    port.borrow().name().to_owned(),
-                    port.id,
-                    p
-                )
+            .map(|p| {
+                p.map(|(p, port)| {
+                    format!(
+                        "{} @ 0x{} in {}",
+                        port.borrow().name().to_owned(),
+                        port.id,
+                        p
+                    )
+                })
+                .unwrap_or("empty".to_owned())
             })
             .collect::<Vec<_>>();
 
@@ -302,13 +333,16 @@ impl fmt::Debug for Port {
             .field("id", &self.id)
             .field(
                 "primary_port",
-                &self.iter_ports().into_iter().next().map(|(p, port)| {
-                    format!(
-                        "{} @ 0x{} in {}",
-                        port.borrow().name().to_owned(),
-                        port.id,
-                        p
-                    )
+                &self.iter_ports().into_iter().next().map(|p| {
+                    p.map(|(p, port)| {
+                        format!(
+                            "{} @ 0x{} in {}",
+                            port.borrow().name().to_owned(),
+                            port.id,
+                            p
+                        )
+                    })
+                    .unwrap_or("empty".to_owned())
                 }),
             )
             .field("aux_ports", &ports_debug)
@@ -317,12 +351,11 @@ impl fmt::Debug for Port {
 }
 
 impl Port {
-    pub fn iter_ports(&self) -> impl IntoIterator<Item = IndexedPort> {
+    pub fn iter_ports(&self) -> impl IntoIterator<Item = Option<IndexedPort>> {
         [self.borrow().primary_port()]
             .into_iter()
             .chain(self.borrow().aux_ports().into_iter().map(|x| x.as_ref()))
-            .filter_map(|x| x)
-            .cloned()
+            .map(|x| x.cloned())
             .collect::<Vec<_>>()
     }
 
@@ -384,9 +417,7 @@ impl Port {
 }
 
 pub struct PortTreeWalker {
-    #[cfg(not(feature = "threadpool"))]
-    seen: HashSet<usize>,
-
+    seen: BTreeSet<usize>,
     to_visit: VecDeque<Port>,
 }
 
@@ -415,6 +446,7 @@ impl Iterator for PortTreeWalker {
         self.to_visit.extend(
             next.iter_ports()
                 .into_iter()
+                .filter_map(|x| x)
                 .filter(|(_, p)| !self.seen.contains(&p.id))
                 .map(|(_, x)| x),
         );

@@ -35,8 +35,7 @@ pub fn repl() {
                 let parsed = assert_parse_literal_ok(line.as_str());
                 let combinated = compiler::compile(parsed.clone(), &mut NameIter::default());
 
-                if let Some(reduced) =
-                    reduce_dyn(&combinated).and_then(|res| compiler::decompile(res.get(0)?))
+                if let Some(reduced) = compiler::decompile(reduce_dyn(&combinated).get(0).unwrap())
                 {
                     println!("{}", reduced);
                 } else {

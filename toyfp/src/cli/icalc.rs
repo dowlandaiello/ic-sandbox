@@ -156,20 +156,7 @@ pub fn repl() {
                 let parsed = assert_parse_literal_ok(line.as_str());
                 let combinated = todo!();
 
-                tracing::trace!("job: {}", combinated);
-
-                if let Some(reduced) = reduce_dyn(&combinated).map(|res| todo!()) {
-                    todo!()
-                } else {
-                    println!(
-                        "{}",
-                        parsed
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-                }
+                todo!()
             }
             Err(ReadlineError::Interrupted) => {
                 return;

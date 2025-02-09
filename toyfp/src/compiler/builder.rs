@@ -1511,7 +1511,9 @@ mod test {
 
         let combinated = net.combinate(&mut names);
 
-        let res = reduce_dyn(&combinated).unwrap().remove(0);
+        let res = reduce_dyn(&combinated).remove(0);
+
+        println!("{}", res);
     }
 
     #[test_log::test]
@@ -1559,7 +1561,7 @@ mod test {
         let comb_coder = coder.combinate(&mut names);
         let _ = decoder.combinate(&mut names);
 
-        let res = reduce_dyn(&comb_coder).unwrap().remove(0);
+        let res = reduce_dyn(&comb_coder).remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient());
 
         assert!(matches!(dec, Some(SkExpr::K { .. })))
@@ -1573,6 +1575,8 @@ mod test {
 
         let coder = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names)
             .encode(&mut names);
+
+        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
         coder.expand_step(&mut names);
 
@@ -1609,7 +1613,7 @@ mod test {
         let comb_coder = coder.combinate(&mut names);
         let _ = decoder.combinate(&mut names);
 
-        let res = reduce_dyn(&comb_coder).unwrap().remove(0);
+        let res = reduce_dyn(&comb_coder).remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient());
         matches!(dec, Some(SkExpr::S(None, None, None)));
     }
@@ -1679,7 +1683,6 @@ mod test {
 
         assert_eq!(
             reduce_dyn(&z4_1.combinate(&mut names))
-                .unwrap()
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect::<Vec<_>>(),
@@ -1764,7 +1767,6 @@ mod test {
 
             assert_eq!(
                 reduce_dyn(&zn_1.combinate(&mut names))
-                    .unwrap()
                     .into_iter()
                     .map(|x| x.to_string())
                     .collect::<Vec<_>>(),

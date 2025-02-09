@@ -33,9 +33,7 @@ pub fn eval(f_name: &str) -> Expr {
 
     tracing::trace!("job: {}", combinated);
 
-    reduce_dyn(&combinated)
-        .map(|res| compiler::decode_sk(&res.get(0).unwrap().orient()))
-        .expect("reduction failed")
+    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient())
 }
 
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
@@ -165,13 +163,9 @@ pub fn repl() {
 
                 tracing::trace!("job: {}", combinated);
 
-                if let Some(reduced) = reduce_dyn(&combinated)
-                    .map(|res| compiler::decode_sk(&res.get(0).unwrap().orient()))
-                {
-                    println!("{}", reduced);
-                } else {
-                    println!("{}", parsed);
-                }
+                let reduced =
+                    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient());
+                println!("{}", reduced);
             }
             Err(ReadlineError::Interrupted) => {
                 return;

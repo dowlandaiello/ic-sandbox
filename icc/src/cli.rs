@@ -105,14 +105,15 @@ pub fn repl() {
 
                             println!(
                                 "{}",
-                                res.iter()
+                                res.nets
+                                    .iter()
                                     .map(|n| n.to_string())
                                     .collect::<Vec<_>>()
                                     .join("\n")
                             );
                         }
                         Ok("reduce") => {
-                            let res = reduce_dyn(&parsed.nets[0]).expect("failed to reduce net");
+                            let res = reduce_dyn(&parsed.nets[0]);
 
                             println!(
                                 "{}",
