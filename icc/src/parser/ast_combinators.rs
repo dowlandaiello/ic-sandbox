@@ -133,7 +133,7 @@ impl Port {
 
     #[cfg(feature = "threadpool")]
     pub fn borrow_mut(&self) -> RwLockWriteGuard<'_, Expr> {
-        self.e.write().unwrap()
+        self.e.try_write().unwrap()
     }
 }
 

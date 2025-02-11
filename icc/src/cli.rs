@@ -11,7 +11,7 @@ use inetlib::{
         parser_combinators::{self},
     },
     preprocessor,
-    reducers::combinators::{reduce_dyn, reduce_step_dyn},
+    reducers::combinators::{buffered::adjacency_list::BufferedListReducer, Reducer},
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -88,7 +88,7 @@ pub fn repl() {
 
         match readline {
             Ok(line) => {
-                let parsed = assert_parse_literal_ok(line.as_str());
+                let mut parsed = assert_parse_literal_ok(line.as_str());
 
                 loop {
                     let cmd = rl.readline(&format!(
@@ -106,8 +106,8 @@ pub fn repl() {
                         Ok("step") => {
                             let names = Arc::new(NameIter::default());
 
-                            let res = reduce_step_dyn(&parsed.nets[0], names)
-                                .expect("failed to reduce net");
+                            let reducer = BufferedListReducer::from(parsed.nets.remove(0));
+                            let res = reducer.reduce_step();
 
                             println!(
                                 "{}",
@@ -119,7 +119,8 @@ pub fn repl() {
                             );
                         }
                         Ok("reduce") => {
-                            let res = reduce_dyn(&parsed.nets[0]);
+                            let reducer = BufferedListReducer::from(parsed.nets.remove(0));
+                            let res = reducer.reduce();
 
                             println!(
                                 "{}",

@@ -3,6 +3,10 @@ name = "toyfp"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+threadpool = ["icc/threadpool"]
+default = ["threadpool"]
+
 [lib]
 name = "toyfplib"
 path = "src/lib.rs"
@@ -14,7 +18,7 @@ path = "src/main.rs"
 [dependencies]
 chumsky = { workspace = true }
 ast-ext = { workspace = true }
-icc = { workspace = true }
+icc = { workspace = true, default-features = false }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 ariadne = { workspace = true }
