@@ -107,18 +107,16 @@ pub fn repl() {
                             println!("{}", parsed);
                         }
                         Ok("step") => {
-                            let names = Arc::new(NameIter::default());
-
                             let (rx, builder) = ReducerBuilder::new_in_redex_loop();
-                            let reducer = builder.with_init_net(parsed.nets[0]).finish();
+                            let reducer = builder.with_init_net(&parsed.nets[0]).finish();
 
                             let next = rx.recv().unwrap();
-
-                            let res = reducer.reduce_step(next);
+                            reducer.reduce_step(next);
 
                             println!(
                                 "{}",
-                                res.nets
+                                reducer
+                                    .readback()
                                     .iter()
                                     .map(|n| n.to_string())
                                     .collect::<Vec<_>>()

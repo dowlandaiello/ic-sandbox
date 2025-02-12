@@ -25,9 +25,11 @@ pub struct Reduction {
 }
 
 pub trait Reducer {
+    fn push_active_pair(&self, lhs: Conn, rhs: Conn);
+
     fn readback(&self) -> Vec<Port>;
 
-    fn reduce(&self) -> Vec<Port>;
+    fn reduce(&mut self) -> Vec<Port>;
 
     fn reduce_step(&self, redex: (Conn, Conn));
 }

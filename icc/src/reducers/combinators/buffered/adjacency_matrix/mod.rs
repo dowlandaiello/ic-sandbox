@@ -3,10 +3,15 @@ use super::{
     Cell, NetBuffer,
 };
 use crate::parser::ast_combinators::Port;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::{
+    collections::VecDeque,
     convert::From,
     iter::DoubleEndedIterator,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
 };
 
 use atomic_reprs::CellRepr;
@@ -27,16 +32,33 @@ macro_rules! conn_maybe_redex {
 
 pub struct ReducerBuilder {
     tx_redexes: Sender<(Conn, Conn)>,
+
+    #[cfg(feature = "threadpool")]
+    pool: ThreadPoolBuilder,
 }
 
 impl ReducerBuilder {
     pub fn new_in_redex_loop() -> (Receiver<(Conn, Conn)>, Self) {
         let (tx, rx) = mpsc::channel();
 
-        (rx, Self { tx_redexes: tx })
+        (
+            rx,
+            Self {
+                tx_redexes: tx,
+                #[cfg(feature = "threadpool")]
+                pool: Default::default(),
+            },
+        )
     }
 
-    pub fn with_init_net(self, net: Port) -> CapacitiedBufferedMatrixReducerBuilder {
+    #[cfg(feature = "threadpool")]
+    pub fn with_threadpool_builder(mut self, builder: ThreadPoolBuilder) -> Self {
+        self.pool = builder;
+
+        self
+    }
+
+    pub fn with_init_net(self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
         todo!()
     }
 
@@ -45,100 +67,115 @@ impl ReducerBuilder {
 
         CapacitiedBufferedMatrixReducerBuilder {
             tx_redexes: self.tx_redexes,
-            cells,
+            init_redexes: Default::default(),
+            cells: cells.into(),
+            #[cfg(feature = "threadpool")]
+            pool: self.pool,
         }
     }
 }
 
 pub struct CapacitiedBufferedMatrixReducerBuilder {
     tx_redexes: Sender<(Conn, Conn)>,
-    cells: Vec<CellRepr>,
+    cells: Arc<[CellRepr]>,
+    init_redexes: VecDeque<(Conn, Conn)>,
+    pool: ThreadPoolBuilder,
 }
 
 impl CapacitiedBufferedMatrixReducerBuilder {
     pub fn finish(self) -> BufferedMatrixReducer {
         BufferedMatrixReducer {
             tx_redexes: self.tx_redexes,
-            cells: self.cells,
+            init_redexes: self.init_redexes,
+            buffer: MatrixBuffer::new(self.cells),
+
+            #[cfg(feature = "threadpool")]
+            pool: self.pool.build().unwrap(),
         }
     }
 }
 
 pub struct BufferedMatrixReducer {
     tx_redexes: Sender<(Conn, Conn)>,
-    cells: Vec<CellRepr>,
+    init_redexes: VecDeque<(Conn, Conn)>,
+    buffer: MatrixBuffer,
+
+    #[cfg(feature = "threadpool")]
+    pool: ThreadPool,
 }
 
-impl BufferedMatrixReducer {
-    fn make_era_commutation(&self, top_ports: impl Iterator<Item = Option<Conn>>) {
-        let eras = [self.push(Cell::Era), self.push(Cell::Era)];
+#[derive(Clone)]
+pub struct MatrixBuffer {
+    cells: Arc<[CellRepr]>,
+}
 
-        top_ports
-            .zip(eras.iter().map(|ptr| Some((*ptr, 0).into())))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, b);
-            });
-    }
-
-    fn make_commutation(
-        &self,
-        top_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
-        bottom_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
-    ) {
-        // left to right
-        let dups = [self.push(Cell::Dup), self.push(Cell::Dup)];
-
-        // Left to right
-        let constrs = [self.push(Cell::Constr), self.push(Cell::Constr)];
-
-        top_ports
-            .zip(dups.iter().map(|ptr| (0, ptr)))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, Some::<Conn>((b.0, *b.1).into()));
-            });
-        bottom_ports
-            .rev()
-            .zip(constrs.iter().map(|ptr| (0, ptr)))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, Some::<Conn>((b.0, *b.1).into()));
-            });
-
-        let conn_left = ((dups[0], 2), (constrs[0], 1));
-        let conn_right = ((dups[1], 1), (constrs[1], 2));
-        let conn_middle_left = ((dups[0], 1), (constrs[1], 1));
-        let conn_middle_right = ((dups[1], 2), (constrs[0], 2));
-
-        let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
-
-        conns.iter().for_each(|(a, b)| {
-            conn_maybe_redex!(self, Some::<Conn>((*a).into()), Some::<Conn>((*b).into()));
-        });
+impl MatrixBuffer {
+    fn new(cells: Arc<[CellRepr]>) -> Self {
+        Self { cells }
     }
 }
 
-impl Reducer for BufferedMatrixReducer {
-    fn readback(&self) -> Vec<Port> {
+impl NetBuffer for MatrixBuffer {
+    fn push(&self, c: Cell) -> Ptr {
         todo!()
     }
 
-    fn reduce(&self) -> Vec<Port> {
+    fn delete(&self, p: Ptr) {
         todo!()
     }
 
-    // Era annihilation, alpha-era comm., alpha annihilation can only decrease the number of cells
-    // no extra allocation is necessary there
-    // Commutation of constr and dup can increase the number of cells, as the interaction is between
-    // two agents, but 4 agents are produced.
+    fn connect(&self, from: Option<Conn>, to: Option<Conn>) {
+        todo!()
+    }
+
+    fn get_conn(&self, from: usize, to: usize) -> Option<(Conn, Conn)> {
+        let from_cell = &self.cells[from];
+        let to_cell = &self.cells[to];
+
+        let a_conn = from_cell
+            .iter_ports()
+            .filter_map(|x| x)
+            .filter(|x| x.cell == to)
+            .next()?;
+        let b_conn = to_cell.load_port_i(a_conn.port)?;
+
+        Some((a_conn, b_conn))
+    }
+
+    fn get_cell(&self, idx: usize) -> Cell {
+        let elem = &self.cells[idx];
+        elem.load_discriminant_uninit_var().unwrap()
+    }
+
+    fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
+        let cell_repr = &self.cells[cell];
+
+        cell_repr.iter_ports()
+    }
+
+    fn primary_port(&self, cell: usize) -> Option<Conn> {
+        todo!()
+    }
+}
+
+#[derive(Clone)]
+pub struct ReductionWorker {
+    buffer: MatrixBuffer,
+    tx_redexes: Sender<(Conn, Conn)>,
+}
+
+impl ReductionWorker {
     fn reduce_step(&self, redex: (Conn, Conn)) {
         let a_id = redex.0.cell;
         let b_id = redex.0.cell;
 
-        let pair = (self.get_cell(a_id), self.get_cell(b_id));
+        let pair = (self.buffer.get_cell(a_id), self.buffer.get_cell(b_id));
 
         match pair {
             // Annihilation of alpha-alpha
             (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
-                let (top_ports, bottom_ports) = (self.iter_ports(a_id), self.iter_ports(b_id));
+                let (top_ports, bottom_ports) =
+                    (self.buffer.iter_ports(a_id), self.buffer.iter_ports(b_id));
 
                 // Remember, bottom ports is flipped due to orientation
                 top_ports.zip(bottom_ports).for_each(|(a, b)| {
@@ -179,61 +216,113 @@ impl Reducer for BufferedMatrixReducer {
     }
 }
 
-impl NetBuffer for BufferedMatrixReducer {
+impl BufferedMatrixReducer {
+    #[cfg(feature = "threadpool")]
+    fn dispatch_reduction(&self, redex: (Conn, Conn)) {
+        let worker = ReductionWorker {
+            cells: self.cells.clone(),
+            tx_redexes: self.tx_redexes.clone(),
+        };
+
+        self.pool.spawn(|| worker.reduce_step(redex))
+    }
+
+    #[cfg(not(feature = "threadpool"))]
+    fn dispatch_reduction(&self, redex: (Conn, Conn)) {
+        self.reduce_step(redex);
+    }
+
+    fn make_era_commutation(&self, top_ports: impl Iterator<Item = Option<Conn>>) {
+        let eras = [self.push(Cell::Era), self.push(Cell::Era)];
+
+        top_ports
+            .zip(eras.iter().map(|ptr| Some((*ptr, 0).into())))
+            .for_each(|(a, b)| {
+                conn_maybe_redex!(self, a, b);
+            });
+    }
+
+    fn make_commutation(
+        &self,
+        top_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
+        bottom_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
+    ) {
+        // left to right
+        let dups = [self.push(Cell::Dup), self.push(Cell::Dup)];
+
+        // Left to right
+        let constrs = [self.push(Cell::Constr), self.push(Cell::Constr)];
+
+        top_ports
+            .zip(dups.iter().map(|ptr| {
+                Some(Conn {
+                    cell: *ptr,
+                    port: 0,
+                })
+            }))
+            .for_each(|(a, b)| {
+                conn_maybe_redex!(self, a, b);
+            });
+        bottom_ports
+            .rev()
+            .zip(constrs.iter().map(|ptr| {
+                Some(Conn {
+                    cell: *ptr,
+                    port: 0,
+                })
+            }))
+            .for_each(|(a, b)| {
+                conn_maybe_redex!(self, a, b);
+            });
+
+        let conn_left = ((dups[0], 2), (constrs[0], 1));
+        let conn_right = ((dups[1], 1), (constrs[1], 2));
+        let conn_middle_left = ((dups[0], 1), (constrs[1], 1));
+        let conn_middle_right = ((dups[1], 2), (constrs[0], 2));
+
+        let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
+
+        conns.iter().for_each(|(a, b)| {
+            conn_maybe_redex!(self, Some::<Conn>((*a).into()), Some::<Conn>((*b).into()));
+        });
+    }
+}
+
+impl Reducer for BufferedMatrixReducer {
     fn push_active_pair(&self, lhs: Conn, rhs: Conn) {
         self.tx_redexes.send((lhs, rhs)).unwrap();
     }
 
-    fn push(&self, c: Cell) -> Ptr {
+    fn readback(&self) -> Vec<Port> {
         todo!()
     }
 
-    fn delete(&self, p: Ptr) {
-        todo!()
+    fn reduce_step(&self, redex: (Conn, Conn)) {
+        self.dispatch_reduction(redex)
     }
 
-    fn connect(&self, from: Option<Conn>, to: Option<Conn>) {
-        todo!()
-    }
+    fn reduce(&mut self) -> Vec<Port> {
+        let (tx, rx) = mpsc::channel();
 
-    fn get_conn(&self, from: usize, to: usize) -> Option<(Conn, Conn)> {
-        let from_conn = self.conns[from][to].load().unwrap();
-        let to_conn = self.conns[to][from].load().unwrap();
+        self.tx_redexes = tx.clone();
 
-        from_conn
-            .map(|port| Conn { cell: to, port })
-            .zip(to_conn.map(|port| Conn { cell: from, port }))
-    }
-
-    fn get_cell(&self, idx: usize) -> Cell {
-        let elem = &self.cells[idx];
-        let disc = elem.load().unwrap();
-
-        match disc {
-            0 => Cell::Constr,
-            1 => Cell::Dup,
-            2 => Cell::Era,
-
-            // This will be unique, always
-            _ => Cell::Var(idx),
+        // Push all redexes
+        while let Some(x) = self.init_redexes.pop_front() {
+            tx.send(x);
         }
+
+        // Spawn all results
+        while let Some(next) = rx.recv() {
+            self.dispatch_reduction(next);
+        }
+
+        self.readback()
     }
 
-    fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
-        let ports = &self.conns[cell];
-        ports.iter().enumerate().filter_map(|(other_id, x)| {
-            Some((other_id, x.load()?)).map(|(other_id, x)| {
-                x.map(|port| Conn {
-                    cell: other_id,
-                    port,
-                })
-            })
-        })
-    }
-
-    fn primary_port(&self, cell: usize) -> Option<Conn> {
-        todo!()
-    }
+    // Era annihilation, alpha-era comm., alpha annihilation can only decrease the number of cells
+    // no extra allocation is necessary there
+    // Commutation of constr and dup can increase the number of cells, as the interaction is between
+    // two agents, but 4 agents are produced.
 }
 
 impl From<Port> for BufferedMatrixReducer {

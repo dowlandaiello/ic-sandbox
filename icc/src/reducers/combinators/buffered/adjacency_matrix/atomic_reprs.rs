@@ -71,7 +71,7 @@ pub(crate) struct CellRepr {
     aux_ports: [ConnRepr; 2],
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub(crate) struct CellBuilder {
     discriminant: Option<Cell>,
     primary_port: Option<Conn>,
@@ -155,6 +155,15 @@ impl CellRepr {
         self.primary_port.load()
     }
 
+    pub(crate) fn load_port_i(&self, i: u8) -> Option<Conn> {
+        match i {
+            0 => self.load_primary_port(),
+            1 => self.load_aux_port(0),
+            2 => self.load_aux_port(1),
+            _ => panic!("port out of bounds"),
+        }
+    }
+
     pub(crate) fn load_aux_port(&self, i: usize) -> Option<Conn> {
         self.aux_ports[i].load()
     }
@@ -233,31 +242,31 @@ fn store_optional_usize(u: Option<usize>) -> AtomicUsize {
 }
 
 fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
-    let u = u.load(DEFAULT_ORDERING);
+    let mut u = u.load(DEFAULT_ORDERING);
 
-    let mut empty = u & 0b1;
+    let empty = u & 0b1;
 
     if empty == 1 {
         return None;
     }
 
-    empty <<= 1;
+    u >>= 1;
 
-    Some(empty)
+    Some(u)
 }
 
 fn load_optional_usize(u: &AtomicUsize) -> Option<usize> {
-    let u = u.load(DEFAULT_ORDERING);
+    let mut u = u.load(DEFAULT_ORDERING);
 
-    let mut empty = u & 0b1;
+    let empty = u & 0b1;
 
     if empty == 1 {
         return None;
     }
 
-    empty <<= 1;
+    u >>= 1;
 
-    Some(empty)
+    Some(u)
 }
 
 #[cfg(test)]
@@ -265,8 +274,23 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_load_store_helpers() {
+        assert_eq!(load_optional_u8(&store_optional_u8(None)), None);
+
+        (0..100).for_each(|x| {
+            assert_eq!(load_optional_u8(&store_optional_u8(Some(x))), Some(x));
+        });
+
+        assert_eq!(load_optional_usize(&store_optional_usize(None)), None);
+
+        (0..100).for_each(|x| {
+            assert_eq!(load_optional_usize(&store_optional_usize(Some(x))), Some(x));
+        });
+    }
+
+    #[test]
     fn test_reprs() {
-        let test_cell_repr_with = |mut x: CellBuilder| {
+        let test_cell_repr_with = |x: CellBuilder| {
             let x_2 = x;
 
             let repr = x.finish();
