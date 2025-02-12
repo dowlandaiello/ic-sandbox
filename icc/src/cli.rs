@@ -11,7 +11,10 @@ use inetlib::{
         parser_combinators::{self},
     },
     preprocessor,
-    reducers::combinators::{buffered::adjacency_list::BufferedListReducer, Reducer},
+    reducers::combinators::{
+        buffered::adjacency_matrix::{BufferedMatrixReducer, ReducerBuilder},
+        Reducer,
+    },
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -106,8 +109,12 @@ pub fn repl() {
                         Ok("step") => {
                             let names = Arc::new(NameIter::default());
 
-                            let reducer = BufferedListReducer::from(parsed.nets.remove(0));
-                            let res = reducer.reduce_step();
+                            let (rx, builder) = ReducerBuilder::new_in_redex_loop();
+                            let reducer = builder.with_init_net(parsed.nets[0]).finish();
+
+                            let next = rx.recv().unwrap();
+
+                            let res = reducer.reduce_step(next);
 
                             println!(
                                 "{}",
@@ -119,7 +126,7 @@ pub fn repl() {
                             );
                         }
                         Ok("reduce") => {
-                            let reducer = BufferedListReducer::from(parsed.nets.remove(0));
+                            let reducer = BufferedMatrixReducer::from(parsed.nets.remove(0));
                             let res = reducer.reduce();
 
                             println!(
