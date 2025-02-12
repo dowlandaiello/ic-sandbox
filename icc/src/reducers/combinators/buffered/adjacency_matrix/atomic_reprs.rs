@@ -9,6 +9,20 @@ pub(crate) struct ConnRepr {
 }
 
 impl ConnRepr {
+    fn store(&self, c: Option<Conn>) {
+        if let Some(c) = c {
+            self.cell
+                .store(store_optional_usize(&c.cell), DEFAULT_ORDERING);
+            self.port
+                .store(store_optional_u8(&c.port), DEFAULT_ORDERING);
+
+            return;
+        }
+
+        self.port.store(0b1, DEFAULT_ORDERING);
+        self.cell.store(0b1, DEFAULT_ORDERING);
+    }
+
     fn load_port(&self) -> Option<u8> {
         load_optional_u8(&self.port)
     }
@@ -155,6 +169,21 @@ impl CellRepr {
         self.primary_port.load()
     }
 
+    pub(crate) fn store_port_i(&self, i: u8, c: Option<Conn>) {
+        match i {
+            0 => {
+                self.primary_port.store(c);
+            }
+            1 => {
+                self.aux_ports[0].store(c);
+            }
+            2 => {
+                self.aux_ports[1].store(c);
+            }
+            _ => panic!("port out of range"),
+        }
+    }
+
     pub(crate) fn load_port_i(&self, i: u8) -> Option<Conn> {
         match i {
             0 => self.load_primary_port(),
@@ -222,8 +251,10 @@ impl CellRepr {
         PortWalker::new(self)
     }
 
-    pub(crate) fn store_discriminant_uninit_var(c: Option<Cell>) -> AtomicU8 {
-        store_optional_u8(c.map(|cell| cell.discriminant_uninit_var()))
+    pub(crate) fn store_discriminant(&self, c: Option<Cell>) {
+        self.discriminant.store(store_optional_u8(
+            c.map(|cell| cell.discriminant_uninit_var()),
+        ))
     }
 }
 
