@@ -38,8 +38,6 @@ impl Cell {
 pub trait NetBuffer {
     fn push(&self, c: Cell) -> Ptr;
 
-    fn push_active_pair(&self, lhs: Conn, rhs: Conn);
-
     fn delete(&self, p: Ptr);
 
     fn connect(&self, from: Option<Conn>, to: Option<Conn>);
