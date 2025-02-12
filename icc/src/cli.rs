@@ -91,7 +91,7 @@ pub fn repl() {
 
         match readline {
             Ok(line) => {
-                let mut parsed = assert_parse_literal_ok(line.as_str());
+                let parsed = assert_parse_literal_ok(line.as_str());
 
                 loop {
                     let cmd = rl.readline(&format!(
@@ -124,7 +124,10 @@ pub fn repl() {
                             );
                         }
                         Ok("reduce") => {
-                            let reducer = BufferedMatrixReducer::from(parsed.nets.remove(0));
+                            let mut reducer = ReducerBuilder::new_in_redex_loop()
+                                .1
+                                .with_init_net(&parsed.nets[0])
+                                .finish();
                             let res = reducer.reduce();
 
                             println!(

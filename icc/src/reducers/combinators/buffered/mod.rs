@@ -36,6 +36,8 @@ impl Cell {
 }
 
 pub trait NetBuffer {
+    fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a;
+
     fn push(&self, c: Cell) -> Ptr;
 
     fn delete(&self, p: Ptr);

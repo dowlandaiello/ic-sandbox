@@ -11,10 +11,8 @@ pub(crate) struct ConnRepr {
 impl ConnRepr {
     fn store(&self, c: Option<Conn>) {
         if let Some(c) = c {
-            self.cell
-                .store(store_optional_usize(&c.cell), DEFAULT_ORDERING);
-            self.port
-                .store(store_optional_u8(&c.port), DEFAULT_ORDERING);
+            self.cell.store(c.cell << 1, DEFAULT_ORDERING);
+            self.port.store(c.port << 1, DEFAULT_ORDERING);
 
             return;
         }
@@ -252,9 +250,11 @@ impl CellRepr {
     }
 
     pub(crate) fn store_discriminant(&self, c: Option<Cell>) {
-        self.discriminant.store(store_optional_u8(
-            c.map(|cell| cell.discriminant_uninit_var()),
-        ))
+        if let Some(c) = c.map(|c| c.discriminant_uninit_var()) {
+            self.discriminant.store(c << 1, DEFAULT_ORDERING);
+        } else {
+            self.discriminant.store(0b1, DEFAULT_ORDERING);
+        }
     }
 }
 

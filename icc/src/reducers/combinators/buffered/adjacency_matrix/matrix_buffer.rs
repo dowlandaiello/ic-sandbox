@@ -19,7 +19,7 @@ pub struct MatrixBuffer {
 }
 
 impl MatrixBuffer {
-    fn new(cells: Arc<[CellRepr]>) -> Self {
+    pub(crate) fn new(cells: Arc<[CellRepr]>) -> Self {
         // Should be in contiguous order. All remaining get overwritten
         let len = cells.len();
 
@@ -45,6 +45,26 @@ impl MatrixBuffer {
 }
 
 impl NetBuffer for MatrixBuffer {
+    fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a {
+        self.cells
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| !x.is_empty())
+            .map(move |(i, x)| {
+                x.iter_ports()
+                    .filter_map(|x| x)
+                    .filter_map(move |Conn { cell, .. }| {
+                        let (conn_a, conn_b) = self.get_conn(cell, i)?;
+
+                        if conn_a.port == 0 && conn_b.port == 0 {
+                            Some((conn_a, conn_b))
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .flatten()
+    }
     fn push(&self, c: Cell) -> Ptr {
         self.len.fetch_add(1, Ordering::SeqCst);
 

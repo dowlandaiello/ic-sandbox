@@ -8,8 +8,10 @@ mod atomic_reprs;
 mod matrix_buffer;
 mod reducer;
 
-use reducer::BufferedMatrixReducer;
+pub use reducer::{BufferedMatrixReducer, ReducerBuilder};
 
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
-    BufferedMatrixReducer::from(e.clone()).reduce()
+    let (_, builder) = ReducerBuilder::new_in_redex_loop();
+
+    builder.with_init_net(e).finish().reduce()
 }
