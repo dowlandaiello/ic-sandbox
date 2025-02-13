@@ -57,22 +57,60 @@ impl ReducerBuilder {
 
     pub fn with_init_net(self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
         let n_nodes = net.iter_tree().count();
-        let cells = Vec::with_capacity(n_nodes * n_nodes);
+
+        let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
+
+        let slots_for_ast_elems: BTreeMap<usize, usize> = net
+            .iter_tree()
+            .enumerate()
+            .map(|(i, elem)| {
+                let discriminant = match &*elem.borrow() {
+                    Expr::Constr(_) => Cell::Constr,
+                    Expr::Dup(_) => Cell::Dup,
+                    Expr::Era(_) => Cell::Era,
+                    Expr::Var(_) => Cell::Var(i),
+                };
+
+                (elem.id, buff.push(discriminant))
+            })
+            .collect();
+
+        // Wire nodes
+        net.iter_tree().for_each(|elem| {
+            let slot = slots_for_ast_elems.get(&elem.id).unwrap();
+
+            elem.iter_ports()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, x)| Some((i, x?)))
+                .for_each(|(port_self, (port_other, p))| {
+                    let other_slot = slots_for_ast_elems.get(&p.id).unwrap();
+
+                    buff.connect(
+                        Some(Conn {
+                            cell: *slot,
+                            port: port_self as u8,
+                        }),
+                        Some(Conn {
+                            cell: *other_slot,
+                            port: port_other as u8,
+                        }),
+                    );
+                });
+        });
 
         CapacitiedBufferedMatrixReducerBuilder {
             tx_redexes: self.tx_redexes,
-            cells: MatrixBuffer::new(cells.into()),
+            cells: buff,
             #[cfg(feature = "threadpool")]
             pool: self.pool,
         }
     }
 
     pub fn with_capacity_nodes(self, capacity: usize) -> CapacitiedBufferedMatrixReducerBuilder {
-        let cells = Vec::with_capacity(capacity * capacity);
-
         CapacitiedBufferedMatrixReducerBuilder {
             tx_redexes: self.tx_redexes,
-            cells: MatrixBuffer::new(cells.into()),
+            cells: MatrixBuffer::new_with_capacity_nodes(capacity),
             #[cfg(feature = "threadpool")]
             pool: self.pool,
         }
@@ -117,6 +155,8 @@ impl ReductionWorker {
         let b_id = redex.0.cell;
 
         let pair = (self.buffer.get_cell(a_id), self.buffer.get_cell(b_id));
+
+        tracing::trace!("reducing {} >< {}", pair.0, pair.1);
 
         match pair {
             // Annihilation of alpha-alpha
@@ -271,10 +311,8 @@ impl Reducer for BufferedMatrixReducer {
             .collect();
 
         // Link them
-        self.buffer.iter_cells().for_each(|i| {
-            let entry = ports_for_cells.get(&i).unwrap();
-
-            let mut ports = self.buffer.iter_ports(i);
+        ports_for_cells.iter().for_each(|(i, entry)| {
+            let mut ports = self.buffer.iter_ports(*i);
 
             if let Some(conn_p) = ports.next().flatten() {
                 let other_node = ports_for_cells.get(&conn_p.cell).unwrap();
@@ -318,8 +356,8 @@ impl Reducer for BufferedMatrixReducer {
         self.tx_redexes = tx.clone();
 
         // Push all redexes
-        while let Some(x) = self.buffer.iter_redexes().next() {
-            tx.send(x).unwrap();
+        for redex in self.buffer.iter_redexes() {
+            tx.send(redex).unwrap();
         }
 
         // Spawn all results
@@ -328,5 +366,184 @@ impl Reducer for BufferedMatrixReducer {
         }
 
         self.readback()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::parser::parser_combinators as parser;
+    use chumsky::Parser;
+
+    #[test_log::test]
+    fn test_readback_manual_matrix() {
+        let mut matrix = ReducerBuilder::new_in_redex_loop()
+            .1
+            .with_capacity_nodes(6)
+            .finish();
+        let constrs = (
+            matrix.buffer.push(Cell::Constr),
+            matrix.buffer.push(Cell::Constr),
+        );
+
+        assert_ne!(constrs.0, constrs.1);
+
+        let vars_top = (
+            matrix.buffer.push(Cell::Var(0)),
+            matrix.buffer.push(Cell::Var(1)),
+        );
+        let vars_bot = (
+            matrix.buffer.push(Cell::Var(2)),
+            matrix.buffer.push(Cell::Var(3)),
+        );
+
+        let unique_ids = BTreeSet::from_iter([
+            constrs.0, constrs.1, vars_top.0, vars_top.1, vars_bot.0, vars_bot.1,
+        ]);
+        assert_eq!(unique_ids.len(), 6);
+
+        matrix.buffer.connect(
+            Some(Conn {
+                cell: constrs.0,
+                port: 0,
+            }),
+            Some(Conn {
+                cell: constrs.1,
+                port: 0,
+            }),
+        );
+
+        assert_eq!(
+            matrix.buffer.primary_port(constrs.0),
+            Some(Conn {
+                cell: constrs.1,
+                port: 0
+            })
+        );
+        assert_eq!(
+            matrix.buffer.primary_port(constrs.1),
+            Some(Conn {
+                cell: constrs.0,
+                port: 0
+            })
+        );
+
+        matrix.buffer.connect(
+            Some(Conn {
+                cell: vars_top.0,
+                port: 0,
+            }),
+            Some(Conn {
+                cell: constrs.0,
+                port: 1,
+            }),
+        );
+        matrix.buffer.connect(
+            Some(Conn {
+                cell: vars_top.1,
+                port: 0,
+            }),
+            Some(Conn {
+                cell: constrs.0,
+                port: 2,
+            }),
+        );
+        assert_eq!(
+            matrix.buffer.iter_ports(constrs.0).collect::<Vec<_>>(),
+            vec![
+                Some(Conn {
+                    cell: constrs.1,
+                    port: 0
+                }),
+                Some(Conn {
+                    cell: vars_top.0,
+                    port: 0,
+                }),
+                Some(Conn {
+                    cell: vars_top.1,
+                    port: 0,
+                })
+            ]
+        );
+
+        let res = matrix.readback().remove(0);
+        assert_eq!(res.to_string(), "Constr[@0](2, 3) >< Constr[@1]()");
+    }
+
+    #[test_log::test]
+    fn test_readback_matrix() {
+        let cases = [
+	    "Constr[@1](a, b) >< Constr[@2](c, d)",
+	    "Dup[@1](a, b) >< Dup[@2](c, d)",
+	    "Era[@1]() >< Era[@2]()",
+	    "Constr[@1](a, b) >< Era[@2]()",
+	    "Dup[@1](a, b) >< Era[@2]()",
+	    "Constr[@1](a, b) >< Dup[@2](d, c)",
+	    "Dup[@5](a, Constr[@6](d, @5#1, Dup[@4](b, @6#2, Constr[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)",
+	    "Dup[@1](a, b) >< Constr[@2](d, c)",
+	    "Constr[@5](a, Dup[@6](d, @5#1, Constr[@4](b, @6#2, Dup[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)",
+        ];
+
+        for case in cases {
+            let parsed = parser::parser()
+                .parse(parser::lexer().parse(case).unwrap())
+                .unwrap();
+
+            let (_, builder) = ReducerBuilder::new_in_redex_loop();
+            let reducer = builder.with_init_net(&parsed[0].0).finish();
+
+            println!("{:#?}", reducer.buffer);
+
+            let res = reducer.readback();
+
+            assert_eq!(res[0].orient().to_string(), parsed[0].orient().to_string());
+        }
+    }
+
+    #[test_log::test]
+    fn test_reduce_matrix() {
+        let cases = [
+            (
+                "Constr[@1](a, b) >< Constr[@2](c, d)",
+                BTreeSet::from_iter(["c ~ a", "d ~ b"]),
+            ),
+            ("Dup[@1](a, b) >< Dup[@2](c, d)", BTreeSet::from_iter(["c ~ a", "d ~ b"])),
+            ("Era[@1]() >< Era[@2]()", BTreeSet::from_iter([])),
+            (
+                "Constr[@1](a, b) >< Era[@2]()",
+                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+            ),
+            (
+                "Dup[@1](a, b) >< Era[@2]()",
+                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+            ),
+            (
+                "Constr[@1](a, b) >< Dup[@2](d, c)",
+                BTreeSet::from_iter(["Dup[@5](a, Constr[@6](d, @5#1, Dup[@4](b, @6#2, Constr[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
+            ),
+            (
+                "Dup[@1](a, b) >< Constr[@2](d, c)",
+                BTreeSet::from_iter(["Constr[@5](a, Dup[@6](d, @5#1, Constr[@4](b, @6#2, Dup[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
+            ),
+        ];
+
+        for (case, expected) in cases {
+            let parsed = parser::parser()
+                .parse(parser::lexer().parse(case).unwrap())
+                .unwrap();
+
+            let (rx, builder) = ReducerBuilder::new_in_redex_loop();
+            let mut reducer = builder.with_init_net(&parsed[0].0).finish();
+
+            let res = reducer.reduce();
+
+            assert_eq!(
+                res.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>(),
+                expected
+                    .iter()
+                    .map(|x| x.to_string())
+                    .collect::<BTreeSet<_>>(),
+            );
+        }
     }
 }

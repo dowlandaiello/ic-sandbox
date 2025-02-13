@@ -5,6 +5,7 @@ use super::{
 };
 use std::{
     collections::{BTreeSet, VecDeque},
+    fmt,
     iter::DoubleEndedIterator,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -19,24 +20,53 @@ pub struct MatrixBuffer {
     next_free: Arc<AtomicUsize>,
 }
 
-impl MatrixBuffer {
-    pub(crate) fn new(cells: Arc<[CellRepr]>) -> Self {
-        // Should be in contiguous order. All remaining get overwritten
-        let len = cells.len();
+impl fmt::Debug for MatrixBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        #[derive(Debug)]
+        struct OwnedCell {
+            pos: usize,
+            discriminant: Cell,
+            primary_port: Option<Conn>,
+            aux_ports: [Option<Conn>; 2],
+        }
 
-        // Capacitied to N^2, we should always have room at the beginning
-        let next_free = cells
+        let cell_debugs = self
+            .cells
             .iter()
             .enumerate()
-            .filter(|(_, x)| x.is_empty())
-            .map(|(i, _)| i)
-            .next()
-            .expect("out of matrix storage at initialization");
+            .filter_map(|(i, repr)| {
+                let disc = repr.load_discriminant_uninit_var().map(|c| match c {
+                    Cell::Var(_) => Cell::Var(i),
+                    x => x,
+                })?;
+
+                Some(OwnedCell {
+                    pos: i,
+                    discriminant: disc,
+                    primary_port: repr.load_primary_port(),
+                    aux_ports: [repr.load_aux_port(0), repr.load_aux_port(1)],
+                })
+            })
+            .collect::<Vec<_>>();
+
+        f.debug_struct("MatrixBuffer")
+            .field("cells", &cell_debugs)
+            .field("len", &self.len.load(Ordering::Relaxed))
+            .field("next_free", &self.get_next_free())
+            .finish()
+    }
+}
+
+impl MatrixBuffer {
+    pub(crate) fn new_with_capacity_nodes(capacity: usize) -> Self {
+        // Capacitied to N^2, we should always have room at the beginning
 
         Self {
-            cells,
-            len: AtomicUsize::new(len).into(),
-            next_free: AtomicUsize::new(next_free).into(),
+            cells: (0..capacity * capacity)
+                .map(|_| CellRepr::default())
+                .collect(),
+            len: AtomicUsize::new(0).into(),
+            next_free: AtomicUsize::new(0).into(),
         }
     }
 
@@ -100,24 +130,62 @@ impl NetBuffer for MatrixBuffer {
     }
 
     fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a {
-        self.cells
-            .iter()
-            .enumerate()
-            .filter(|(_, x)| !x.is_empty())
-            .map(move |(i, x)| {
-                x.iter_ports()
-                    .filter_map(|x| x)
-                    .filter_map(move |Conn { cell, .. }| {
-                        let (conn_a, conn_b) = self.get_conn(cell, i)?;
+        struct RedexVisitor<'a> {
+            seen: BTreeSet<BTreeSet<Conn>>,
+            pos: Ptr,
+            view: &'a MatrixBuffer,
+        }
 
-                        if conn_a.port == 0 && conn_b.port == 0 {
-                            Some((conn_a, conn_b))
-                        } else {
-                            None
+        impl<'a> RedexVisitor<'a> {
+            fn new(view: &'a MatrixBuffer) -> Self {
+                Self {
+                    seen: Default::default(),
+                    pos: Default::default(),
+                    view,
+                }
+            }
+        }
+
+        impl<'a> Iterator for RedexVisitor<'a> {
+            type Item = (Conn, Conn);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    if self.pos >= self.view.cells.len() {
+                        return None;
+                    }
+
+                    let redex = self
+                        .view
+                        .iter_ports(self.pos)
+                        .filter_map(|x| x)
+                        .filter_map(|Conn { cell, .. }| {
+                            let (conn_a, conn_b) = self.view.get_conn(cell, self.pos)?;
+
+                            if conn_a.port == 0 && conn_b.port == 0 {
+                                Some((conn_a, conn_b))
+                            } else {
+                                None
+                            }
+                        })
+                        .next();
+
+                    self.pos += 1;
+
+                    if let Some(redex) = redex {
+                        let record = BTreeSet::from_iter([redex.0, redex.1]);
+
+                        if !self.seen.contains(&record) {
+                            self.seen.insert(record);
+
+                            return Some(redex);
                         }
-                    })
-            })
-            .flatten()
+                    }
+                }
+            }
+        }
+
+        RedexVisitor::new(self)
     }
 
     fn push(&self, c: Cell) -> Ptr {

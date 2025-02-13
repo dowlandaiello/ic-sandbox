@@ -8,6 +8,15 @@ pub(crate) struct ConnRepr {
     cell: AtomicUsize,
 }
 
+impl Default for ConnRepr {
+    fn default() -> Self {
+        Self {
+            port: store_optional_u8(None),
+            cell: store_optional_usize(None),
+        }
+    }
+}
+
 impl ConnRepr {
     fn store(&self, c: Option<Conn>) {
         if let Some(c) = c {
@@ -81,6 +90,16 @@ pub(crate) struct CellRepr {
     discriminant: AtomicU8,
     primary_port: ConnRepr,
     aux_ports: [ConnRepr; 2],
+}
+
+impl Default for CellRepr {
+    fn default() -> Self {
+        Self {
+            discriminant: store_optional_u8(None),
+            primary_port: Default::default(),
+            aux_ports: [Default::default(), Default::default()],
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -345,7 +364,7 @@ mod test {
         (0..3)
             .map(|x| Cell::from_discriminant_uninit_var(x))
             .for_each(|disc| {
-                (0..100).for_each(|x| {
+                (0..100).for_each(|_| {
                     test_cell_repr_with(
                         CellBuilder::default()
                             .with_discriminant(disc)

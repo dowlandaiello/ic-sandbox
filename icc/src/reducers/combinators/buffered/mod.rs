@@ -1,5 +1,5 @@
 use super::{Conn, Ptr};
-use std::iter::DoubleEndedIterator;
+use std::{fmt, iter::DoubleEndedIterator};
 
 pub mod adjacency_matrix;
 
@@ -12,6 +12,17 @@ pub enum Cell {
     // Vars have unique, monotonically increasing
     // discriminants as well
     Var(usize),
+}
+
+impl fmt::Display for Cell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Constr => write!(f, "Constr"),
+            Self::Dup => write!(f, "Dup"),
+            Self::Era => write!(f, "Era"),
+            Self::Var(v) => write!(f, "{}", v),
+        }
+    }
 }
 
 impl Cell {
