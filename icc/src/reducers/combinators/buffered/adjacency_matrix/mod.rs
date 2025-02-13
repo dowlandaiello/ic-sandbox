@@ -11,7 +11,7 @@ mod reducer;
 pub use reducer::{BufferedMatrixReducer, ReducerBuilder};
 
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
-    let builder = ReducerBuilder::default();
+    let (_, builder) = ReducerBuilder::new_in_redex_loop();
 
     builder.with_init_net(e).finish().reduce()
 }

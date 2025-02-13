@@ -1162,6 +1162,8 @@ mod test {
 
         let combinated = k_comb.combinate(&mut names);
 
+        println!("{}", combinated);
+
         assert!(matches!(
             OwnedNetBuilder::decombinate(&combinated).unwrap(),
             SkExpr::K(None, None)
@@ -1188,7 +1190,7 @@ mod test {
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
             .encode(&mut names);
         k_comb.expand_step(&mut names);
-        let _ = k_comb.combinate(&mut names);
+        let res = k_comb.combinate(&mut names);
     }
 
     #[test_log::test]
@@ -1204,7 +1206,7 @@ mod test {
         );
         d_comb.expand_step(&mut names);
 
-        let _ = d_comb.combinate(&mut names);
+        let combinated = d_comb.combinate(&mut names);
     }
 
     #[test_log::test]
