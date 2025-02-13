@@ -1,11 +1,16 @@
 use super::{
-    super::{super::Reducer, Conn, NetBuffer},
+    super::{super::Reducer, Conn, NetBuffer, Ptr},
     matrix_buffer::MatrixBuffer,
     Cell,
 };
-use crate::parser::ast_combinators::Port;
+use crate::parser::{
+    ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
+    ast_lafont::Ident,
+    naming::NameIter,
+};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::{
+    collections::{BTreeMap, BTreeSet},
     iter::DoubleEndedIterator,
     sync::mpsc::{self, Receiver, Sender},
 };
@@ -16,7 +21,7 @@ macro_rules! conn_maybe_redex {
 
         if let Some((a, b)) = $a.zip($b) {
             if a.port == 0 && b.port == 0 {
-                $self.tx_redexes.send((a, b));
+                $self.tx_redexes.send((a, b)).unwrap();
             }
         }
     };
@@ -241,7 +246,66 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn readback(&self) -> Vec<Port> {
-        todo!()
+        let mut names = NameIter::default();
+
+        // Make ports before linking, link later
+        let mut ports_for_cells: BTreeMap<Ptr, Port> = self
+            .buffer
+            .iter_cells()
+            .map(|i| (i, self.buffer.get_cell(i)))
+            .map(|(i, discriminant)| {
+                (
+                    i,
+                    match discriminant {
+                        Cell::Constr => Expr::Constr(Constructor::new()).into_port(&mut names),
+                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port(&mut names),
+                        Cell::Era => Expr::Era(Eraser::new()).into_port(&mut names),
+                        Cell::Var(v) => Expr::Var(Var {
+                            name: Ident(v.to_string()),
+                            port: None,
+                        })
+                        .into_port(&mut names),
+                    },
+                )
+            })
+            .collect();
+
+        // Link them
+        self.buffer.iter_cells().for_each(|i| {
+            let entry = ports_for_cells.get(&i).unwrap();
+
+            let mut ports = self.buffer.iter_ports(i);
+
+            if let Some(conn_p) = ports.next().flatten() {
+                let other_node = ports_for_cells.get(&conn_p.cell).unwrap();
+                let ast_conn = (conn_p.port as usize, other_node.clone());
+
+                entry.borrow_mut().set_primary_port(Some(ast_conn));
+            }
+
+            ports
+                .enumerate()
+                .filter_map(|(i, x)| Some((i, x?)))
+                .for_each(|(i, conn_aux)| {
+                    let other_node = ports_for_cells.get(&conn_aux.cell).unwrap();
+                    let ast_conn = (conn_aux.port as usize, other_node.clone());
+
+                    entry.borrow_mut().insert_aux_port(i, Some(ast_conn));
+                });
+        });
+
+        // Find all disjoint nets
+        // TODO: This is really inefficient!
+        self.buffer
+            .iter_cells()
+            .map(|cell_idx| self.buffer.iter_tree(cell_idx).collect::<BTreeSet<_>>())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|tree| {
+                let head_buf_pos = tree.into_iter().next()?;
+                ports_for_cells.remove(&head_buf_pos)
+            })
+            .collect::<Vec<_>>()
     }
 
     fn reduce_step(&self, redex: (Conn, Conn)) {

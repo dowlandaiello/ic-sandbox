@@ -6,15 +6,9 @@ use chumsky::{
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
     bytecode::combinated::CombinatedProgram,
-    parser::{
-        naming::NameIter,
-        parser_combinators::{self},
-    },
+    parser::parser_combinators::{self},
     preprocessor,
-    reducers::combinators::{
-        buffered::adjacency_matrix::{BufferedMatrixReducer, ReducerBuilder},
-        Reducer,
-    },
+    reducers::combinators::{buffered::adjacency_matrix::ReducerBuilder, Reducer},
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -26,7 +20,6 @@ use std::{
     fs::OpenOptions,
     io::{Read, Write},
     path::PathBuf,
-    sync::Arc,
 };
 
 #[derive(Helper, Validator, Highlighter)]

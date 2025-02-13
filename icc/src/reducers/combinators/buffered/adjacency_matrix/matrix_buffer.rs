@@ -4,6 +4,7 @@ use super::{
     Cell, NetBuffer,
 };
 use std::{
+    collections::{BTreeSet, VecDeque},
     iter::DoubleEndedIterator,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -45,6 +46,59 @@ impl MatrixBuffer {
 }
 
 impl NetBuffer for MatrixBuffer {
+    fn iter_tree(&self, p: Ptr) -> impl Iterator<Item = Ptr> {
+        struct TreeWalker<'a> {
+            view: &'a MatrixBuffer,
+            seen: BTreeSet<Ptr>,
+            to_visit: VecDeque<Ptr>,
+        }
+
+        impl<'a> TreeWalker<'a> {
+            fn new(pos: Ptr, view: &'a MatrixBuffer) -> Self {
+                Self {
+                    view,
+                    seen: Default::default(),
+                    to_visit: VecDeque::from_iter([pos]),
+                }
+            }
+        }
+
+        impl<'a> Iterator for TreeWalker<'a> {
+            type Item = Ptr;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.to_visit = self
+                    .to_visit
+                    .drain(..)
+                    .skip_while(|pos| self.seen.contains(&pos))
+                    .collect();
+
+                let pos = self.to_visit.pop_front()?;
+
+                self.seen.insert(pos);
+
+                self.to_visit.extend(
+                    self.view
+                        .iter_ports(pos)
+                        .filter_map(|x| x)
+                        .filter(|Conn { port: _, cell }| !self.seen.contains(&cell))
+                        .map(|Conn { cell, .. }| cell),
+                );
+
+                Some(pos)
+            }
+        }
+
+        TreeWalker::new(p, self)
+    }
+
+    fn iter_cells(&self) -> impl Iterator<Item = Ptr> {
+        self.cells
+            .iter()
+            .enumerate()
+            .filter_map(|(i, x)| if x.is_empty() { None } else { Some(i) })
+    }
+
     fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a {
         self.cells
             .iter()
@@ -65,6 +119,7 @@ impl NetBuffer for MatrixBuffer {
             })
             .flatten()
     }
+
     fn push(&self, c: Cell) -> Ptr {
         self.len.fetch_add(1, Ordering::SeqCst);
 
@@ -123,7 +178,12 @@ impl NetBuffer for MatrixBuffer {
 
     fn get_cell(&self, idx: usize) -> Cell {
         let elem = &self.cells[idx];
-        elem.load_discriminant_uninit_var().unwrap()
+        let cell = elem.load_discriminant_uninit_var().unwrap();
+
+        match cell {
+            Cell::Var(_) => Cell::Var(idx),
+            x => x,
+        }
     }
 
     fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
