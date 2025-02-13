@@ -260,13 +260,13 @@ impl NetBuffer for MatrixBuffer {
         }
     }
 
-    fn iter_aux_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
+    fn iter_aux_ports(&self, cell: usize) -> Option<impl DoubleEndedIterator<Item = Option<Conn>>> {
         let cell_repr = &self.cells[cell];
 
         cell_repr.iter_aux_ports()
     }
 
-    fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
+    fn iter_ports(&self, cell: usize) -> Option<impl DoubleEndedIterator<Item = Option<Conn>>> {
         let cell_repr = &self.cells[cell];
 
         cell_repr.iter_ports()

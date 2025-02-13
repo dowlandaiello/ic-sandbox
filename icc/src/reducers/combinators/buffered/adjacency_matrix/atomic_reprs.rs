@@ -193,6 +193,10 @@ impl<'a> Iterator for PortWalker<'a> {
     type Item = Option<Conn>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.view.is_empty() {
+            return None;
+        }
+
         let res = match self.idx_front {
             3 => {
                 return None;
@@ -209,6 +213,10 @@ impl<'a> Iterator for PortWalker<'a> {
 
 impl<'a> DoubleEndedIterator for PortWalker<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
+        if self.view.is_empty() {
+            return None;
+        }
+
         let res = match self.idx_back {
             0 => {
                 return None;

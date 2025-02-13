@@ -6,6 +6,7 @@ use super::{
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
     ast_lafont::Ident,
+    naming::NameIter,
 };
 use crossbeam_channel::{bounded, Receiver, Sender};
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -328,20 +329,26 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn readback(&self) -> Vec<Port> {
+        let new_names = NameIter::starting_from(self.names.len());
+
         // Make ports before linking, link later
         let mut ports_for_cells: BTreeMap<Ptr, Port> = self
             .buffer
             .iter_cells()
             .map(|i| (i, self.buffer.get_cell(i)))
             .map(|(i, discriminant)| {
-                let name = self.names.get(&i).unwrap();
+                let name = self
+                    .names
+                    .get(&i)
+                    .map(|x| *x)
+                    .unwrap_or_else(|| new_names.next_id());
 
                 (
                     i,
                     match discriminant {
-                        Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(*name),
-                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port_named(*name),
-                        Cell::Era => Expr::Era(Eraser::new()).into_port_named(*name),
+                        Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(name),
+                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port_named(name),
+                        Cell::Era => Expr::Era(Eraser::new()).into_port_named(name),
                         Cell::Var(v) => {
                             let ident = self.idents.get(&v).unwrap().clone();
 
@@ -350,7 +357,7 @@ impl Reducer for BufferedMatrixReducer {
                                 port: None,
                             })
                         }
-                        .into_port_named(*name),
+                        .into_port_named(name),
                     },
                 )
             })
@@ -554,19 +561,19 @@ mod test {
             ("Era[@1]() >< Era[@2]()", BTreeSet::from_iter([])),
             (
                 "Constr[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+                BTreeSet::from_iter(["Era[@4](a)", "Era[@5](b)"]),
             ),
             (
                 "Dup[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+                BTreeSet::from_iter(["Era[@4](a)", "Era[@5](b)"]),
             ),
             (
                 "Constr[@1](a, b) >< Dup[@2](d, c)",
-                BTreeSet::from_iter(["Dup[@5](a, Constr[@6](d, @5#1, Dup[@4](b, @6#2, Constr[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
+                BTreeSet::from_iter(["Dup[@6](a, Constr[@9](d, @6#1, Dup[@7](b, @9#2, Constr[@8](c, @6#2, @7#2)#2)#1)#1, @8#1)"]),
             ),
             (
                 "Dup[@1](a, b) >< Constr[@2](d, c)",
-                BTreeSet::from_iter(["Constr[@5](a, Dup[@6](d, @5#1, Constr[@4](b, @6#2, Dup[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)"]),
+                BTreeSet::from_iter(["Constr[@9](a, Dup[@6](d, @9#1, Constr[@8](b, @6#2, Dup[@7](c, @9#2, @8#2)#2)#1)#1, @7#1)"]),
             ),
         ];
 
@@ -575,13 +582,15 @@ mod test {
                 .parse(parser::lexer().parse(case).unwrap())
                 .unwrap();
 
-            let (rx, builder) = ReducerBuilder::new_in_redex_loop();
+            let (_, builder) = ReducerBuilder::new_in_redex_loop();
             let mut reducer = builder.with_init_net(&parsed[0].0).finish();
 
             let res = reducer.reduce();
 
             assert_eq!(
-                res.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>(),
+                res.iter()
+                    .map(|x| x.orient().to_string())
+                    .collect::<BTreeSet<_>>(),
                 expected
                     .iter()
                     .map(|x| x.to_string())

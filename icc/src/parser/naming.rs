@@ -9,6 +9,14 @@ pub struct NameIter {
 }
 
 impl NameIter {
+    pub fn starting_from(u: usize) -> Self {
+        Self {
+            curr_var: AtomicUsize::new(u),
+            curr_agent: AtomicUsize::new(u),
+            curr_ident: AtomicUsize::new(u),
+        }
+    }
+
     pub fn next_var_name(&self) -> String {
         let ident = self.curr_ident.fetch_add(1, Ordering::SeqCst).to_string();
 
