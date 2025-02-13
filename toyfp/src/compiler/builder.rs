@@ -1477,10 +1477,10 @@ mod test {
                 .map(|x| x.to_string())
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from_iter([
-                "v4 ~ v0".to_owned(),
-                "v5 ~ v1".to_owned(),
-                "v6 ~ v2".to_owned(),
-                "v7 ~ v3".to_owned()
+                "v0 ~ v4".to_owned(),
+                "v1 ~ v5".to_owned(),
+                "v2 ~ v6".to_owned(),
+                "v3 ~ v7".to_owned()
             ])
         );
     }

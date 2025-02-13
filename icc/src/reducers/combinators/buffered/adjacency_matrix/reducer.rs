@@ -8,14 +8,12 @@ use crate::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
-use crossbeam_channel::{bounded, Receiver, Sender};
+use kanal::{unbounded, Receiver, Sender};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter::DoubleEndedIterator,
 };
-
-const MAILBOX_CAPACITY: usize = 0;
 
 macro_rules! conn_maybe_redex {
     ($self:ident, $a:expr, $b:expr) => {
@@ -49,7 +47,7 @@ pub struct ReducerBuilder {
 
 impl ReducerBuilder {
     pub fn new_in_redex_loop() -> (Receiver<(Conn, Conn)>, Self) {
-        let (tx, rx) = bounded(MAILBOX_CAPACITY);
+        let (tx, rx) = unbounded();
 
         (
             rx,
@@ -182,7 +180,7 @@ pub struct ReductionWorker {
 }
 
 impl ReductionWorker {
-    fn reduce_step(&self, redex: (Conn, Conn)) {
+    fn reduce_step(self, redex: (Conn, Conn)) {
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
@@ -245,6 +243,8 @@ impl ReductionWorker {
 
         self.buffer.delete(a_id);
         self.buffer.delete(b_id);
+
+        drop(self.tx_redexes);
     }
 
     fn make_era_commutation(&self, top_ports: impl Iterator<Item = Option<Conn>>) {
@@ -314,7 +314,7 @@ impl BufferedMatrixReducer {
             tx_redexes: self.tx_redexes.clone(),
         };
 
-        self.pool.install(move || worker.reduce_step(redex))
+        self.pool.spawn(move || worker.reduce_step(redex))
     }
 
     #[cfg(not(feature = "threadpool"))]
@@ -404,16 +404,24 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn reduce(&mut self) -> Vec<Port> {
-        let (tx, rx) = bounded(MAILBOX_CAPACITY);
+        let (tx, rx) = unbounded();
 
-        self.tx_redexes = tx.clone();
+        self.tx_redexes = tx;
 
         // Push all redexes
         for redex in self.buffer.iter_redexes() {
+            tracing::trace!("dispatching {:?}", redex);
+
             self.dispatch_reduction(redex);
         }
 
-        while let Ok(next) = rx.try_recv() {
+        while rx.sender_count() > 1 {
+            let next = if let Ok(Some(next)) = rx.try_recv() {
+                next
+            } else {
+                continue;
+            };
+
             self.dispatch_reduction(next);
         }
 
