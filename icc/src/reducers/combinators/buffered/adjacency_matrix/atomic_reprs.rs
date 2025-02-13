@@ -173,6 +173,56 @@ impl CellBuilder {
     }
 }
 
+struct PortWalker<'a> {
+    idx_front: usize,
+    idx_back: usize,
+    view: &'a CellRepr,
+}
+
+impl<'a> PortWalker<'a> {
+    fn new(view: &'a CellRepr, start_idx: usize, end_ptr: usize) -> Self {
+        Self {
+            idx_front: start_idx,
+            idx_back: end_ptr,
+            view,
+        }
+    }
+}
+
+impl<'a> Iterator for PortWalker<'a> {
+    type Item = Option<Conn>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let res = match self.idx_front {
+            3 => {
+                return None;
+            }
+            0 => self.view.load_primary_port(),
+            n => self.view.load_aux_port(n - 1),
+        };
+
+        self.idx_front += 1;
+
+        Some(res)
+    }
+}
+
+impl<'a> DoubleEndedIterator for PortWalker<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        let res = match self.idx_back {
+            0 => {
+                return None;
+            }
+            1 => self.view.load_primary_port(),
+            n => self.view.load_aux_port(n - 2),
+        };
+
+        self.idx_back -= 1;
+
+        Some(res)
+    }
+}
+
 impl CellRepr {
     pub(crate) fn is_empty(&self) -> bool {
         (self.discriminant.load(DEFAULT_ORDERING) & 0b1) == 1
@@ -215,57 +265,13 @@ impl CellRepr {
     }
 
     pub(crate) fn iter_ports<'a>(&'a self) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
-        struct PortWalker<'a> {
-            idx_front: usize,
-            idx_back: usize,
-            view: &'a CellRepr,
-        }
+        PortWalker::new(self, 0, 3)
+    }
 
-        impl<'a> PortWalker<'a> {
-            fn new(view: &'a CellRepr) -> Self {
-                Self {
-                    idx_front: 0,
-                    idx_back: 3,
-                    view,
-                }
-            }
-        }
-
-        impl<'a> Iterator for PortWalker<'a> {
-            type Item = Option<Conn>;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                let res = match self.idx_front {
-                    3 => {
-                        return None;
-                    }
-                    0 => self.view.load_primary_port(),
-                    n => self.view.load_aux_port(n - 1),
-                };
-
-                self.idx_front += 1;
-
-                Some(res)
-            }
-        }
-
-        impl<'a> DoubleEndedIterator for PortWalker<'a> {
-            fn next_back(&mut self) -> Option<Self::Item> {
-                let res = match self.idx_back {
-                    0 => {
-                        return None;
-                    }
-                    1 => self.view.load_primary_port(),
-                    n => self.view.load_aux_port(n - 2),
-                };
-
-                self.idx_back -= 1;
-
-                Some(res)
-            }
-        }
-
-        PortWalker::new(self)
+    pub(crate) fn iter_aux_ports<'a>(
+        &'a self,
+    ) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
+        PortWalker::new(self, 1, 3)
     }
 
     pub(crate) fn store_discriminant(&self, c: Option<Cell>) {

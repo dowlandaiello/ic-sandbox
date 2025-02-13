@@ -161,6 +161,12 @@ impl NetBuffer for MatrixBuffer {
                         .filter_map(|x| x)
                         .filter_map(|Conn { cell, .. }| {
                             let (conn_a, conn_b) = self.view.get_conn(cell, self.pos)?;
+                            let (cell_a, cell_b) =
+                                (self.view.get_cell(self.pos), self.view.get_cell(cell));
+
+                            if matches!(cell_a, Cell::Var(_)) || matches!(cell_b, Cell::Var(_)) {
+                                return None;
+                            }
 
                             if conn_a.port == 0 && conn_b.port == 0 {
                                 Some((conn_a, conn_b))
@@ -252,6 +258,12 @@ impl NetBuffer for MatrixBuffer {
             Cell::Var(_) => Cell::Var(idx),
             x => x,
         }
+    }
+
+    fn iter_aux_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
+        let cell_repr = &self.cells[cell];
+
+        cell_repr.iter_aux_ports()
     }
 
     fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {

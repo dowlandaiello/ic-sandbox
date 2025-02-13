@@ -65,5 +65,7 @@ pub trait NetBuffer {
 
     fn iter_ports(&self, cell: Ptr) -> impl DoubleEndedIterator<Item = Option<Conn>>;
 
+    fn iter_aux_ports(&self, cell: Ptr) -> impl DoubleEndedIterator<Item = Option<Conn>>;
+
     fn primary_port(&self, cell: Ptr) -> Option<Conn>;
 }

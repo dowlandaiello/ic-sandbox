@@ -6,22 +6,32 @@ use super::{
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
     ast_lafont::Ident,
-    naming::NameIter,
 };
+use crossbeam_channel::{bounded, Receiver, Sender};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter::DoubleEndedIterator,
-    sync::mpsc::{self, Receiver, Sender},
 };
+
+const MAILBOX_CAPACITY: usize = 0;
 
 macro_rules! conn_maybe_redex {
     ($self:ident, $a:expr, $b:expr) => {
         $self.buffer.connect($a, $b);
 
-        if let Some((a, b)) = $a.zip($b) {
-            if a.port == 0 && b.port == 0 {
-                $self.tx_redexes.send((a, b)).unwrap();
+        if let Some(((a_conn, a_cell), (b_conn, b_cell))) = $a.zip($b).map(|(a, b)| {
+            (
+                (a, $self.buffer.get_cell(a.cell)),
+                (b, $self.buffer.get_cell(b.cell)),
+            )
+        }) {
+            if a_conn.port == 0
+                && b_conn.port == 0
+                && !matches!(a_cell, Cell::Var(_))
+                && !matches!(b_cell, Cell::Var(_))
+            {
+                $self.tx_redexes.send((a_conn, b_conn)).unwrap();
             }
         }
     };
@@ -38,7 +48,7 @@ pub struct ReducerBuilder {
 
 impl ReducerBuilder {
     pub fn new_in_redex_loop() -> (Receiver<(Conn, Conn)>, Self) {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = bounded(MAILBOX_CAPACITY);
 
         (
             rx,
@@ -173,17 +183,19 @@ pub struct ReductionWorker {
 impl ReductionWorker {
     fn reduce_step(&self, redex: (Conn, Conn)) {
         let a_id = redex.0.cell;
-        let b_id = redex.0.cell;
+        let b_id = redex.1.cell;
 
         let pair = (self.buffer.get_cell(a_id), self.buffer.get_cell(b_id));
 
-        tracing::trace!("reducing {} >< {}", pair.0, pair.1);
+        tracing::trace!("reducing {} ({}) >< {} ({})", pair.0, a_id, pair.1, b_id);
 
         match pair {
             // Annihilation of alpha-alpha
             (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
-                let (top_ports, bottom_ports) =
-                    (self.buffer.iter_ports(a_id), self.buffer.iter_ports(b_id));
+                let (top_ports, bottom_ports) = (
+                    self.buffer.iter_aux_ports(a_id),
+                    self.buffer.iter_aux_ports(b_id),
+                );
 
                 // Remember, bottom ports is flipped due to orientation
                 top_ports.zip(bottom_ports).for_each(|(a, b)| {
@@ -198,31 +210,40 @@ impl ReductionWorker {
             // Commutation of constr dup
             (Cell::Constr, Cell::Dup) => {
                 // Top is left to right, bottom is right to left
-                let (top_ports, bottom_ports) =
-                    (self.buffer.iter_ports(a_id), self.buffer.iter_ports(b_id));
+                let (top_ports, bottom_ports) = (
+                    self.buffer.iter_aux_ports(a_id),
+                    self.buffer.iter_aux_ports(b_id),
+                );
 
                 self.make_commutation(top_ports, bottom_ports);
             }
             // Commutation of dup constr
             (Cell::Dup, Cell::Constr) => {
-                let (top_ports, bottom_ports) =
-                    (self.buffer.iter_ports(b_id), self.buffer.iter_ports(a_id));
+                let (top_ports, bottom_ports) = (
+                    self.buffer.iter_aux_ports(b_id),
+                    self.buffer.iter_aux_ports(a_id),
+                );
 
                 self.make_commutation(top_ports, bottom_ports);
             }
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
-                let top_ports = self.buffer.iter_ports(a_id);
+                let top_ports = self.buffer.iter_aux_ports(a_id);
 
                 self.make_era_commutation(top_ports);
             }
             (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
-                let top_ports = self.buffer.iter_ports(b_id);
+                let top_ports = self.buffer.iter_aux_ports(b_id);
 
                 self.make_era_commutation(top_ports);
             }
-            _ => {}
+            _ => {
+                panic!("invalid redex")
+            }
         }
+
+        self.buffer.delete(a_id);
+        self.buffer.delete(b_id);
     }
 
     fn make_era_commutation(&self, top_ports: impl Iterator<Item = Option<Conn>>) {
@@ -292,7 +313,7 @@ impl BufferedMatrixReducer {
             tx_redexes: self.tx_redexes.clone(),
         };
 
-        self.pool.spawn(move || worker.reduce_step(redex))
+        self.pool.install(move || worker.reduce_step(redex))
     }
 
     #[cfg(not(feature = "threadpool"))]
@@ -376,17 +397,16 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn reduce(&mut self) -> Vec<Port> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = bounded(MAILBOX_CAPACITY);
 
         self.tx_redexes = tx.clone();
 
         // Push all redexes
         for redex in self.buffer.iter_redexes() {
-            tx.send(redex).unwrap();
+            self.dispatch_reduction(redex);
         }
 
-        // Spawn all results
-        while let Ok(next) = rx.recv() {
+        while let Ok(next) = rx.try_recv() {
             self.dispatch_reduction(next);
         }
 
