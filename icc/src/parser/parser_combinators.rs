@@ -57,9 +57,9 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
     };
     let agent = recursive(|expr| {
         select! {
-            Spanned(Token::Era, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Era(Eraser::new()), name: 0, conns: Vec::new(), port: 0 }, span),
-	    Spanned(Token::Constr, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Constr(Constructor::new()), name: 0, conns: Vec::new(), port: 0 }, span),
-	    Spanned(Token::Dup, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Dup(Duplicator::new()), name: 0, conns: Vec::new(), port: 0}, span),
+            Spanned(Token::Era, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Era(Eraser::new()), name: 0, conns: Vec::new(), port: None }, span),
+	    Spanned(Token::Constr, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Constr(Constructor::new()), name: 0, conns: Vec::new(), port: None }, span),
+	    Spanned(Token::Dup, span) => Spanned(AgentBuilder::Expr { phrase: Expr::Dup(Duplicator::new()), name: 0, conns: Vec::new(), port: None}, span),
         }
         .then_ignore(span_just(Token::LeftBracket))
         .then_ignore(span_just(Token::At))
@@ -79,13 +79,13 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 				})
 			    .or_not())
 		    .map(|(e, pos): (Spanned<AgentBuilder>, Option<Spanned<usize>>)| {
-			pos.map(|p| Spanned(e.0.clone().with_port(p.0), e.1.clone())).unwrap_or(e)
+			pos.map(|p| Spanned(e.0.clone().with_port(Some(p.0)), e.1.clone())).unwrap_or(e)
 		    }),
                 select! {Spanned(Token::Ident(s), span) => Spanned(AgentBuilder::Expr {
 		    phrase: Expr::Var(Var { name: Ident(s), port: None}),
 		    name: 0,
 		    conns: Vec::new(),
-		    port: 0,
+		    port: Some(0),
 		}, span)},
 		span_just(Token::At)
 		    .ignore_then(select!{Spanned(Token::Digit(d), span) => Spanned(d, span)})
@@ -159,7 +159,7 @@ pub enum AgentBuilder {
         phrase: Expr,
         name: usize,
         conns: Vec<AgentBuilder>,
-        port: usize,
+        port: Option<usize>,
     },
     Ref {
         port: usize,
@@ -168,7 +168,7 @@ pub enum AgentBuilder {
 }
 
 impl AgentBuilder {
-    pub fn with_port(self, port: usize) -> Self {
+    pub fn with_port(self, port: Option<usize>) -> Self {
         match self {
             Self::Expr {
                 phrase,
@@ -181,7 +181,10 @@ impl AgentBuilder {
                 conns,
                 port,
             },
-            Self::Ref { agent_id, port: _ } => Self::Ref { agent_id, port },
+            Self::Ref { agent_id, port: _ } => Self::Ref {
+                agent_id,
+                port: port.unwrap(),
+            },
         }
     }
 
@@ -259,7 +262,7 @@ impl AgentBuilder {
         }
     }
 
-    pub fn into_expr(self) -> Option<(Expr, usize, Vec<AgentBuilder>, usize)> {
+    pub fn into_expr(self) -> Option<(Expr, usize, Vec<AgentBuilder>, Option<usize>)> {
         match self {
             AgentBuilder::Expr {
                 phrase,
@@ -303,6 +306,8 @@ pub fn build_agent(agent: Spanned<AgentBuilder>, names: &mut NameIter) -> Option
     // Second pass: wire all agents
     // Also create all vars in place, since
     // they cannot be connected to more than one agent
+    // This does not work for top level redexes. We will have to bump all indices by 1, since
+    // primary ports are taken
     while let Some((_, name, children)) = to_build_later.pop_front().and_then(|x| x.0.into_agent())
     {
         let Spanned(agent_port, _) = &built_agents[&name];
@@ -315,11 +320,22 @@ pub fn build_agent(agent: Spanned<AgentBuilder>, names: &mut NameIter) -> Option
                     port, phrase, name, ..
                 } => {
                     if phrase.is_agent() {
-                        (port, built_agents[&name].clone().0)
+                        (port.unwrap_or_default(), built_agents[&name].clone().0)
                     } else {
                         let var = phrase.into_port(names);
+
+                        let insert_idx = if built_agents
+                            .get(agent.as_agent().as_ref()?.1)?
+                            .0
+                            .ptr_eq(agent_port)
+                        {
+                            i + 1
+                        } else {
+                            i
+                        };
+
                         var.borrow_mut()
-                            .set_primary_port(Some((i, agent_port.clone())));
+                            .set_primary_port(Some((insert_idx, agent_port.clone())));
 
                         (0, var)
                     }
