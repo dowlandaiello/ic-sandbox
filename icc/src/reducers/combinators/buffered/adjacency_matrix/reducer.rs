@@ -32,6 +32,8 @@ pub struct ReducerBuilder {
 
     #[cfg(feature = "threadpool")]
     pool: ThreadPoolBuilder,
+    idents: BTreeMap<Ptr, String>,
+    names: BTreeMap<Ptr, usize>,
 }
 
 impl ReducerBuilder {
@@ -44,6 +46,8 @@ impl ReducerBuilder {
                 tx_redexes: tx,
                 #[cfg(feature = "threadpool")]
                 pool: Default::default(),
+                idents: Default::default(),
+                names: Default::default(),
             },
         )
     }
@@ -55,7 +59,7 @@ impl ReducerBuilder {
         self
     }
 
-    pub fn with_init_net(self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
+    pub fn with_init_net(mut self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
         let n_nodes = net.iter_tree().count();
 
         let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
@@ -64,11 +68,17 @@ impl ReducerBuilder {
             .iter_tree()
             .enumerate()
             .map(|(i, elem)| {
+                self.names.insert(i, elem.id);
+
                 let discriminant = match &*elem.borrow() {
                     Expr::Constr(_) => Cell::Constr,
                     Expr::Dup(_) => Cell::Dup,
                     Expr::Era(_) => Cell::Era,
-                    Expr::Var(_) => Cell::Var(i),
+                    Expr::Var(ident) => {
+                        self.idents.insert(i, ident.name.to_string());
+
+                        Cell::Var(i)
+                    }
                 };
 
                 (elem.id, buff.push(discriminant))
@@ -104,6 +114,8 @@ impl ReducerBuilder {
             cells: buff,
             #[cfg(feature = "threadpool")]
             pool: self.pool,
+            idents: self.idents,
+            names: self.names,
         }
     }
 
@@ -113,6 +125,8 @@ impl ReducerBuilder {
             cells: MatrixBuffer::new_with_capacity_nodes(capacity),
             #[cfg(feature = "threadpool")]
             pool: self.pool,
+            idents: self.idents,
+            names: self.names,
         }
     }
 }
@@ -121,6 +135,8 @@ pub struct CapacitiedBufferedMatrixReducerBuilder {
     tx_redexes: Sender<(Conn, Conn)>,
     cells: MatrixBuffer,
     pool: ThreadPoolBuilder,
+    idents: BTreeMap<Ptr, String>,
+    names: BTreeMap<Ptr, usize>,
 }
 
 impl CapacitiedBufferedMatrixReducerBuilder {
@@ -131,6 +147,8 @@ impl CapacitiedBufferedMatrixReducerBuilder {
 
             #[cfg(feature = "threadpool")]
             pool: self.pool.build().unwrap(),
+            idents: self.idents,
+            names: self.names,
         }
     }
 }
@@ -141,6 +159,9 @@ pub struct BufferedMatrixReducer {
 
     #[cfg(feature = "threadpool")]
     pool: ThreadPool,
+
+    idents: BTreeMap<Ptr, String>,
+    names: BTreeMap<Ptr, usize>,
 }
 
 #[derive(Clone)]
@@ -286,25 +307,29 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn readback(&self) -> Vec<Port> {
-        let mut names = NameIter::default();
-
         // Make ports before linking, link later
         let mut ports_for_cells: BTreeMap<Ptr, Port> = self
             .buffer
             .iter_cells()
             .map(|i| (i, self.buffer.get_cell(i)))
             .map(|(i, discriminant)| {
+                let name = self.names.get(&i).unwrap();
+
                 (
                     i,
                     match discriminant {
-                        Cell::Constr => Expr::Constr(Constructor::new()).into_port(&mut names),
-                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port(&mut names),
-                        Cell::Era => Expr::Era(Eraser::new()).into_port(&mut names),
-                        Cell::Var(v) => Expr::Var(Var {
-                            name: Ident(v.to_string()),
-                            port: None,
-                        })
-                        .into_port(&mut names),
+                        Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(*name),
+                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port_named(*name),
+                        Cell::Era => Expr::Era(Eraser::new()).into_port_named(*name),
+                        Cell::Var(v) => {
+                            let ident = self.idents.get(&v).unwrap().clone();
+
+                            Expr::Var(Var {
+                                name: Ident(ident),
+                                port: None,
+                            })
+                        }
+                        .into_port_named(*name),
                     },
                 )
             })
@@ -377,7 +402,7 @@ mod test {
 
     #[test_log::test]
     fn test_readback_manual_matrix() {
-        let mut matrix = ReducerBuilder::new_in_redex_loop()
+        let matrix = ReducerBuilder::new_in_redex_loop()
             .1
             .with_capacity_nodes(6)
             .finish();
@@ -492,11 +517,9 @@ mod test {
             let (_, builder) = ReducerBuilder::new_in_redex_loop();
             let reducer = builder.with_init_net(&parsed[0].0).finish();
 
-            println!("{:#?}", reducer.buffer);
-
             let res = reducer.readback();
 
-            assert_eq!(res[0].orient().to_string(), parsed[0].orient().to_string());
+            assert_eq!(res[0].to_string(), parsed[0].to_string());
         }
     }
 
