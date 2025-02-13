@@ -1765,7 +1765,7 @@ mod test {
             let results = reduce_dyn(&zn_1.combinate(&mut names));
 
             if i == 1 {
-                assert!(results.is_empty());
+                assert_eq!(&results[0].to_string(), "v0 ~ _v0");
 
                 return;
             }
