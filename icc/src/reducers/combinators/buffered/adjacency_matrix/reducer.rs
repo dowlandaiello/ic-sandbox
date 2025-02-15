@@ -8,15 +8,14 @@ use crate::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
-use kanal::{unbounded, Receiver, Sender};
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter::DoubleEndedIterator,
 };
 
 macro_rules! conn_maybe_redex {
-    ($self:ident, $a:expr, $b:expr) => {
+    ($self:ident, $redexbuff:expr, $a:expr, $b:expr) => {
         $self.buffer.connect($a, $b);
 
         if let Some(((a_conn, a_cell), (b_conn, b_cell))) = $a.zip($b).map(|(a, b)| {
@@ -30,44 +29,19 @@ macro_rules! conn_maybe_redex {
                 && !matches!(a_cell, Cell::Var(_))
                 && !matches!(b_cell, Cell::Var(_))
             {
-                $self.tx_redexes.send((a_conn, b_conn)).unwrap();
+                $redexbuff.push((a_conn, b_conn));
             }
         }
     };
 }
 
+#[derive(Default)]
 pub struct ReducerBuilder {
-    tx_redexes: Sender<(Conn, Conn)>,
-
-    #[cfg(feature = "threadpool")]
-    pool: ThreadPoolBuilder,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
 }
 
 impl ReducerBuilder {
-    pub fn new_in_redex_loop() -> (Receiver<(Conn, Conn)>, Self) {
-        let (tx, rx) = unbounded();
-
-        (
-            rx,
-            Self {
-                tx_redexes: tx,
-                #[cfg(feature = "threadpool")]
-                pool: Default::default(),
-                idents: Default::default(),
-                names: Default::default(),
-            },
-        )
-    }
-
-    #[cfg(feature = "threadpool")]
-    pub fn with_threadpool_builder(mut self, builder: ThreadPoolBuilder) -> Self {
-        self.pool = builder;
-
-        self
-    }
-
     pub fn with_init_net(mut self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
         let n_nodes = net.iter_tree().count();
 
@@ -119,10 +93,7 @@ impl ReducerBuilder {
         });
 
         CapacitiedBufferedMatrixReducerBuilder {
-            tx_redexes: self.tx_redexes,
             cells: buff,
-            #[cfg(feature = "threadpool")]
-            pool: self.pool,
             idents: self.idents,
             names: self.names,
         }
@@ -130,10 +101,7 @@ impl ReducerBuilder {
 
     pub fn with_capacity_nodes(self, capacity: usize) -> CapacitiedBufferedMatrixReducerBuilder {
         CapacitiedBufferedMatrixReducerBuilder {
-            tx_redexes: self.tx_redexes,
             cells: MatrixBuffer::new_with_capacity_nodes(capacity),
-            #[cfg(feature = "threadpool")]
-            pool: self.pool,
             idents: self.idents,
             names: self.names,
         }
@@ -141,9 +109,7 @@ impl ReducerBuilder {
 }
 
 pub struct CapacitiedBufferedMatrixReducerBuilder {
-    tx_redexes: Sender<(Conn, Conn)>,
     cells: MatrixBuffer,
-    pool: ThreadPoolBuilder,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
 }
@@ -151,11 +117,7 @@ pub struct CapacitiedBufferedMatrixReducerBuilder {
 impl CapacitiedBufferedMatrixReducerBuilder {
     pub fn finish(self) -> BufferedMatrixReducer {
         BufferedMatrixReducer {
-            tx_redexes: self.tx_redexes,
             buffer: self.cells,
-
-            #[cfg(feature = "threadpool")]
-            pool: self.pool.build().unwrap(),
             idents: self.idents,
             names: self.names,
         }
@@ -163,12 +125,7 @@ impl CapacitiedBufferedMatrixReducerBuilder {
 }
 
 pub struct BufferedMatrixReducer {
-    tx_redexes: Sender<(Conn, Conn)>,
     buffer: MatrixBuffer,
-
-    #[cfg(feature = "threadpool")]
-    pool: ThreadPool,
-
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
 }
@@ -176,11 +133,12 @@ pub struct BufferedMatrixReducer {
 #[derive(Clone)]
 pub struct ReductionWorker {
     buffer: MatrixBuffer,
-    tx_redexes: Sender<(Conn, Conn)>,
 }
 
 impl ReductionWorker {
-    fn reduce_step(self, redex: (Conn, Conn)) {
+    fn reduce_step(&self, redex: (Conn, Conn)) -> Vec<(Conn, Conn)> {
+        let mut redexes = Vec::default();
+
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
@@ -198,7 +156,7 @@ impl ReductionWorker {
 
                 // Remember, bottom ports is flipped due to orientation
                 top_ports.zip(bottom_ports).for_each(|(a, b)| {
-                    conn_maybe_redex!(self, a, b);
+                    conn_maybe_redex!(self, &mut redexes, a, b);
                 });
             }
             // Annihilation of Era
@@ -214,7 +172,7 @@ impl ReductionWorker {
                     self.buffer.iter_aux_ports(b_id),
                 );
 
-                self.make_commutation(top_ports, bottom_ports);
+                self.make_commutation(&mut redexes, top_ports, bottom_ports);
             }
             // Commutation of dup constr
             (Cell::Dup, Cell::Constr) => {
@@ -223,18 +181,18 @@ impl ReductionWorker {
                     self.buffer.iter_aux_ports(a_id),
                 );
 
-                self.make_commutation(top_ports, bottom_ports);
+                self.make_commutation(&mut redexes, top_ports, bottom_ports);
             }
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
                 let top_ports = self.buffer.iter_aux_ports(a_id);
 
-                self.make_era_commutation(top_ports);
+                self.make_era_commutation(&mut redexes, top_ports);
             }
             (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
                 let top_ports = self.buffer.iter_aux_ports(b_id);
 
-                self.make_era_commutation(top_ports);
+                self.make_era_commutation(&mut redexes, top_ports);
             }
             _ => {
                 panic!("invalid redex")
@@ -244,21 +202,26 @@ impl ReductionWorker {
         self.buffer.delete(a_id);
         self.buffer.delete(b_id);
 
-        drop(self.tx_redexes);
+        redexes
     }
 
-    fn make_era_commutation(&self, top_ports: impl Iterator<Item = Option<Conn>>) {
+    fn make_era_commutation(
+        &self,
+        redexes: &mut Vec<(Conn, Conn)>,
+        top_ports: impl Iterator<Item = Option<Conn>>,
+    ) {
         let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
 
         top_ports
             .zip(eras.iter().map(|ptr| Some((*ptr, 0).into())))
             .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, b);
+                conn_maybe_redex!(self, redexes, a, b);
             });
     }
 
     fn make_commutation(
         &self,
+        redexes: &mut Vec<(Conn, Conn)>,
         top_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
         bottom_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
     ) {
@@ -279,7 +242,7 @@ impl ReductionWorker {
                 })
             }))
             .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, b);
+                conn_maybe_redex!(self, redexes, a, b);
             });
         bottom_ports
             .rev()
@@ -290,7 +253,7 @@ impl ReductionWorker {
                 })
             }))
             .for_each(|(a, b)| {
-                conn_maybe_redex!(self, a, b);
+                conn_maybe_redex!(self, redexes, a, b);
             });
 
         let conn_left = ((dups[0], 2), (constrs[0], 1));
@@ -301,33 +264,17 @@ impl ReductionWorker {
         let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
 
         conns.iter().for_each(|(a, b)| {
-            conn_maybe_redex!(self, Some::<Conn>((*a).into()), Some::<Conn>((*b).into()));
+            conn_maybe_redex!(
+                self,
+                redexes,
+                Some::<Conn>((*a).into()),
+                Some::<Conn>((*b).into())
+            );
         });
     }
 }
 
-impl BufferedMatrixReducer {
-    #[cfg(feature = "threadpool")]
-    fn dispatch_reduction(&self, redex: (Conn, Conn)) {
-        let worker = ReductionWorker {
-            buffer: self.buffer.clone(),
-            tx_redexes: self.tx_redexes.clone(),
-        };
-
-        self.pool.spawn(move || worker.reduce_step(redex))
-    }
-
-    #[cfg(not(feature = "threadpool"))]
-    fn dispatch_reduction(&self, redex: (Conn, Conn)) {
-        self.reduce_step(redex);
-    }
-}
-
 impl Reducer for BufferedMatrixReducer {
-    fn push_active_pair(&self, lhs: Conn, rhs: Conn) {
-        self.tx_redexes.send((lhs, rhs)).unwrap();
-    }
-
     fn readback(&self) -> Vec<Port> {
         let new_names = NameIter::starting_from(self.names.len());
 
@@ -400,30 +347,31 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn reduce_step(&self, redex: (Conn, Conn)) {
-        self.dispatch_reduction(redex)
+        let mut worker = ReductionWorker {
+            buffer: self.buffer.clone(),
+        };
+
+        worker.reduce_step(redex);
     }
 
     fn reduce(&mut self) -> Vec<Port> {
-        let (tx, rx) = unbounded();
+        fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoParallelIterator<Item = (Conn, Conn)>) {
+            r.into_par_iter().for_each(move |x| {
+                let mut worker = ReductionWorker {
+                    buffer: buffer.clone(),
+                };
 
-        self.tx_redexes = tx;
+                let redexes = worker.reduce_step(x);
+
+                reduce_redexes(buffer.clone(), redexes);
+            });
+        }
 
         // Push all redexes
-        for redex in self.buffer.iter_redexes() {
-            tracing::trace!("dispatching {:?}", redex);
-
-            self.dispatch_reduction(redex);
-        }
-
-        while rx.sender_count() > 1 {
-            let next = if let Ok(Some(next)) = rx.try_recv() {
-                next
-            } else {
-                continue;
-            };
-
-            self.dispatch_reduction(next);
-        }
+        reduce_redexes(
+            self.buffer.clone(),
+            self.buffer.iter_redexes().collect::<Vec<_>>(),
+        );
 
         self.readback()
     }
@@ -437,10 +385,7 @@ mod test {
 
     #[test_log::test]
     fn test_readback_manual_matrix() {
-        let matrix = ReducerBuilder::new_in_redex_loop()
-            .1
-            .with_capacity_nodes(6)
-            .finish();
+        let matrix = ReducerBuilder::default().with_capacity_nodes(6).finish();
         let constrs = (
             matrix.buffer.push(Cell::Constr),
             matrix.buffer.push(Cell::Constr),
@@ -549,7 +494,7 @@ mod test {
                 .parse(parser::lexer().parse(case).unwrap())
                 .unwrap();
 
-            let (_, builder) = ReducerBuilder::new_in_redex_loop();
+            let builder = ReducerBuilder::default();
             let reducer = builder.with_init_net(&parsed[0].0).finish();
 
             let res = reducer.readback();
@@ -590,7 +535,7 @@ mod test {
                 .parse(parser::lexer().parse(case).unwrap())
                 .unwrap();
 
-            let (_, builder) = ReducerBuilder::new_in_redex_loop();
+            let builder = ReducerBuilder::default();
             let mut reducer = builder.with_init_net(&parsed[0].0).finish();
 
             let res = reducer.reduce();

@@ -8,7 +8,7 @@ use inetlib::parser::{
 };
 use std::{cell::RefCell, collections::BTreeMap, iter, rc::Rc};
 
-type Port = (usize, OwnedNetBuilder);
+pub type Port = (usize, OwnedNetBuilder);
 
 #[derive(Debug, Clone)]
 pub(crate) struct OwnedNetBuilder(pub Rc<RefCell<NamedBuilder>>);
@@ -177,7 +177,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 return;
             }
 
-            if let Some((port, p)) = builder.primary_port() {
+            if let Some((port, p)) = builder.primary_port().clone() {
                 let other_id = p.0.borrow().name;
                 let other_node = agents_for_id.get(&other_id).cloned();
 
@@ -262,10 +262,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                             .enumerate()
                             .filter_map(|(i, x)| Some((i, x?)))
                             .for_each(|(i, p)| {
-                                p.1.update_with(|builder| {
+                                let (port, builder) = p;
+
+                                builder.update_with(|builder| {
                                     builder
                                         .clone()
-                                        .with_port_i(p.0, Some((i + 1, constr_child.clone())))
+                                        .with_port_i(*port, Some((i + 1, constr_child.clone())))
                                 });
                             });
 
@@ -382,7 +384,9 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 });
 
                 self.update_with(|_| root);
-                self.expand_step(names)
+                self.expand_step(names);
+
+                self.clone()
             }
             CombinatorBuilder::K { primary_port } => {
                 tracing::trace!("expanding K");
@@ -556,10 +560,10 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     builder
                         .clone()
                         .with_primary_port(Some((3, right_bottom_z_ref.clone())))
-                        .with_aux_port_i(3, Some((1, top_left_z.clone())))
-                        .with_aux_port_i(2, Some((3, middle_left_z.clone())))
-                        .with_aux_port_i(1, Some((2, middle_left_z.clone())))
-                        .with_aux_port_i(0, Some((4, top_left_z.clone())))
+                        .with_push_aux_port(Some((4, top_left_z.clone())))
+                        .with_push_aux_port(Some((2, middle_left_z.clone())))
+                        .with_push_aux_port(Some((3, middle_left_z.clone())))
+                        .with_push_aux_port(Some((1, top_left_z.clone())))
                 });
                 middle_left_z.update_with(|builder| {
                     builder
@@ -573,11 +577,11 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 self.update_with(|_| right_bottom_z);
 
+                top_left_z.expand_step(names);
+                middle_left_z.expand_step(names);
                 d.expand_step(names);
                 d.expand_step(names);
                 right_bottom_z_ref.expand_step(names);
-                top_left_z.expand_step(names);
-                middle_left_z.expand_step(names);
 
                 self.clone()
             }
@@ -1302,8 +1306,6 @@ mod test {
         let combinated = net.combinate(&mut names);
 
         let res = reduce_dyn(&combinated).remove(0);
-
-        println!("{}", res);
     }
 
     #[test_log::test]
@@ -1346,8 +1348,6 @@ mod test {
         });
         decoder.update_with(|builder| builder.clone().with_primary_port(Some((0, coder.clone()))));
 
-        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
-
         let comb_coder = coder.combinate(&mut names);
         let _ = decoder.combinate(&mut names);
 
@@ -1365,8 +1365,6 @@ mod test {
 
         let coder = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names)
             .encode(&mut names);
-
-        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
         coder.expand_step(&mut names);
 
@@ -1492,7 +1490,7 @@ mod test {
 
         for i in 1..10 {
             let mut names = Default::default();
-            let mut names_b: NameIter = Default::default();
+            let names_b: NameIter = Default::default();
 
             let zn_1 = OwnedNetBuilder::new(
                 CombinatorBuilder::ZN {
