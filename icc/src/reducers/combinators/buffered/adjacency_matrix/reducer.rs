@@ -347,7 +347,7 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn reduce_step(&self, redex: (Conn, Conn)) {
-        let mut worker = ReductionWorker {
+        let worker = ReductionWorker {
             buffer: self.buffer.clone(),
         };
 
@@ -357,7 +357,7 @@ impl Reducer for BufferedMatrixReducer {
     fn reduce(&mut self) -> Vec<Port> {
         fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoParallelIterator<Item = (Conn, Conn)>) {
             r.into_par_iter().for_each(move |x| {
-                let mut worker = ReductionWorker {
+                let worker = ReductionWorker {
                     buffer: buffer.clone(),
                 };
 
