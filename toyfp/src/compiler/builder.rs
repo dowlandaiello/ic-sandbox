@@ -48,7 +48,14 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type EExpr = SkExpr;
 
     fn decombinate(p: &AstPort) -> Option<SkExpr> {
-        if let Some(root_expr) = Self::decombinate_k(&p).or_else(|| Self::decombinate_s(&p)) {
+        if let Some(root_expr) =
+            Self::decombinate_expr(&p, CombinatorBuilder::K { primary_port: None })
+                .then(|| SkExpr::K(None, None))
+                .or_else(|| {
+                    Self::decombinate_expr(&p, CombinatorBuilder::S { primary_port: None })
+                        .then(|| SkExpr::S(None, None, None))
+                })
+        {
             return Some(root_expr);
         }
 
@@ -101,8 +108,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             return Some(to_call_dec);
         }
 
-        Self::decombinate_k(p)
-            .or_else(|| Self::decombinate_s(p))
+        Self::decombinate_expr(p, CombinatorBuilder::K { primary_port: None })
+            .then(|| SkExpr::K(None, None))
+            .or_else(|| {
+                Self::decombinate_expr(p, CombinatorBuilder::S { primary_port: None })
+                    .then(|| SkExpr::S(None, None, None))
+            })
             .or_else(|| unreachable!())
     }
 
@@ -307,8 +318,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                                 acc.update_with(|builder| {
                                     builder.clone().with_port_i(2, x.clone())
                                 });
-
-                                println!("arg i: {}", arg_i);
 
                                 acc.clone()
                                     .rewrite_conns((arg_i, self.clone()), (2, acc.clone()));
@@ -627,15 +636,7 @@ impl OwnedNetBuilder {
                 .builder
                 .iter_ports_mut()
                 .filter_map(|x| x)
-                .filter(|conn| {
-                    println!(
-                        "{:?} {:?}",
-                        (conn.0, conn.1 .0.as_ptr()),
-                        (src.0, src.1 .0.as_ptr())
-                    );
-
-                    **conn == src
-                })
+                .filter(|conn| **conn == src)
                 .for_each(|conn| {
                     tracing::trace!("rewriting {:?}", (conn.0, conn.1 .0.as_ptr()));
 
@@ -803,52 +804,28 @@ impl OwnedNetBuilder {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
-    fn decombinate_s(p: &AstPort) -> Option<SkExpr> {
-        let old_primary_port = p.borrow().primary_port().cloned();
-        p.borrow_mut().set_primary_port(None);
-
-        let mut names = Default::default();
-        let s_tree = Self::new(CombinatorBuilder::S { primary_port: None }, &mut names);
-        let combinated = s_tree.expand_step(&mut names).combinate(&mut names);
-
-        tracing::trace!("found {}", p);
-        tracing::trace!("found {}", combinated);
-
-        if combinated.alpha_eq(p) {
-            tracing::trace!("found S");
-
-            // TODO: use some kind of hash tree for this (merkle tree)
-            Some(SkExpr::S(None, None, None))
-        } else {
-            p.borrow_mut().set_primary_port(old_primary_port);
-
-            None
-        }
-    }
-
-    fn decombinate_k(p: &AstPort) -> Option<SkExpr> {
-        let old_primary_port = p.borrow().primary_port().cloned();
-        p.borrow_mut().set_primary_port(None);
+    fn decombinate_expr(p: &AstPort, cmp: CombinatorBuilder) -> bool {
+        let old_primary_port = p.unroot();
 
         let mut names = Default::default();
 
-        let k_tree = Self::new(CombinatorBuilder::K { primary_port: None }, &mut names);
+        let k_tree = Self::new(cmp.clone(), &mut names);
         k_tree.expand_step(&mut names);
 
-        let combinated = k_tree.combinate(&mut names);
+        let combinated = k_tree.make_root(&mut names).combinate(&mut names).orient();
+        combinated.unroot();
 
         tracing::trace!("found {}", p);
         tracing::trace!("found {}", combinated);
 
         if combinated.alpha_eq(&p) {
-            tracing::trace!("found K");
+            tracing::trace!("found {:?}", cmp);
 
-            // TODO: use some kind of hash tree for this (merkle tree)
-            Some(SkExpr::K(None, None))
+            true
         } else {
             p.borrow_mut().set_primary_port(old_primary_port);
 
-            None
+            false
         }
     }
 
@@ -1224,9 +1201,9 @@ mod test {
         let mut names = Default::default();
 
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
-        k_comb.expand_step(&mut names);
+        k_comb.expand_step(&mut names).make_root(&mut names);
 
-        let combinated = k_comb.combinate(&mut names);
+        let combinated = k_comb.combinate(&mut names).orient();
 
         println!("{}", combinated);
 
@@ -1241,9 +1218,9 @@ mod test {
         let mut names = Default::default();
 
         let s_comb = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names);
-        s_comb.expand_step(&mut names);
+        s_comb.expand_step(&mut names).make_root(&mut names);
 
-        let combinated = s_comb.combinate(&mut names);
+        let combinated = s_comb.combinate(&mut names).orient();
         let m = OwnedNetBuilder::decombinate(&combinated).unwrap();
 
         assert!(matches!(m, SkExpr::S(None, None, None)));
