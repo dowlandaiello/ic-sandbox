@@ -1378,6 +1378,7 @@ mod test {
         let combinated = net.combinate(&mut names);
 
         let res = reduce_dyn(&combinated).remove(0);
+        res.iter_tree().for_each(|x| println!("{:?}", x));
     }
 
     #[test_log::test]
