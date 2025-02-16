@@ -288,12 +288,18 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         self.clone()
                     }
                     n => {
-                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
-                            primary_port: primary_port.clone(),
-                            aux_ports: [None, None],
-                        });
+                        let constr_child = OwnedNetBuilder::new(
+                            CombinatorBuilder::Constr {
+                                primary_port: primary_port.clone(),
+                                aux_ports: [None, None],
+                            },
+                            names,
+                        );
 
-                        let top = aux_ports[1..aux_ports.len()].iter().enumerate().rev().fold(
+                        self.clone()
+                            .rewrite_conns((0, self.clone()), (0, constr_child.clone()));
+
+                        let top = aux_ports.iter().enumerate().skip(1).rev().fold(
                             constr_child.clone(),
                             |acc, (i, x)| {
                                 let arg_i = i + 1;
@@ -302,16 +308,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                                     builder.clone().with_port_i(2, x.clone())
                                 });
 
-                                if let Some((port, p)) = x {
-                                    p.update_with(|builder| {
-                                        builder.clone().with_port_i(*port, Some((2, acc.clone())))
-                                    });
-                                }
+                                println!("arg i: {}", arg_i);
 
                                 acc.clone()
                                     .rewrite_conns((arg_i, self.clone()), (2, acc.clone()));
 
-                                if i <= 0 {
+                                if arg_i <= 1 {
                                     return acc;
                                 }
 
@@ -339,6 +341,8 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         });
 
                         top.clone().rewrite_conns((1, self.clone()), (1, top));
+
+                        *self.0.borrow_mut() = constr_child.0.borrow().clone();
 
                         self.clone()
                     }
@@ -623,8 +627,20 @@ impl OwnedNetBuilder {
                 .builder
                 .iter_ports_mut()
                 .filter_map(|x| x)
-                .filter(|conn| **conn == src)
-                .for_each(|conn| *conn = dest.clone())
+                .filter(|conn| {
+                    println!(
+                        "{:?} {:?}",
+                        (conn.0, conn.1 .0.as_ptr()),
+                        (src.0, src.1 .0.as_ptr())
+                    );
+
+                    **conn == src
+                })
+                .for_each(|conn| {
+                    tracing::trace!("rewriting {:?}", (conn.0, conn.1 .0.as_ptr()));
+
+                    *conn = dest.clone()
+                })
         });
     }
 
@@ -651,17 +667,17 @@ impl OwnedNetBuilder {
     }
 
     /// Finds all mismatched ports in the tree (i.e., one agent connected to another agent that is not connected to its parent)
-    pub(crate) fn checksum(&self) -> Vec<(Self, Self)> {
-        self.clone()
-            .iter_tree()
-            .filter_map(|x| {
-                x.0.borrow()
-                    .builder
-                    .iter_ports()
-                    .filter_map(|x| x)
-                    .map(|(port, p)| {
-                        if p.0
-                            .borrow()
+    pub(crate) fn checksum(&self) {
+        self.clone().iter_tree().for_each(|x| {
+            x.0.borrow()
+                .builder
+                .iter_ports()
+                .filter_map(|x| x)
+                .for_each(|(port, p)| {
+                    tracing::trace!("checksum context: {:?} {:?}", x, p);
+
+                    assert_eq!(
+                        p.0.borrow()
                             .builder
                             .iter_ports()
                             .nth(*port)
@@ -670,18 +686,11 @@ impl OwnedNetBuilder {
                             .1
                              .0
                             .borrow()
-                            .name
-                            == x.0.borrow().name
-                        {
-                            None
-                        } else {
-                            Some((x.clone(), p.clone()))
-                        }
-                    })
-                    .collect::<Option<Vec<(Self, Self)>>>()
-            })
-            .flatten()
-            .collect::<Vec<_>>()
+                            .name,
+                        x.0.borrow().name
+                    );
+                });
+        });
     }
 
     pub(crate) fn encode(self, names: &mut NameIter) -> Self {
@@ -1246,7 +1255,9 @@ mod test {
 
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
             .encode(&mut names);
+
         k_comb.expand_step(&mut names);
+
         let res = k_comb.combinate(&mut names);
     }
 
@@ -1343,6 +1354,12 @@ mod test {
 
         let net = net.encode(&mut names);
 
+        net.checksum();
+
+        net.expand_step(&mut names);
+
+        net.checksum();
+
         let d_comb = OwnedNetBuilder::new(
             CombinatorBuilder::D {
                 primary_port: Some((0, net.clone())),
@@ -1355,6 +1372,8 @@ mod test {
             .expand_step(&mut names);
 
         d_comb.expand_step(&mut names);
+
+        net.checksum();
 
         let combinated = net.combinate(&mut names);
 
@@ -1369,6 +1388,8 @@ mod test {
 
         let coder = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names)
             .encode(&mut names);
+
+        coder.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
         coder.expand_step(&mut names);
         let var = OwnedNetBuilder::new(

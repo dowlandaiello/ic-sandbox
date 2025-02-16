@@ -367,6 +367,8 @@ impl Reducer for BufferedMatrixReducer {
             });
         }
 
+        tracing::trace!("reduction frame: {:#?}", self.buffer);
+
         // Push all redexes
         reduce_redexes(
             self.buffer.clone(),
