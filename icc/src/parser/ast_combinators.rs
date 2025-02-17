@@ -87,9 +87,14 @@ impl Port {
             return false;
         }
 
+        // TODO: this is awful
         self.iter_tree()
-            .zip(other.iter_tree())
-            .all(|(lhs, rhs)| lhs.borrow().alpha_eq(&rhs.borrow()))
+            .map(|x| x.borrow().description())
+            .collect::<BTreeSet<_>>()
+            == other
+                .iter_tree()
+                .map(|x| x.borrow().description())
+                .collect::<BTreeSet<_>>()
     }
 
     #[cfg(not(feature = "threadpool"))]
@@ -514,14 +519,15 @@ pub enum Expr {
 }
 
 impl Expr {
-    pub fn alpha_eq(&self, other: &Expr) -> bool {
-        matches!(
-            (self, other),
-            (Self::Era(_), Self::Era(_))
-                | (Self::Dup(_), Self::Dup(_))
-                | (Self::Constr(_), Self::Constr(_))
-                | (Self::Var(_), Self::Var(_)),
-        )
+    pub fn description(&self) -> (String, Vec<Option<(usize, String)>>) {
+        let name = self.name();
+        let ports = [self.primary_port()]
+            .into_iter()
+            .chain(self.aux_ports().iter().map(|x| x.as_ref()))
+            .map(|x| x.map(|(p, port)| (*p, port.borrow().name())))
+            .collect();
+
+        (name, ports)
     }
 
     pub fn name(&self) -> String {
