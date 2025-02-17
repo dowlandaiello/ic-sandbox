@@ -117,7 +117,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .or_else(|| unreachable!())
     }
 
-    fn combinate(&self, names: &mut NameIter) -> Self::CPort {
+    fn combinate(&self, names: &NameIter) -> Self::CPort {
         // Normalize ZN_1 agents
         self.clone()
             .iter_tree()
@@ -248,7 +248,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .clone()
     }
 
-    fn expand_step(&self, names: &mut NameIter) -> Self {
+    fn expand_step(&self, names: &NameIter) -> Self {
         let builder = self.cloned();
 
         tracing::trace!("begin expansion {}", self.0.borrow().builder.name());
@@ -598,7 +598,7 @@ impl OwnedNetBuilder {
         });
     }
 
-    pub(crate) fn make_root(self, names: &mut NameIter) -> Self {
+    pub(crate) fn make_root(self, names: &NameIter) -> Self {
         let slf = self.clone();
 
         self.update_with(|builder| {
@@ -647,7 +647,7 @@ impl OwnedNetBuilder {
         });
     }
 
-    pub(crate) fn encode(self, names: &mut NameIter) -> Self {
+    pub(crate) fn encode(self, names: &NameIter) -> Self {
         self.expand_step(names);
 
         let dup_refs = self
@@ -753,7 +753,7 @@ impl OwnedNetBuilder {
         TreeVisitor::new(self)
     }
 
-    pub(crate) fn new(b: CombinatorBuilder, names: &mut NameIter) -> Self {
+    pub(crate) fn new(b: CombinatorBuilder, names: &NameIter) -> Self {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
@@ -1137,7 +1137,7 @@ impl CombinatorBuilder {
         }
     }
 
-    pub(crate) fn to_named(self, names: &mut NameIter) -> NamedBuilder {
+    pub(crate) fn to_named(self, names: &NameIter) -> NamedBuilder {
         NamedBuilder {
             name: names.next_id(),
             builder: self,
