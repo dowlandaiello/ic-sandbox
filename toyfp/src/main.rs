@@ -34,7 +34,7 @@ fn main() {
         )
         .subcommand(
             Command::new("compile")
-                .about("Compiles a DVM interaction combinator program from the input .fp file")
+                .about("Compiles a program from the input .fp file")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
                 .arg(flag_sk.clone()),
@@ -103,6 +103,14 @@ fn main() {
             let input_fname = arg_matches
                 .get_one::<String>("source")
                 .expect("missing source file name");
+
+            if arg_matches.get_flag("icalc") {
+                let res = cli::icalc::compile(input_fname);
+
+                res.iter().for_each(|x| println!("{}", x));
+
+                return;
+            }
 
             let mut out_fname = PathBuf::from(input_fname);
             out_fname.set_extension("d");

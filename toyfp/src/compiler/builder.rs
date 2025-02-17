@@ -266,92 +266,45 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 match aux_ports.len() {
                     1 => self.clone(),
                     2 => {
-                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
+                        self.update_with(|_| CombinatorBuilder::Constr {
                             primary_port: primary_port.clone(),
                             aux_ports: aux_ports.clone().try_into().unwrap(),
                         });
 
-                        constr_child
-                            .0
-                            .borrow()
-                            .builder
-                            .iter_aux_ports()
-                            .enumerate()
-                            .filter_map(|(i, x)| Some((i, x?)))
-                            .for_each(|(i, p)| {
-                                let (port, builder) = p;
-
-                                builder.update_with(|builder| {
-                                    builder
-                                        .clone()
-                                        .with_port_i(*port, Some((i + 1, constr_child.clone())))
-                                });
-                            });
-
-                        if let Some((port, p)) = primary_port {
-                            p.update_with(|builder| {
-                                builder
-                                    .clone()
-                                    .with_port_i(*port, Some((0, constr_child.clone())))
-                            });
-                        }
-
                         self.clone()
                     }
                     n => {
-                        let constr_child = OwnedNetBuilder::new(
-                            CombinatorBuilder::Constr {
-                                primary_port: primary_port.clone(),
-                                aux_ports: [None, None],
+                        let parent_ports =
+                            aux_ports.iter().cloned().take(n - 1).collect::<Vec<_>>();
+
+                        let parent = OwnedNetBuilder::new(
+                            CombinatorBuilder::ZN {
+                                primary_port: None,
+                                aux_ports: parent_ports,
                             },
                             names,
                         );
 
-                        self.clone()
-                            .rewrite_conns((0, self.clone()), (0, constr_child.clone()));
+                        for i in 0..(n - 1) {
+                            self.clone()
+                                .rewrite_conns((i + 1, self.clone()), (i + 1, parent.clone()));
+                        }
 
-                        let top = aux_ports.iter().enumerate().skip(1).rev().fold(
-                            constr_child.clone(),
-                            |acc, (i, x)| {
-                                let arg_i = i + 1;
-
-                                acc.update_with(|builder| {
-                                    builder.clone().with_port_i(2, x.clone())
-                                });
-
-                                acc.clone()
-                                    .rewrite_conns((arg_i, self.clone()), (2, acc.clone()));
-
-                                if arg_i <= 1 {
-                                    return acc;
-                                }
-
-                                let parent = OwnedNetBuilder::new(
-                                    CombinatorBuilder::Constr {
-                                        primary_port: Some((1, acc.clone())),
-                                        aux_ports: [None, None],
-                                    },
-                                    names,
-                                );
-
-                                acc.update_with(|builder| {
-                                    builder.clone().with_port_i(1, Some((0, parent.clone())))
-                                });
-
-                                parent
-                            },
-                        );
-
-                        top.update_with(|builder| {
-                            builder.clone().with_port_i(
-                                1,
-                                aux_ports.get(0).map(|x| x.as_ref()).flatten().cloned(),
-                            )
+                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
+                            primary_port: primary_port.clone(),
+                            aux_ports: [Some((0, parent.clone())), aux_ports[n - 1].clone()],
                         });
 
-                        top.clone().rewrite_conns((1, self.clone()), (1, top));
+                        self.clone()
+                            .rewrite_conns((n, self.clone()), (2, constr_child.clone()));
 
-                        *self.0.borrow_mut() = constr_child.0.borrow().clone();
+                        parent.update_with(|builder| {
+                            builder
+                                .clone()
+                                .with_primary_port(Some((1, constr_child.clone())))
+                        });
+
+                        parent.expand_step(names);
 
                         self.clone()
                     }
@@ -1203,6 +1156,8 @@ mod test {
         let k_comb = OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names);
         k_comb.expand_step(&mut names).make_root(&mut names);
 
+        k_comb.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
         let combinated = k_comb.combinate(&mut names).orient();
 
         println!("{}", combinated);
@@ -1458,6 +1413,79 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_interaction_z_2() {
+        use inetlib::reducers::combinators::reduce_dyn;
+        use std::collections::BTreeSet;
+
+        let mut names = Default::default();
+
+        let z2_1 = OwnedNetBuilder::new(
+            CombinatorBuilder::ZN {
+                primary_port: None,
+                aux_ports: vec![None, None],
+            },
+            &mut names,
+        );
+        let z2_2 = OwnedNetBuilder::new(
+            CombinatorBuilder::ZN {
+                primary_port: Some((0, z2_1.clone())),
+                aux_ports: vec![None, None],
+            },
+            &mut names,
+        );
+
+        z2_1.update_with(|builder| builder.clone().with_primary_port(Some((0, z2_2.clone()))));
+
+        let _ = (0..2)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z2_1.clone())),
+                    },
+                    &mut names,
+                );
+
+                z2_1.update_with(|builder| {
+                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                });
+
+                v
+            })
+            .collect::<Vec<_>>();
+        let _ = (0..2)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z2_2.clone())),
+                    },
+                    &mut names,
+                );
+
+                z2_2.update_with(|builder| {
+                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
+                });
+
+                v
+            })
+            .collect::<Vec<_>>();
+
+        z2_1.expand_step(&mut names);
+        z2_2.expand_step(&mut names);
+
+        assert_eq!(
+            reduce_dyn(&z2_1.combinate(&mut names))
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from_iter(["v0 ~ v2".to_owned(), "v1 ~ v3".to_owned()])
+        );
+    }
+
+    #[test_log::test]
     fn test_interaction_z_4() {
         use inetlib::reducers::combinators::reduce_dyn;
         use std::collections::BTreeSet;
@@ -1520,6 +1548,8 @@ mod test {
 
         z4_1.expand_step(&mut names);
         z4_2.expand_step(&mut names);
+
+        z4_1.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
         assert_eq!(
             reduce_dyn(&z4_1.combinate(&mut names))

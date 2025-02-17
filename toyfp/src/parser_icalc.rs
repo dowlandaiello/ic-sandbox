@@ -41,7 +41,7 @@ impl fmt::Display for Token {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Expr {
     Abstraction(Abstraction),
     Application(Application),
@@ -91,7 +91,7 @@ impl fmt::Display for Expr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Stmt {
     Def(Definition),
     Expr(Expr),
@@ -108,29 +108,29 @@ impl fmt::Display for Stmt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Definition {
     pub name: String,
     pub definition: Expr,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Abstraction {
     pub bind_var: String,
     pub body: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Application(pub Box<Expr>, pub Box<Expr>);
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Superposition {
     pub tag: String,
     pub lhs: Box<Expr>,
     pub rhs: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Duplication {
     pub tag: String,
     pub pair: (String, String),
@@ -138,7 +138,7 @@ pub struct Duplication {
     pub in_expr: Box<Expr>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Var(pub String);
 
 pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<char>> {
@@ -351,6 +351,7 @@ mod test {
         let case = "def Z = \\s \\z z
 def S = \\n \\s \\z (s n)
 def map = dup {map, rec} = \\f xs; dup #f {f0, f1} = f; (xs \\head \\tail ((cons rec) nil))
+def succ = \\n \\s \\z dup {s0, s1} = s; (s0 ((n s1) z))
 ((fnot p8) true)";
 
         let lexed = lexer()

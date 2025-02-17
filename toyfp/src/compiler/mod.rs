@@ -1,13 +1,14 @@
 use super::{
     parser::Expr,
     parser_icalc::{
-        Abstraction, Application, Duplication, Expr as IExpr, Stmt as IStmt, Superposition,
+        self, Abstraction, Application, Duplication, Expr as IExpr, Stmt as IStmt, Superposition,
+        Var as IVar,
     },
     parser_sk::Expr as SkExpr,
 };
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
 use inetlib::parser::{
-    ast_combinators::{Constructor, Duplicator, Eraser, Expr as CExpr, Port as AstPort, Var},
+    ast_combinators::{Constructor, Duplicator, Expr as CExpr, Port as AstPort, Var},
     ast_lafont::Ident,
     naming::NameIter,
 };
@@ -32,10 +33,17 @@ pub fn decompile_icalc(p: AstPort) -> IExpr {
 }
 
 pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
-    fn cc_expr(e: &IExpr, names: &mut NameIter) -> AstPort {
+    fn cc_expr(
+        e: IExpr,
+        net: &mut Vec<AstPort>,
+        tags: &mut BTreeMap<String, Vec<usize>>,
+        names: &mut NameIter,
+    ) -> AstPort {
+        tracing::trace!("compiling {:?}", e);
+
         match e {
             IExpr::Abstraction(Abstraction { bind_var, body }) => {
-                let body_cc = cc_expr(&body, names);
+                let body_cc = cc_expr(*body, net, tags, names);
                 let var_cc = CExpr::Var(Var {
                     name: Ident(bind_var.to_string()),
                     port: None,
@@ -56,31 +64,171 @@ pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
                 lam
             }
             IExpr::Application(Application(lhs, rhs)) => {
-                let lhs_cc = cc_expr(lhs, names);
-                let rhs_cc = cc_expr(rhs, names);
+                let lhs_cc = cc_expr(*lhs, net, tags, names);
+                let rhs_cc = cc_expr(*rhs, net, tags, names);
 
-                lhs_cc
+                let ret_var = CExpr::Var(Var {
+                    name: Ident("ret".into()),
+                    port: None,
+                })
+                .into_port(names);
+
+                let app = CExpr::Constr(Constructor {
+                    primary_port: Some((0, lhs_cc.clone())),
+                    aux_ports: [Some((0, ret_var.clone())), Some((0, rhs_cc.clone()))],
+                })
+                .into_port(names);
+
+                ret_var
                     .borrow_mut()
-                    .set_primary_port(Some((0, rhs_cc.clone())));
-                rhs_cc
-                    .borrow_mut()
-                    .set_primary_port(Some((0, lhs_cc.clone())));
+                    .set_primary_port(Some((1, app.clone())));
+                rhs_cc.borrow_mut().set_primary_port(Some((2, app.clone())));
+
+                lhs_cc.borrow_mut().set_primary_port(Some((0, app.clone())));
+
+                println!("{}", lhs_cc);
+
+                net.push(lhs_cc.clone());
 
                 lhs_cc
             }
             IExpr::Duplication(Duplication {
+                pair: (a, b),
+                to_clone,
+                in_expr,
+                tag,
+            }) => {
+                let a_cc = CExpr::Var(Var {
+                    name: Ident(a),
+                    port: None,
+                })
+                .into_port(names);
+                let b_cc = CExpr::Var(Var {
+                    name: Ident(b),
+                    port: None,
+                })
+                .into_port(names);
+                let let_cc = CExpr::Dup(Duplicator {
+                    primary_port: None,
+                    aux_ports: [Some((0, b_cc.clone())), Some((0, a_cc.clone()))],
+                })
+                .into_port(names);
+
+                cc_expr(*in_expr, net, tags, names);
+
+                tags.entry(tag).or_default().push(let_cc.id);
+
+                a_cc.borrow_mut()
+                    .set_primary_port(Some((2, let_cc.clone())));
+                a_cc.borrow_mut()
+                    .set_primary_port(Some((2, let_cc.clone())));
+
+                let pair_cc = cc_expr(*to_clone, net, tags, names);
+
+                pair_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, let_cc.clone())));
+                let_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, pair_cc.clone())));
+
+                println!("{}", pair_cc);
+
+                net.push(pair_cc);
+
+                let_cc
+            }
+            IExpr::Superposition(Superposition { tag, lhs, rhs }) => {
+                let lhs_cc = cc_expr(*lhs, net, tags, names);
+                let rhs_cc = cc_expr(*rhs, net, tags, names);
+
+                let pair_cc = CExpr::Dup(Duplicator {
+                    primary_port: None,
+                    aux_ports: [Some((0, lhs_cc.clone())), Some((0, rhs_cc.clone()))],
+                })
+                .into_port(names);
+
+                lhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((1, pair_cc.clone())));
+                rhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((2, pair_cc.clone())));
+
+                tags.entry(tag).or_default().push(pair_cc.id);
+
+                pair_cc
+            }
+            IExpr::Variable(IVar(i)) => CExpr::Var(Var {
+                name: Ident(i),
+                port: None,
+            })
+            .into_port(names),
+        }
+    }
+
+    let mut names = Default::default();
+    let mut net = Default::default();
+    let mut tags = Default::default();
+
+    let def_table = s
+        .iter()
+        .filter_map(|stmt| match stmt {
+            IStmt::Def(d) => Some((d.name.clone(), d.definition.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let expr = if let Some(root) = s
+        .into_iter()
+        .filter_map(|stmt| match stmt {
+            IStmt::Expr(e) => Some(e),
+            _ => None,
+        })
+        .next()
+    {
+        root
+    } else {
+        return Default::default();
+    };
+
+    fn inline(e: IExpr, def_table: &BTreeMap<String, IExpr>) -> IExpr {
+        match e {
+            IExpr::Abstraction(Abstraction { bind_var, body }) => IExpr::Abstraction(Abstraction {
+                bind_var,
+                body: Box::new(inline(*body, def_table)),
+            }),
+            IExpr::Application(Application(lhs, rhs)) => IExpr::Application(Application(
+                Box::new(inline(*lhs, def_table)),
+                Box::new(inline(*rhs, def_table)),
+            )),
+            IExpr::Duplication(Duplication {
+                tag,
                 pair,
                 to_clone,
                 in_expr,
-                ..
-            }) => {
-                todo!()
+            }) => IExpr::Duplication(Duplication {
+                tag,
+                pair,
+                to_clone: Box::new(inline(*to_clone, def_table)),
+                in_expr: Box::new(inline(*in_expr, def_table)),
+            }),
+            IExpr::Superposition(Superposition { tag, lhs, rhs }) => {
+                IExpr::Superposition(Superposition {
+                    tag,
+                    lhs: Box::new(inline(*lhs, def_table)),
+                    rhs: Box::new(inline(*rhs, def_table)),
+                })
             }
-            _ => todo!(),
+            IExpr::Variable(v) => def_table.get(&v.0).cloned().unwrap_or(IExpr::Variable(v)),
         }
-    };
+    }
 
-    todo!()
+    let inlined = inline(expr, &def_table);
+
+    let _ = cc_expr(inlined, &mut net, &mut tags, &mut names);
+
+    net
 }
 
 pub fn compile_sk(e: SkExpr) -> AstPort {
@@ -414,5 +562,25 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_cc_icalc_simple() {
+        let case = "(\\x x a)";
+
+        let parsed = parser_icalc::parser()
+            .parse(
+                parser_icalc::lexer()
+                    .parse(case)
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+
+        let cc = compile_icalc(parsed.into_iter().map(|x| x.0).collect());
+
+        assert_eq!(cc[0].to_string(), "Constr[@2](x, x) >< Constr[@5](ret, a)");
     }
 }

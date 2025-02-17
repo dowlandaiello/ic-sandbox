@@ -34,6 +34,12 @@ pub fn read_program(in_fname: &str) -> Vec<Stmt> {
     parsed
 }
 
+pub fn compile(f_name: &str) -> Vec<Port> {
+    let parsed = read_program(f_name);
+
+    compiler::compile_icalc(parsed)
+}
+
 pub fn eval(f_name: &str) -> Vec<Expr> {
     let parsed = read_program(f_name);
 
