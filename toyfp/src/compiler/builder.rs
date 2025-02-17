@@ -405,7 +405,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 self.clone()
             }
             CombinatorBuilder::K { primary_port } => {
-                tracing::trace!("expanding K");
+                tracing::trace!("expanding K @ 0x{}", self.0.borrow().name);
 
                 let d = OwnedNetBuilder::new(
                     CombinatorBuilder::D {

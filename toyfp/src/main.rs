@@ -1,12 +1,24 @@
 use clap::{Arg, ArgAction, Command};
 use inetlib::parser::naming::NameIter;
-use std::{fs::OpenOptions, io::Write, path::PathBuf};
+use std::path::PathBuf;
 use toyfplib::compiler;
 
 mod cli;
 
 fn main() {
     tracing_subscriber::fmt::init();
+
+    let flag_icalc = Arg::new("icalc")
+        .long("icalc")
+        .short('i')
+        .action(ArgAction::SetTrue)
+        .help("use the interaction calculus as the input mode");
+
+    let flag_sk = Arg::new("sk")
+        .long("sk")
+        .short('s')
+        .action(ArgAction::SetTrue)
+        .help("use SK combinators as the input mode");
 
     let cmd = clap::Command::new("toyfp")
         .bin_name("toyfp")
@@ -18,52 +30,28 @@ fn main() {
                 )
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file_default("STDOUT".into()))
-                .arg(
-                    Arg::new("sk")
-                        .long("sk")
-                        .short('s')
-                        .action(ArgAction::SetTrue)
-                        .help("use SK combinators as the input mode"),
-                ),
+                .arg(flag_sk.clone()),
         )
         .subcommand(
             Command::new("compile")
                 .about("Compiles a DVM interaction combinator program from the input .fp file")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(
-                    Arg::new("sk")
-                        .long("sk")
-                        .short('s')
-                        .action(ArgAction::SetTrue)
-                        .help("use SK combinators as the input mode"),
-                ),
+                .arg(flag_sk.clone()),
         )
         .subcommand(
             Command::new("eval")
                 .about("Evaluates a DVM interaction combinator program from the input .fp file")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(
-                    Arg::new("sk")
-                        .long("sk")
-                        .short('s')
-                        .action(ArgAction::SetTrue)
-                        .help("use SK combinators as the input mode"),
-                ),
+                .arg(flag_sk.clone()),
         )
         .subcommand(
             Command::new("dev")
                 .about("Initiates an interactive REPL prototyping environment")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(
-                    Arg::new("sk")
-                        .long("sk")
-                        .short('s')
-                        .action(ArgAction::SetTrue)
-                        .help("use SK combinators as the input mode"),
-                ),
+                .arg(flag_sk.clone()),
         );
 
     let arg_matches = cmd.get_matches();
@@ -95,6 +83,14 @@ fn main() {
 
             if arg_matches.get_flag("sk") {
                 let res = cli::sk::eval(input_fname);
+
+                println!("{}", res);
+
+                return;
+            }
+
+            if arg_matches.get_flag("icalc") {
+                let res = cli::icalc::eval(input_fname);
 
                 println!("{}", res);
 

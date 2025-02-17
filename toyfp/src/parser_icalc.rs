@@ -17,6 +17,7 @@ pub enum Token {
     Semicolon,
     Ident(String),
     Dup,
+    Pound,
 }
 
 impl fmt::Display for Token {
@@ -33,6 +34,7 @@ impl fmt::Display for Token {
             Self::Semicolon => write!(f, ";"),
             Self::Ident(i) => write!(f, "{}", i),
             Self::Dup => write!(f, "dup"),
+            Self::Pound => write!(f, "#"),
         }
     }
 }
@@ -55,15 +57,18 @@ impl fmt::Display for Expr {
             Self::Application(Application(lhs, rhs)) => {
                 write!(f, "({} {})", lhs, rhs)
             }
-            Self::Superposition(Superposition(lhs, rhs)) => write!(f, "{{{} {}}}", lhs, rhs),
+            Self::Superposition(Superposition { tag, lhs, rhs }) => {
+                write!(f, "{{{} {}}}#{}", lhs, rhs, tag)
+            }
             Self::Duplication(Duplication {
+                tag,
                 pair,
                 to_clone,
                 in_expr,
             }) => write!(
                 f,
-                "dup {{{} {}}} = {}; {}",
-                pair.0, pair.1, to_clone, in_expr
+                "dup #{} {{{} {}}} = {}; {}",
+                tag, pair.0, pair.1, to_clone, in_expr
             ),
             Self::Variable(v) => write!(f, "{}", v.0),
         }
@@ -103,12 +108,17 @@ pub struct Abstraction {
 pub struct Application(pub Box<Expr>, pub Box<Expr>);
 
 #[derive(Debug)]
-pub struct Superposition(pub Box<Expr>, pub Box<Expr>);
+pub struct Superposition {
+    pub tag: String,
+    pub lhs: Box<Expr>,
+    pub rhs: Box<Expr>,
+}
 
 #[derive(Debug)]
 pub struct Duplication {
-    pub pair: (Box<String>, Box<String>),
-    pub to_clone: Box<String>,
+    pub tag: String,
+    pub pair: (String, String),
+    pub to_clone: Box<Expr>,
     pub in_expr: Box<Expr>,
 }
 
@@ -128,6 +138,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     let equals = just("=").map(|_| Token::Equals);
     let semi = just(";").map(|_| Token::Semicolon);
     let ident = text::ident().map(|e| Token::Ident(e));
+    let pound = just("#").map(|_| Token::Pound);
 
     let token = choice((
         left_bracket,
@@ -141,6 +152,7 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
         equals,
         semi,
         ident,
+        pound,
     ));
 
     token
@@ -196,29 +208,42 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
             .ignore_then(expr.clone())
             .then(expr.clone())
             .then_ignore(span_just(Token::RightBracket))
-            .map(|(a, b)| {
+            .then_ignore(span_just(Token::Pound))
+            .then(select! {
+            Spanned(Token::Ident(i), s) => Spanned(i, s)
+            })
+            .map(|((a, b), tag)| {
                 Spanned(
-                    Expr::Superposition(Superposition(Box::new(a.0), Box::new(b.0))),
+                    Expr::Superposition(Superposition {
+                        tag: tag.0,
+                        lhs: Box::new(a.0),
+                        rhs: Box::new(b.0),
+                    }),
                     a.1,
                 )
             });
         let duplication = span_just(Token::Dup)
-            .ignore_then(span_just(Token::LeftBracket))
+            .ignore_then(span_just(Token::Pound))
             .ignore_then(select! {
+            Spanned(Token::Ident(i), s) => Spanned(i, s)
+            })
+            .then_ignore(span_just(Token::LeftBracket))
+            .then(select! {
                 Spanned(Token::Ident(i), _) => i
             })
             .then(select! {
                     Spanned(Token::Ident(i), _) => i
             })
             .then_ignore(span_just(Token::Equals))
-            .then(select! {Spanned(Token::Ident(i), _) => i})
+            .then(expr.clone())
             .then_ignore(span_just(Token::Semicolon))
-            .then(expr)
-            .map(|(((p, q), from), in_expr)| {
+            .then(expr.clone())
+            .map(|((((tag, name_1), name_2), of), in_expr)| {
                 Spanned(
                     Expr::Duplication(Duplication {
-                        pair: (Box::new(p), Box::new(q)),
-                        to_clone: Box::new(from),
+                        tag: tag.0,
+                        pair: (name_1, name_2),
+                        to_clone: Box::new(of.0),
                         in_expr: Box::new(in_expr.0),
                     }),
                     in_expr.1,

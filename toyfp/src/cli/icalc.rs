@@ -3,12 +3,19 @@ use chumsky::{
     error::{Error, Simple, SimpleReason},
     Parser,
 };
-use inetlib::reducers::combinators::reduce_dyn;
+use inetlib::{
+    parser::{
+        ast_combinators::{Constructor, Expr as CExpr, Port, Var},
+        ast_lafont::Ident,
+        naming::NameIter,
+    },
+    reducers::combinators::buffered::adjacency_matrix::ReducerBuilder,
+};
 use rustyline::{error::ReadlineError, DefaultEditor};
-use std::{fs::OpenOptions, io::Read, path::PathBuf};
+use std::{collections::BTreeMap, fs::OpenOptions, io::Read, path::PathBuf};
 use toyfplib::{
     compiler,
-    parser_icalc::{self, Stmt},
+    parser_icalc::{self, Abstraction, Application, Definition, Duplication, Expr, Stmt},
 };
 
 pub fn read_program(in_fname: &str) -> Vec<Stmt> {
@@ -25,6 +32,64 @@ pub fn read_program(in_fname: &str) -> Vec<Stmt> {
     let parsed: Vec<Stmt> = assert_parse_ok(input_path.clone(), input.trim());
 
     parsed
+}
+
+pub fn eval(f_name: &str) -> Vec<Expr> {
+    let parsed = read_program(f_name);
+
+    let mut names = NameIter::default();
+
+    fn cc_expr(e: &Expr, names: &mut NameIter) -> Port {
+        match e {
+            Expr::Abstraction(Abstraction { bind_var, body }) => {
+                let body_cc = cc_expr(&body, names);
+                let var_cc = CExpr::Var(Var {
+                    name: Ident(bind_var.to_string()),
+                    port: None,
+                })
+                .into_port(names);
+
+                let lam = CExpr::Constr(Constructor {
+                    primary_port: None,
+                    aux_ports: [Some((0, body_cc)), Some((0, var_cc))],
+                })
+                .into_port(names);
+
+                var_cc.borrow_mut().set_primary_port(Some((2, lam.clone())));
+                body_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((1, lam.clone())));
+
+                lam
+            }
+            Expr::Application(Application(lhs, rhs)) => {
+                let lhs_cc = cc_expr(lhs, names);
+                let rhs_cc = cc_expr(rhs, names);
+
+                lhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, rhs_cc.clone())));
+                rhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, lhs_cc.clone())));
+
+                lhs_cc
+            }
+            Expr::Duplication(Duplication {
+                pair,
+                to_clone,
+                in_expr,
+            }) => {}
+        }
+    };
+
+    let lookup_table: BTreeMap<&str, Port> = parsed.iter().map(|stmt| match stmt {
+        Stmt::Def(Definition { name, definition }) => {
+            todo!()
+        }
+    });
+
+    let reducer = ReducerBuilder::default().with_init_nets();
 }
 
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Vec<Stmt> {

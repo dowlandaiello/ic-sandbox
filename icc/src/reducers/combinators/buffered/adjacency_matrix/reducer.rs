@@ -8,6 +8,7 @@ use crate::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
+#[cfg(feature = "threadpool")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -42,54 +43,68 @@ pub struct ReducerBuilder {
 }
 
 impl ReducerBuilder {
-    pub fn with_init_net(mut self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
-        let n_nodes = net.iter_tree().count();
+    pub fn with_init_net(self, net: &Port) -> CapacitiedBufferedMatrixReducerBuilder {
+        self.with_init_nets([net].into_iter())
+    }
+
+    pub fn with_init_nets<'a>(
+        mut self,
+        nets: impl Iterator<Item = &'a Port> + Clone,
+    ) -> CapacitiedBufferedMatrixReducerBuilder {
+        let n_nodes = nets.clone().map(|net| net.iter_tree().count()).sum();
 
         let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
 
-        let slots_for_ast_elems: BTreeMap<usize, usize> = net
-            .iter_tree()
-            .enumerate()
-            .map(|(i, elem)| {
-                self.names.insert(i, elem.id);
+        let slots_for_ast_elems: BTreeMap<usize, usize> = nets
+            .clone()
+            .map(|net| {
+                net.iter_tree()
+                    .enumerate()
+                    .map(|(i, elem)| {
+                        self.names.insert(i, elem.id);
 
-                let discriminant = match &*elem.borrow() {
-                    Expr::Constr(_) => Cell::Constr,
-                    Expr::Dup(_) => Cell::Dup,
-                    Expr::Era(_) => Cell::Era,
-                    Expr::Var(ident) => {
-                        self.idents.insert(i, ident.name.to_string());
+                        let discriminant = match &*elem.borrow() {
+                            Expr::Constr(_) => Cell::Constr,
+                            Expr::Dup(_) => Cell::Dup,
+                            Expr::Era(_) => Cell::Era,
+                            Expr::Var(ident) => {
+                                self.idents.insert(i, ident.name.to_string());
 
-                        Cell::Var(i)
-                    }
-                };
+                                Cell::Var(i)
+                            }
+                        };
 
-                (elem.id, buff.push(discriminant))
+                        (elem.id, buff.push(discriminant))
+                    })
+                    .collect::<Vec<_>>()
             })
+            .flatten()
             .collect();
 
         // Wire nodes
-        net.iter_tree().for_each(|elem| {
-            let slot = slots_for_ast_elems.get(&elem.id).unwrap();
+        nets.for_each(|net| {
+            net.iter_tree().for_each(|elem| {
+                let slot = slots_for_ast_elems.get(&elem.id).unwrap();
 
-            elem.iter_ports()
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, x)| Some((i, x?)))
-                .for_each(|(port_self, (port_other, p))| {
-                    let other_slot = slots_for_ast_elems.get(&p.id).unwrap();
+                elem.iter_ports()
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| Some((i, x?)))
+                    .for_each(|(port_self, (port_other, p))| {
+                        let other_slot = slots_for_ast_elems.get(&p.id).unwrap();
 
-                    buff.connect(
-                        Some(Conn {
-                            cell: *slot,
-                            port: port_self as u8,
-                        }),
-                        Some(Conn {
-                            cell: *other_slot,
-                            port: port_other as u8,
-                        }),
-                    );
-                });
+                        buff.connect(
+                            Some(Conn {
+                                cell: *slot,
+                                port: port_self as u8,
+                            }),
+                            Some(Conn {
+                                cell: *other_slot,
+                                port: port_other as u8,
+                            }),
+                        );
+                    });
+            })
         });
 
         CapacitiedBufferedMatrixReducerBuilder {

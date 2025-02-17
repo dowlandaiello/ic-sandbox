@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-icc = { workspace = true }
+icc = { workspace = true, features = ["threadpool"] }
 chumsky = { workspace = true }
+petgraph = "0.7.1"

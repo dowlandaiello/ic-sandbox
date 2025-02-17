@@ -1,4 +1,8 @@
-use super::{parser::Expr, parser_sk::Expr as SkExpr};
+use super::{
+    parser::Expr,
+    parser_icalc::{Expr as IExpr, Stmt as IStmt},
+    parser_sk::Expr as SkExpr,
+};
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
 use inetlib::parser::{ast_combinators::Port as AstPort, naming::NameIter};
 
@@ -16,14 +20,26 @@ pub trait CombinatorBuilder: Sized {
     fn expand_step(&self, names: &mut NameIter) -> Self;
 }
 
+pub fn compile_icalc(s: IStmt) -> AstPort {
+    let lookup_table: BTreeMap<&str, AstPort> = match e {
+	IStmt::Def
+    };
+}
+
 pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
     let cc = build_compilation_expr(e, &mut names);
 
-    cc.expand_step(&mut names);
+    cc.clone().iter_tree().for_each(|x| {
+        x.expand_step(&mut names);
+    });
 
-    cc.combinate(&mut names)
+    let combinated = cc.combinate(&mut names);
+
+    println!("combinated: {}", combinated);
+
+    combinated
 }
 
 pub fn decode_sk(p: &AstPort) -> SkExpr {
@@ -69,7 +85,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
         SkExpr::K(a, b) => {
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
-                    name: names.next(),
+                    name: names.next_var_name(),
                     primary_port: None,
                 },
                 names,
@@ -88,7 +104,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
             if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
-                        name: names.next(),
+                        name: names.next_var_name(),
                         primary_port: None,
                     },
                     names,
@@ -118,7 +134,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
 
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
-                        name: names.next(),
+                        name: names.next_var_name(),
                         primary_port: None,
                     },
                     names,
@@ -161,7 +177,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
         SkExpr::S(a, b, c) => {
             let temp_empty_var = OwnedNetBuilder::new(
                 SkCombinatorBuilder::Var {
-                    name: names.next(),
+                    name: names.next_var_name(),
                     primary_port: None,
                 },
                 names,
@@ -180,7 +196,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
             if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
-                        name: names.next(),
+                        name: names.next_var_name(),
                         primary_port: None,
                     },
                     names,
@@ -210,7 +226,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
 
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
-                        name: names.next(),
+                        name: names.next_var_name(),
                         primary_port: None,
                     },
                     names,
@@ -254,7 +270,7 @@ fn build_compilation_expr(e: SkExpr, names: &mut NameIter) -> OwnedNetBuilder {
 
                 let empty_port_var = OwnedNetBuilder::new(
                     SkCombinatorBuilder::Var {
-                        name: names.next(),
+                        name: names.next_var_name(),
                         primary_port: None,
                     },
                     names,

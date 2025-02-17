@@ -3,7 +3,14 @@ use inetlib::parser::{
     ast_combinators::Port,
     parser_combinators::{lexer, parser},
 };
-use std::io::{stdin, Read};
+use petgraph::{
+    dot::{Config, Dot},
+    Graph,
+};
+use std::{
+    collections::BTreeMap,
+    io::{stdin, Read},
+};
 
 fn main() {
     let mut raw_expr = String::new();
@@ -19,73 +26,39 @@ fn main() {
         format!("<p>{} @ 0x{} in {}</p>", p.borrow().name(), p.id, port,)
     };
 
-    let agents = prog[0]
+    let mut graph = Graph::new_undirected();
+
+    let nodes_for_id: BTreeMap<usize, _> = prog[0]
         .iter_tree()
         .map(|x| {
-            format!(
-                r#"<div class="agent">
-{}
-<h2>{}</h2>
-<div class="body-port">
-{}
-</div>
-</div>"#,
-                x.borrow()
-                    .primary_port()
-                    .map(fmt_port)
-                    .unwrap_or("empty".to_string()),
-                format!("{} @ 0x{}", x.borrow().name(), x.id),
-                x.borrow()
-                    .aux_ports()
-                    .iter()
-                    .map(|x| x.as_ref().map(fmt_port).unwrap_or("empty".to_string()))
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+            (
+                x.id,
+                graph.add_node(format!("{}: {}", x.borrow().name(), x.id)),
             )
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+    prog[0].iter_tree().for_each(|x| {
+        x.iter_ports()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, x)| Some((i, x?)))
+            .for_each(|(self_port, (other_port, other_p))| {
+                let self_node = nodes_for_id[&x.id];
+                let other_node = nodes_for_id[&other_p.id];
 
-    println!(
-        r#"<html>
-<head>
-<style>
-.agent {{
-  display: flex;
-  flex-flow: column;
-  flex-wrap: wrap;
+                if graph.contains_edge(self_node, other_node)
+                    || graph.contains_edge(other_node, self_node)
+                {
+                    return;
+                }
 
-  background-color: black;
-  color: white;
+                graph.add_edge(
+                    self_node,
+                    other_node,
+                    format!("({}, {})", self_port, other_port),
+                );
+            });
+    });
 
-  border-radius: 5px;
-  padding: 2em;
-}}
-
-.agents {{
-  display: flex;
-  flex-flow: row;
-  flex-wrap: wrap;
-  gap: 2em;
-  justify-content: center;
-}}
-
-.body-port {{
-  display: flex;
-  flex-flow: row;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5em;
-}}
-</style>
-<title>{}</title>
-<body>
-<div class="agents">
-{}
-</div>
-</body>
-</html>"#,
-        raw_expr.chars().take(20).collect::<String>(),
-        agents
-    );
+    println!("{:?}", Dot::with_config(&graph, &[]));
 }
