@@ -236,6 +236,8 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
 
     let cc = build_compilation_expr(true, e, &mut names);
 
+    cc.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
     cc.clone().iter_tree().for_each(|x| {
         x.expand_step(&mut names);
     });
@@ -279,7 +281,7 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
 
     let maybe_encode = |p: OwnedNetBuilder| {
         if root {
-            p.clone().encode(names);
+            p.clone().expand_step(names).encode(names);
         }
 
         p
@@ -561,6 +563,18 @@ mod test {
     #[test_log::test]
     fn test_eval_k_call() {
         let (case, expected) = ("(K(K)(K))", "(K)");
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into());
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_k_nested() {
+        let (case, expected) = ("(K(K(K)(K))(K))", "(K)");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
