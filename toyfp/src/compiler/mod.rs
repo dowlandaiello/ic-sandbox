@@ -1,10 +1,17 @@
 use super::{
     parser::Expr,
-    parser_icalc::{Expr as IExpr, Stmt as IStmt},
+    parser_icalc::{
+        Abstraction, Application, Duplication, Expr as IExpr, Stmt as IStmt, Superposition,
+    },
     parser_sk::Expr as SkExpr,
 };
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
-use inetlib::parser::{ast_combinators::Port as AstPort, naming::NameIter};
+use inetlib::parser::{
+    ast_combinators::{Constructor, Duplicator, Eraser, Expr as CExpr, Port as AstPort, Var},
+    ast_lafont::Ident,
+    naming::NameIter,
+};
+use std::collections::BTreeMap;
 
 mod builder;
 mod icalc;
@@ -20,10 +27,60 @@ pub trait CombinatorBuilder: Sized {
     fn expand_step(&self, names: &mut NameIter) -> Self;
 }
 
-pub fn compile_icalc(s: IStmt) -> AstPort {
-    let lookup_table: BTreeMap<&str, AstPort> = match e {
-	IStmt::Def
+pub fn decompile_icalc(p: AstPort) -> IExpr {
+    todo!()
+}
+
+pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
+    fn cc_expr(e: &IExpr, names: &mut NameIter) -> AstPort {
+        match e {
+            IExpr::Abstraction(Abstraction { bind_var, body }) => {
+                let body_cc = cc_expr(&body, names);
+                let var_cc = CExpr::Var(Var {
+                    name: Ident(bind_var.to_string()),
+                    port: None,
+                })
+                .into_port(names);
+
+                let lam = CExpr::Constr(Constructor {
+                    primary_port: None,
+                    aux_ports: [Some((0, body_cc.clone())), Some((0, var_cc.clone()))],
+                })
+                .into_port(names);
+
+                var_cc.borrow_mut().set_primary_port(Some((2, lam.clone())));
+                body_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((1, lam.clone())));
+
+                lam
+            }
+            IExpr::Application(Application(lhs, rhs)) => {
+                let lhs_cc = cc_expr(lhs, names);
+                let rhs_cc = cc_expr(rhs, names);
+
+                lhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, rhs_cc.clone())));
+                rhs_cc
+                    .borrow_mut()
+                    .set_primary_port(Some((0, lhs_cc.clone())));
+
+                lhs_cc
+            }
+            IExpr::Duplication(Duplication {
+                pair,
+                to_clone,
+                in_expr,
+                ..
+            }) => {
+                todo!()
+            }
+            _ => todo!(),
+        }
     };
+
+    todo!()
 }
 
 pub fn compile_sk(e: SkExpr) -> AstPort {

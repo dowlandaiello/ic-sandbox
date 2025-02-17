@@ -18,6 +18,7 @@ pub enum Token {
     Ident(String),
     Dup,
     Pound,
+    Comma,
 }
 
 impl fmt::Display for Token {
@@ -35,6 +36,7 @@ impl fmt::Display for Token {
             Self::Ident(i) => write!(f, "{}", i),
             Self::Dup => write!(f, "dup"),
             Self::Pound => write!(f, "#"),
+            Self::Comma => write!(f, ","),
         }
     }
 }
@@ -58,18 +60,32 @@ impl fmt::Display for Expr {
                 write!(f, "({} {})", lhs, rhs)
             }
             Self::Superposition(Superposition { tag, lhs, rhs }) => {
-                write!(f, "{{{} {}}}#{}", lhs, rhs, tag)
+                if tag.is_empty() {
+                    write!(f, "{{{}, {}}}", lhs, rhs)
+                } else {
+                    write!(f, "{{{}, {}}}#{}", lhs, rhs, tag)
+                }
             }
             Self::Duplication(Duplication {
                 tag,
                 pair,
                 to_clone,
                 in_expr,
-            }) => write!(
-                f,
-                "dup #{} {{{} {}}} = {}; {}",
-                tag, pair.0, pair.1, to_clone, in_expr
-            ),
+            }) => {
+                if tag.is_empty() {
+                    write!(
+                        f,
+                        "dup {{{}, {}}} = {}; {}",
+                        pair.0, pair.1, to_clone, in_expr
+                    )
+                } else {
+                    write!(
+                        f,
+                        "dup #{} {{{}, {}}} = {}; {}",
+                        tag, pair.0, pair.1, to_clone, in_expr
+                    )
+                }
+            }
             Self::Variable(v) => write!(f, "{}", v.0),
         }
     }
@@ -139,8 +155,10 @@ pub fn lexer() -> impl Parser<char, Vec<Vec<Spanned<Token>>>, Error = Simple<cha
     let semi = just(";").map(|_| Token::Semicolon);
     let ident = text::ident().map(|e| Token::Ident(e));
     let pound = just("#").map(|_| Token::Pound);
+    let comma = just(",").map(|_| Token::Comma);
 
     let token = choice((
+        comma,
         left_bracket,
         right_bracket,
         left_paren,
@@ -183,6 +201,13 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
     Spanned(Token::Ident(i), s) => Spanned(Expr::Variable(Var(i)), s),
     };
 
+    let tag = span_just(Token::Pound)
+        .ignore_then(select! {
+        Spanned(Token::Ident(i), _) => i
+        })
+        .or_not()
+        .map(|maybe_tag| maybe_tag.unwrap_or_default());
+
     let expr = recursive(|expr| {
         let abstraction = span_just(Token::Lambda)
             .ignore_then(select! {
@@ -208,14 +233,11 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
             .ignore_then(expr.clone())
             .then(expr.clone())
             .then_ignore(span_just(Token::RightBracket))
-            .then_ignore(span_just(Token::Pound))
-            .then(select! {
-            Spanned(Token::Ident(i), s) => Spanned(i, s)
-            })
+            .then(tag.clone())
             .map(|((a, b), tag)| {
                 Spanned(
                     Expr::Superposition(Superposition {
-                        tag: tag.0,
+                        tag,
                         lhs: Box::new(a.0),
                         rhs: Box::new(b.0),
                     }),
@@ -223,17 +245,16 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
                 )
             });
         let duplication = span_just(Token::Dup)
-            .ignore_then(span_just(Token::Pound))
-            .ignore_then(select! {
-            Spanned(Token::Ident(i), s) => Spanned(i, s)
-            })
+            .ignore_then(tag)
             .then_ignore(span_just(Token::LeftBracket))
             .then(select! {
                 Spanned(Token::Ident(i), _) => i
             })
+            .then_ignore(span_just(Token::Comma))
             .then(select! {
                     Spanned(Token::Ident(i), _) => i
             })
+            .then_ignore(span_just(Token::RightBracket))
             .then_ignore(span_just(Token::Equals))
             .then(expr.clone())
             .then_ignore(span_just(Token::Semicolon))
@@ -241,7 +262,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
             .map(|((((tag, name_1), name_2), of), in_expr)| {
                 Spanned(
                     Expr::Duplication(Duplication {
-                        tag: tag.0,
+                        tag,
                         pair: (name_1, name_2),
                         to_clone: Box::new(of.0),
                         in_expr: Box::new(in_expr.0),
@@ -305,6 +326,32 @@ mod test {
     #[test]
     fn test_parse_two_app() {
         let case = "\\n \\s \\z (s n)";
+
+        let lexed = lexer()
+            .parse(case)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            parser()
+                .parse(lexed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.0.to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            case.to_string()
+        );
+    }
+
+    #[test]
+    fn test_multiline() {
+        let case = "def Z = \\s \\z z
+def S = \\n \\s \\z (s n)
+def map = dup {map, rec} = \\f xs; dup #f {f0, f1} = f; (xs \\head \\tail ((cons rec) nil))
+((fnot p8) true)";
 
         let lexed = lexer()
             .parse(case)

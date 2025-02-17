@@ -92,7 +92,7 @@ fn main() {
             if arg_matches.get_flag("icalc") {
                 let res = cli::icalc::eval(input_fname);
 
-                println!("{}", res);
+                res.iter().for_each(|x| println!("{}", x));
 
                 return;
             }
