@@ -140,9 +140,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     .zip(aux_ports.get(0).cloned().flatten())
                     .expect("ZN_1 expansion must have set primary and aux ports");
 
-                p.1.update_with(|builder| builder.clone().with_port_i(p.0, Some(aux.clone())));
-                aux.1
-                    .update_with(|builder| builder.clone().with_port_i(aux.0, Some(p.clone())));
+                Self::connect(p, aux);
             });
 
         let mut agents_for_id: BTreeMap<usize, AstPort> = self
@@ -298,11 +296,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         self.clone()
                             .rewrite_conns((n, self.clone()), (2, constr_child.clone()));
 
-                        parent.update_with(|builder| {
-                            builder
-                                .clone()
-                                .with_primary_port(Some((1, constr_child.clone())))
-                        });
+                        Self::connect((1, constr_child.clone()), (0, parent.clone()));
 
                         parent.expand_step(names);
 
@@ -325,34 +319,21 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 );
                 let root = CombinatorBuilder::ZN {
                     primary_port: primary_port.clone(),
-                    aux_ports: vec![
-                        Some((1, dup.clone())),
-                        Some((2, dup.clone())),
-                        Some((0, dup.clone())),
-                        aux_port.clone(),
-                    ],
+                    aux_ports: vec![None; 4],
                 };
-                let root_ref = self;
+
+                self.update_with(|_| root);
 
                 // Aux <-> root
                 if let Some((port, aux)) = aux_port {
-                    aux.update_with(|builder| {
-                        builder
-                            .clone()
-                            .with_port_i(*port, Some((4, root_ref.clone())))
-                    });
+                    Self::connect((*port, aux.clone()), (4, self.clone()));
                 }
 
                 // Dup <-> root
-                dup.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((3, root_ref.clone())))
-                        .with_aux_port_i(0, Some((1, root_ref.clone())))
-                        .with_aux_port_i(1, Some((2, root_ref.clone())))
-                });
+                Self::connect((1, dup.clone()), (1, self.clone()));
+                Self::connect((2, dup.clone()), (2, self.clone()));
+                Self::connect((0, dup.clone()), (3, self.clone()));
 
-                self.update_with(|_| root);
                 self.expand_step(names);
 
                 self.clone()
@@ -378,26 +359,13 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 };
                 let root_ref = self;
 
-                d.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((3, root_ref.clone())))
-                        .with_aux_port_i(0, Some((1, root_ref.clone())))
-                });
-                e.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((2, root_ref.clone())))
-                });
+                if let Some(p) = primary_port {
+                    Self::connect((0, self.clone()), p.clone());
+                }
 
-                // primary port <-> Z
-                if let Some((port, p)) = primary_port {
-                    p.update_with(|builder| {
-                        builder
-                            .clone()
-                            .with_port_i(*port, Some((0, root_ref.clone())))
-                    });
-                };
+                Self::connect((1, self.clone()), (1, d.clone()));
+                Self::connect((3, self.clone()), (0, d.clone()));
+                Self::connect((2, self.clone()), (0, e.clone()));
 
                 self.update_with(|_| root);
 
@@ -476,73 +444,45 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     ],
                 };
 
-                right_bottom_z
-                    .iter_aux_ports()
-                    .enumerate()
-                    .filter_map(|(i, x)| Some((i, x?)))
-                    .for_each(|(i, (port, p))| {
-                        (*p).update_with(|builder| {
-                            builder
-                                .clone()
-                                .with_port_i(*port, Some((1 + i, right_bottom_z_ref.clone())))
-                        });
-                    });
+                // Top left  Z conns
+                Self::connect((0, top_left_z.clone()), (3, right_bottom_z_ref.clone()));
+                Self::connect((1, top_left_z.clone()), (4, top_left_z.clone()));
+                Self::connect((2, top_left_z.clone()), (2, middle_left_z.clone()));
+                Self::connect((3, top_left_z.clone()), (3, middle_left_z.clone()));
 
-                // Connect dup to constrs
-                dup.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_push_aux_port(Some((2, left_middle_constr.clone())))
-                        .with_push_aux_port(Some((2, middle_constr.clone())))
-                });
+                // Middle left Z conns
+                Self::connect(
+                    (0, middle_left_z.clone()),
+                    (2, bottom_middle_right_constr.clone()),
+                );
+                Self::connect((1, middle_left_z.clone()), (0, left_middle_constr.clone()));
+                Self::connect((4, middle_left_z.clone()), (1, left_middle_constr.clone()));
 
-                // Connect bottom right constr to top right constr, Z
-                bottom_middle_right_constr.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_aux_port_i(1, Some((0, middle_left_z.clone())))
-                        .with_primary_port(Some((1, middle_constr.clone())))
-                });
+                // Bottom right Z conns
+                if let Some(p) = primary_port {
+                    Self::connect((0, right_bottom_z_ref.clone()), p.clone());
+                }
 
-                middle_constr.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, d.clone())))
-                        .with_push_aux_port(Some((0, bottom_middle_right_constr.clone())))
-                        .with_push_aux_port(Some((2, dup.clone())))
-                });
-                d.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_push_aux_port(Some((0, middle_constr.clone())))
-                });
+                Self::connect(
+                    (1, right_bottom_z_ref.clone()),
+                    (1, bottom_middle_right_constr.clone()),
+                );
+                Self::connect((2, right_bottom_z_ref.clone()), (0, dup.clone()));
+                Self::connect((4, right_bottom_z_ref.clone()), (0, d.clone()));
 
-                left_middle_constr.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, middle_left_z.clone())))
-                        .with_push_aux_port(Some((4, middle_left_z.clone())))
-                        .with_push_aux_port(Some((1, dup.clone())))
-                });
+                // Dup conns
+                Self::connect((1, dup.clone()), (2, left_middle_constr.clone()));
+                Self::connect((2, dup.clone()), (2, middle_constr.clone()));
 
-                top_left_z.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((3, right_bottom_z_ref.clone())))
-                        .with_push_aux_port(Some((4, top_left_z.clone())))
-                        .with_push_aux_port(Some((2, middle_left_z.clone())))
-                        .with_push_aux_port(Some((3, middle_left_z.clone())))
-                        .with_push_aux_port(Some((1, top_left_z.clone())))
-                });
-                middle_left_z.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((2, middle_constr.clone())))
-                        .with_push_aux_port(Some((0, left_middle_constr.clone())))
-                        .with_push_aux_port(Some((2, top_left_z.clone())))
-                        .with_push_aux_port(Some((3, top_left_z.clone())))
-                        .with_push_aux_port(Some((1, left_middle_constr.clone())))
-                });
+                // D conns
+                Self::connect((1, d.clone()), (0, middle_constr.clone()));
+
+                // Middle constr conns
+                Self::connect(
+                    (1, middle_constr.clone()),
+                    (0, bottom_middle_right_constr.clone()),
+                );
+                Self::connect((2, middle_constr.clone()), (2, dup.clone()));
 
                 self.update_with(|_| right_bottom_z);
 
@@ -583,6 +523,13 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 }
 
 impl OwnedNetBuilder {
+    pub(crate) fn connect(lhs: Port, rhs: Port) {
+        lhs.1
+            .update_with(|builder| builder.clone().set_port_i(lhs.0, Some(rhs.clone())));
+        rhs.1
+            .update_with(|builder| builder.clone().set_port_i(rhs.0, Some(lhs.clone())));
+    }
+
     pub(crate) fn rewrite_conns(self, src: Port, dest: Port) {
         self.iter_tree().for_each(|x| {
             x.0.borrow_mut()
@@ -599,25 +546,25 @@ impl OwnedNetBuilder {
     }
 
     pub(crate) fn make_root(self, names: &NameIter) -> Self {
-        let slf = self.clone();
+        let next_port_idx = {
+            let builder = &self.0.borrow().builder;
 
-        self.update_with(|builder| {
-            let next_port_idx = builder
+            builder
                 .next_empty_port()
-                .unwrap_or_else(|| builder.len_ports());
+                .unwrap_or_else(|| builder.len_ports())
+        };
 
-            builder.clone().with_push_port(Some((
-                0,
-                OwnedNetBuilder::new(
-                    CombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: Some((next_port_idx, slf)),
-                    },
-                    names,
-                ),
-            )))
-        })
-        .clone()
+        let v = OwnedNetBuilder::new(
+            CombinatorBuilder::Var {
+                name: names.next_var_name(),
+                primary_port: None,
+            },
+            names,
+        );
+
+        Self::connect((next_port_idx, self.clone()), (0, v.clone()));
+
+        self
     }
 
     /// Finds all mismatched ports in the tree (i.e., one agent connected to another agent that is not connected to its parent)
@@ -680,24 +627,21 @@ impl OwnedNetBuilder {
             names,
         );
 
-        new_root.update_with(|builder| builder.clone().with_aux_port_i(3, Some((0, self.clone()))));
-        self.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((4, new_root.clone())))
-        });
+        let empty_port = self
+            .0
+            .borrow()
+            .builder
+            .iter_ports()
+            .position(|x| x.is_none())
+            .unwrap_or(0);
+
+        Self::connect((empty_port, self.clone()), (4, new_root.clone()));
 
         let z_combs: [OwnedNetBuilder; 3] = (0..3)
             .map(|i| {
-                let comb = OwnedNetBuilder::new(
-                    CombinatorBuilder::mk_z_n(n_dup_refs)
-                        .with_primary_port(Some((1 + i, new_root.clone()))),
-                    names,
-                );
+                let comb = OwnedNetBuilder::new(CombinatorBuilder::mk_z_n(n_dup_refs), names);
 
-                new_root.update_with(|builder| {
-                    builder.clone().with_aux_port_i(i, Some((0, comb.clone())))
-                });
+                Self::connect((1 + i, new_root.clone()), (0, comb.clone()));
 
                 comb
             })
@@ -709,42 +653,29 @@ impl OwnedNetBuilder {
             let (p1, p2, p3) = (ports.remove(0), ports.remove(0), ports.remove(0));
 
             let ins_port_1 = z_combs[0].0.borrow().builder.next_empty_port().unwrap();
-            z_combs[0].update_with(|builder| builder.clone().with_push_aux_port(p1.clone()));
 
-            if let Some((port, p)) = p1 {
-                p.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(port, Some((ins_port_1, z_combs[0].clone())))
-                });
+            if let Some(p) = p1 {
+                Self::connect(p, (ins_port_1, z_combs[0].clone()));
             }
 
             let ins_port_2 = z_combs[1].0.borrow().builder.next_empty_port().unwrap();
-            z_combs[1].update_with(|builder| builder.clone().with_push_aux_port(p2.clone()));
 
-            if let Some((port, p)) = p2 {
-                p.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(port, Some((ins_port_2, z_combs[1].clone())))
-                });
+            if let Some(p) = p2 {
+                Self::connect(p, (ins_port_2, z_combs[1].clone()));
             }
 
             let ins_port_3 = z_combs[2].0.borrow().builder.next_empty_port().unwrap();
-            z_combs[2].update_with(|builder| builder.clone().with_push_aux_port(p3.clone()));
 
-            if let Some((port, p)) = p3 {
-                p.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(port, Some((ins_port_3, z_combs[2].clone())))
-                });
+            if let Some(p) = p3 {
+                Self::connect(p, (ins_port_3, z_combs[2].clone()));
             }
         }
 
         for comb in z_combs {
             comb.expand_step(names);
         }
+
+        new_root.checksum();
 
         new_root
     }
@@ -912,7 +843,7 @@ impl CombinatorBuilder {
         }
     }
 
-    pub(crate) fn with_primary_port(self, primary_port: Option<Port>) -> Self {
+    pub(crate) fn set_primary_port(self, primary_port: Option<Port>) -> Self {
         match self {
             Self::ZN { aux_ports, .. } => Self::ZN {
                 aux_ports,
@@ -937,7 +868,7 @@ impl CombinatorBuilder {
         }
     }
 
-    pub(crate) fn with_aux_port_i(self, i: usize, aux_port: Option<Port>) -> Self {
+    fn set_aux_port_i(self, i: usize, aux_port: Option<Port>) -> Self {
         match self {
             Self::ZN {
                 primary_port,
@@ -987,11 +918,11 @@ impl CombinatorBuilder {
         }
     }
 
-    pub(crate) fn with_port_i(self, i: usize, port: Option<Port>) -> Self {
+    fn set_port_i(self, i: usize, port: Option<Port>) -> Self {
         if i == 0 {
-            self.with_primary_port(port)
+            self.set_primary_port(port)
         } else {
-            self.with_aux_port_i(i - 1, port)
+            self.set_aux_port_i(i - 1, port)
         }
     }
 
@@ -1015,9 +946,7 @@ impl CombinatorBuilder {
             .last()
     }
 
-    pub(crate) fn iter_ports_mut<'a>(
-        &'a mut self,
-    ) -> Box<dyn Iterator<Item = Option<&'a mut Port>> + 'a> {
+    fn iter_ports_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = Option<&'a mut Port>> + 'a> {
         match self {
             Self::ZN {
                 primary_port,
@@ -1114,26 +1043,6 @@ impl CombinatorBuilder {
             Self::Era { .. } | Self::K { .. } | Self::S { .. } | Self::Var { .. } => {
                 Box::new(iter::empty())
             }
-        }
-    }
-
-    pub(crate) fn with_push_aux_port(self, aux_port: Option<Port>) -> Self {
-        let first_empty_slot = self.iter_aux_ports().position(|elem| elem.is_none());
-
-        if let Some(pos) = first_empty_slot {
-            self.with_aux_port_i(pos, aux_port)
-        } else {
-            self
-        }
-    }
-
-    pub(crate) fn with_push_port(self, aux_port: Option<Port>) -> Self {
-        let first_empty_slot = self.iter_ports().position(|elem| elem.is_none());
-
-        if let Some(pos) = first_empty_slot {
-            self.with_port_i(pos, aux_port)
-        } else {
-            self
         }
     }
 
@@ -1237,12 +1146,8 @@ mod test {
             &mut names,
         );
 
-        net.update_with(|builder| {
-            builder
-                .clone()
-                .with_push_aux_port(Some((0, dup_left.clone())))
-                .with_push_aux_port(Some((0, dup_right.clone())))
-        });
+        OwnedNetBuilder::connect((1, net.clone()), (0, dup_left.clone()));
+        OwnedNetBuilder::connect((2, net.clone()), (0, dup_right.clone()));
 
         let constr = OwnedNetBuilder::new(
             CombinatorBuilder::Constr {
@@ -1258,31 +1163,15 @@ mod test {
             },
             &mut names,
         );
-        constr.update_with(|builder| {
-            builder
-                .clone()
-                .with_port_i(1, Some((0, constr_parent.clone())))
-                .with_port_i(2, Some((1, dup_left.clone())))
-        });
 
-        dup_left.update_with(|builder| {
-            builder
-                .clone()
-                .with_aux_port_i(0, Some((2, constr.clone())))
-                .with_aux_port_i(1, Some((2, constr_parent.clone())))
-        });
-        dup_right.update_with(|builder| {
-            builder
-                .clone()
-                .with_aux_port_i(0, Some((1, constr_parent.clone())))
-                .with_aux_port_i(1, Some((0, constr.clone())))
-        });
-        constr_parent.update_with(|builder| {
-            builder
-                .clone()
-                .with_port_i(1, Some((1, dup_right.clone())))
-                .with_port_i(2, Some((2, dup_left.clone())))
-        });
+        OwnedNetBuilder::connect((1, constr.clone()), (0, constr_parent.clone()));
+        OwnedNetBuilder::connect((2, constr.clone()), (1, dup_left.clone()));
+
+        OwnedNetBuilder::connect((1, dup_left.clone()), (2, constr.clone()));
+        OwnedNetBuilder::connect((2, dup_left.clone()), (2, constr_parent.clone()));
+
+        OwnedNetBuilder::connect((1, dup_right.clone()), (1, constr_parent.clone()));
+        OwnedNetBuilder::connect((2, dup_right.clone()), (0, constr.clone()));
 
         let net = net.encode(&mut names);
 
@@ -1300,8 +1189,7 @@ mod test {
             &mut names,
         );
 
-        net.update_with(|builder| builder.clone().with_primary_port(Some((0, d_comb.clone()))))
-            .expand_step(&mut names);
+        OwnedNetBuilder::connect((0, net.clone()), (0, d_comb.clone()));
 
         d_comb.expand_step(&mut names);
 
@@ -1340,20 +1228,11 @@ mod test {
             &mut names,
         );
 
-        var.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((1, decoder.clone())))
-        });
+        OwnedNetBuilder::connect((0, var.clone()), (1, decoder.clone()));
 
         decoder.expand_step(&mut names);
 
-        coder.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((0, decoder.clone())))
-        });
-        decoder.update_with(|builder| builder.clone().with_primary_port(Some((0, coder.clone()))));
+        OwnedNetBuilder::connect((0, coder.clone()), (0, decoder.clone()));
 
         let comb_coder = coder.combinate(&mut names);
         let _ = decoder.combinate(&mut names);
@@ -1390,20 +1269,11 @@ mod test {
             &mut names,
         );
 
-        var.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((1, decoder.clone())))
-        });
+        OwnedNetBuilder::connect((0, var.clone()), (1, decoder.clone()));
 
         decoder.expand_step(&mut names);
 
-        coder.update_with(|builder| {
-            builder
-                .clone()
-                .with_primary_port(Some((0, decoder.clone())))
-        });
-        decoder.update_with(|builder| builder.clone().with_primary_port(Some((0, coder.clone()))));
+        OwnedNetBuilder::connect((0, decoder.clone()), (0, coder.clone()));
 
         let comb_coder = coder.combinate(&mut names);
 
@@ -1434,7 +1304,7 @@ mod test {
             &mut names,
         );
 
-        z2_1.update_with(|builder| builder.clone().with_primary_port(Some((0, z2_2.clone()))));
+        OwnedNetBuilder::connect((0, z2_1.clone()), (0, z2_2.clone()));
 
         let _ = (0..2)
             .enumerate()
@@ -1447,9 +1317,7 @@ mod test {
                     &mut names,
                 );
 
-                z2_1.update_with(|builder| {
-                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                });
+                OwnedNetBuilder::connect((1 + i, z2_1.clone()), (0, v.clone()));
 
                 v
             })
@@ -1465,9 +1333,7 @@ mod test {
                     &mut names,
                 );
 
-                z2_2.update_with(|builder| {
-                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                });
+                OwnedNetBuilder::connect((1 + i, z2_2.clone()), (0, v.clone()));
 
                 v
             })
@@ -1507,7 +1373,7 @@ mod test {
             &mut names,
         );
 
-        z4_1.update_with(|builder| builder.clone().with_primary_port(Some((0, z4_2.clone()))));
+        OwnedNetBuilder::connect((0, z4_1.clone()), (0, z4_2.clone()));
 
         let _ = (0..4)
             .enumerate()
@@ -1520,9 +1386,7 @@ mod test {
                     &mut names,
                 );
 
-                z4_1.update_with(|builder| {
-                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                });
+                OwnedNetBuilder::connect((0, v.clone()), (i + 1, z4_1.clone()));
 
                 v
             })
@@ -1538,9 +1402,7 @@ mod test {
                     &mut names,
                 );
 
-                z4_2.update_with(|builder| {
-                    builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                });
+                OwnedNetBuilder::connect((0, v.clone()), (i + 1, z4_2.clone()));
 
                 v
             })
@@ -1589,8 +1451,7 @@ mod test {
                 &mut names,
             );
 
-            zn_2.update_with(|builder| builder.clone().with_primary_port(Some((0, zn_1.clone()))));
-            zn_1.update_with(|builder| builder.clone().with_primary_port(Some((0, zn_2.clone()))));
+            OwnedNetBuilder::connect((0, zn_1.clone()), (0, zn_2.clone()));
 
             let _ = (0..i)
                 .enumerate()
@@ -1603,9 +1464,7 @@ mod test {
                         &mut names,
                     );
 
-                    zn_1.update_with(|builder| {
-                        builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                    });
+                    OwnedNetBuilder::connect((0, v.clone()), (i + 1, zn_1.clone()));
 
                     v
                 })
@@ -1621,9 +1480,7 @@ mod test {
                         &mut names,
                     );
 
-                    zn_2.update_with(|builder| {
-                        builder.clone().with_aux_port_i(i, Some((0, v.clone())))
-                    });
+                    OwnedNetBuilder::connect((0, v.clone()), (1 + i, zn_2.clone()));
 
                     v
                 })

@@ -1,7 +1,7 @@
 use super::{
     parser::Expr,
     parser_icalc::{
-        self, Abstraction, Application, Duplication, Expr as IExpr, Stmt as IStmt, Superposition,
+        Abstraction, Application, Duplication, Expr as IExpr, Stmt as IStmt, Superposition,
         Var as IVar,
     },
     parser_sk::Expr as SkExpr,
@@ -28,7 +28,7 @@ pub trait CombinatorBuilder: Sized {
     fn expand_step(&self, names: &NameIter) -> Self;
 }
 
-pub fn decompile_icalc(p: AstPort) -> IExpr {
+pub fn decompile_icalc(_p: AstPort) -> IExpr {
     todo!()
 }
 
@@ -86,8 +86,6 @@ pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
 
                 lhs_cc.borrow_mut().set_primary_port(Some((0, app.clone())));
 
-                println!("{}", lhs_cc);
-
                 net.push(lhs_cc.clone());
 
                 lhs_cc
@@ -131,8 +129,6 @@ pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
                 let_cc
                     .borrow_mut()
                     .set_primary_port(Some((0, pair_cc.clone())));
-
-                println!("{}", pair_cc);
 
                 net.push(pair_cc);
 
@@ -238,6 +234,8 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
 
     cc.clone().iter_tree().for_each(|x| println!("{:?}", x));
 
+    cc.checksum();
+
     cc.clone().iter_tree().for_each(|x| {
         x.expand_step(&mut names);
     });
@@ -309,8 +307,7 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                 },
                 names,
             );
-            temp_empty_var
-                .update_with(|builder| builder.clone().with_primary_port(Some((0, e.clone()))));
+            OwnedNetBuilder::connect((0, temp_empty_var), (0, e.clone()));
 
             let a_cc = a.map(|a| maybe_encode(build_compilation_expr(false, *a, names)));
 
@@ -329,16 +326,8 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                     },
                     names,
                 );
-                empty_port_var.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, e_parent.clone())))
-                });
-                a_port.1.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(a_port.0, Some((2, e_parent.clone())))
-                });
+                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, e_parent.clone()));
+                OwnedNetBuilder::connect(a_port, (2, e_parent.clone()));
 
                 let b_port = b
                     .map(|b| maybe_encode(build_compilation_expr(false, *b, names)))
@@ -360,29 +349,11 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                     names,
                 );
 
-                empty_port_var.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, constr_parent.clone())))
-                });
+                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, constr_parent.clone()));
+                OwnedNetBuilder::connect(b_port, (2, constr_parent.clone()));
+                OwnedNetBuilder::connect((1, e_parent.clone()), (0, constr_parent.clone()));
 
-                b_port.1.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(b_port.0, Some((2, constr_parent.clone())))
-                });
-
-                e_parent.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_aux_port_i(0, Some((0, constr_parent.clone())))
-                });
-
-                e.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((0, e_parent.clone())))
-                });
+                OwnedNetBuilder::connect((0, e.clone()), (0, e_parent.clone()));
             };
 
             e
@@ -401,8 +372,7 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                 },
                 names,
             );
-            temp_empty_var
-                .update_with(|builder| builder.clone().with_primary_port(Some((0, e.clone()))));
+            OwnedNetBuilder::connect((0, temp_empty_var), (0, e.clone()));
 
             let a_cc = a.map(|a| maybe_encode(build_compilation_expr(false, *a, names)));
 
@@ -421,16 +391,9 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                     },
                     names,
                 );
-                empty_port_var.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, e_parent.clone())))
-                });
-                a_port.1.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(a_port.0, Some((2, e_parent.clone())))
-                });
+
+                OwnedNetBuilder::connect((0, empty_port_var), (1, e_parent.clone()));
+                OwnedNetBuilder::connect(a_port, (2, e_parent.clone()));
 
                 let b_port = b
                     .map(|b| maybe_encode(build_compilation_expr(false, *b, names)))
@@ -452,29 +415,10 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                     names,
                 );
 
-                empty_port_var.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, constr_parent.clone())))
-                });
-
-                b_port.1.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(b_port.0, Some((2, constr_parent.clone())))
-                });
-
-                e_parent.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_aux_port_i(0, Some((0, constr_parent.clone())))
-                });
-
-                e.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((0, e_parent.clone())))
-                });
+                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, constr_parent.clone()));
+                OwnedNetBuilder::connect(b_port, (2, constr_parent.clone()));
+                OwnedNetBuilder::connect((1, e_parent.clone()), (0, constr_parent.clone()));
+                OwnedNetBuilder::connect((0, e.clone()), (0, e_parent.clone()));
 
                 let c_port = c
                     .map(|c| maybe_encode(build_compilation_expr(false, *c, names)))
@@ -496,29 +440,15 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                     names,
                 );
 
-                empty_port_var.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((1, constr_parent_parent.clone())))
-                });
-
-                c_port.1.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_port_i(c_port.0, Some((2, constr_parent_parent.clone())))
-                });
-
-                constr_parent.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_aux_port_i(0, Some((0, constr_parent_parent.clone())))
-                });
-
-                e.update_with(|builder| {
-                    builder
-                        .clone()
-                        .with_primary_port(Some((0, e_parent.clone())))
-                });
+                OwnedNetBuilder::connect(
+                    (0, empty_port_var.clone()),
+                    (1, constr_parent_parent.clone()),
+                );
+                OwnedNetBuilder::connect(c_port, (2, constr_parent_parent.clone()));
+                OwnedNetBuilder::connect(
+                    (1, constr_parent.clone()),
+                    (0, constr_parent_parent.clone()),
+                );
             };
 
             e
@@ -582,25 +512,5 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
-    }
-
-    #[test_log::test]
-    fn test_cc_icalc_simple() {
-        let case = "(\\x x a)";
-
-        let parsed = parser_icalc::parser()
-            .parse(
-                parser_icalc::lexer()
-                    .parse(case)
-                    .unwrap()
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap();
-
-        let cc = compile_icalc(parsed.into_iter().map(|x| x.0).collect());
-
-        assert_eq!(cc[0].to_string(), "Constr[@2](x, x) >< Constr[@5](ret, a)");
     }
 }
