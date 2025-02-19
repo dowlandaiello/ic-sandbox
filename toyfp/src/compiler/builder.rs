@@ -291,30 +291,56 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     names,
                 );
 
+                let norm_ports: [Option<Port>; 5] = [primary_port]
+                    .into_iter()
+                    .chain(aux_ports.iter())
+                    .map(|x| {
+                        let (port, p) = x.as_ref()?;
+
+                        if p == self {
+                            match port {
+                                0 => Some((*port, p.clone())),
+                                1 => Some((1, root_parent_parent.clone())),
+                                2 => Some((2, root_parent_parent.clone())),
+                                3 => Some((2, root_parent.clone())),
+                                4 => Some((2, root_ref.clone())),
+                                _ => None,
+                            }
+                        } else {
+                            Some((*port, p.clone()))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap();
+
                 Self::connect((1, root_ref.clone()), (0, root_parent.clone()));
                 Self::connect((1, root_parent.clone()), (0, root_parent_parent.clone()));
 
-                self.clone().iter_tree().for_each(|x| println!("{:?}", x));
-
-                if let Some(p) = &primary_port {
+                if let Some(p) = &norm_ports[0] {
                     Self::connect((0, root_ref.clone()), p.clone());
                 }
 
-                if let Some(p) = &aux_ports[0] {
+                if let Some(p) = &norm_ports[1] {
                     Self::connect(p.clone(), (1, root_parent_parent.clone()));
                 }
 
-                if let Some(p) = &aux_ports[1] {
+                if let Some(p) = &norm_ports[2] {
                     Self::connect(p.clone(), (2, root_parent_parent.clone()));
                 }
 
-                if let Some(p) = &aux_ports[2] {
+                if let Some(p) = &norm_ports[3] {
                     Self::connect(p.clone(), (2, root_parent.clone()));
                 }
 
-                if let Some(p) = &aux_ports[3] {
+                if let Some(p) = &norm_ports[4] {
                     Self::connect(p.clone(), (2, root_ref.clone()));
                 }
+
+                root_ref
+                    .clone()
+                    .iter_tree()
+                    .for_each(|x| println!("{:?}", x));
 
                 root_ref.clone()
             }
@@ -445,16 +471,16 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 tracing::trace!("expanding S");
 
                 let top_left_z = OwnedNetBuilder::new(
-                    CombinatorBuilder::ZN {
+                    CombinatorBuilder::Z4 {
                         primary_port: primary_port.clone(),
-                        aux_ports: vec![None; 4],
+                        aux_ports: [const { None }; 4],
                     },
                     names,
                 );
                 let middle_left_z = OwnedNetBuilder::new(
-                    CombinatorBuilder::ZN {
+                    CombinatorBuilder::Z4 {
                         primary_port: None,
-                        aux_ports: vec![None; 4],
+                        aux_ports: [const { None }; 4],
                     },
                     names,
                 );
@@ -500,10 +526,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 );
 
                 // Connect bottom z
-                let right_bottom_z = CombinatorBuilder::ZN {
+                let right_bottom_z = CombinatorBuilder::Z4 {
                     primary_port: primary_port.clone(),
-                    aux_ports: vec![None; 4],
+                    aux_ports: [const { None }; 4],
                 };
+
+                self.update_with(|_| right_bottom_z);
 
                 // Top left  Z conns
                 Self::connect((0, top_left_z.clone()), (3, right_bottom_z_ref.clone()));
@@ -545,13 +573,11 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 );
                 Self::connect((2, middle_constr.clone()), (2, dup.clone()));
 
-                self.update_with(|_| right_bottom_z);
-
+                right_bottom_z_ref.expand_step(names);
                 top_left_z.expand_step(names);
                 middle_left_z.expand_step(names);
                 d.expand_step(names);
                 d.expand_step(names);
-                right_bottom_z_ref.expand_step(names);
 
                 self.clone()
             }
