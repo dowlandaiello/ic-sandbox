@@ -710,9 +710,9 @@ impl OwnedNetBuilder {
             .collect::<Vec<_>>();
 
         let new_root = OwnedNetBuilder::new(
-            CombinatorBuilder::ZN {
-                primary_port: self.0.borrow().builder.primary_port().cloned(),
-                aux_ports: vec![None; 4],
+            CombinatorBuilder::Z4 {
+                primary_port: None,
+                aux_ports: [const { None }; 4],
             },
             names,
         );
@@ -1210,9 +1210,9 @@ mod test {
         let mut names = NameIter::default();
 
         let z = OwnedNetBuilder::new(
-            CombinatorBuilder::ZN {
+            CombinatorBuilder::Z4 {
                 primary_port: None,
-                aux_ports: vec![None; 4],
+                aux_ports: [const { None }; 4],
             },
             &mut names,
         );
