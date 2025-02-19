@@ -337,11 +337,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     Self::connect(p.clone(), (2, root_ref.clone()));
                 }
 
-                root_ref
-                    .clone()
-                    .iter_tree()
-                    .for_each(|x| println!("{:?}", x));
-
                 root_ref.clone()
             }
             CombinatorBuilder::ZN {
@@ -573,9 +568,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 );
                 Self::connect((2, middle_constr.clone()), (2, dup.clone()));
 
-                right_bottom_z_ref.expand_step(names);
                 top_left_z.expand_step(names);
+
                 middle_left_z.expand_step(names);
+
+                right_bottom_z_ref.expand_step(names);
+
                 d.expand_step(names);
                 d.expand_step(names);
 
@@ -1230,6 +1228,8 @@ mod test {
 
         let s_comb = OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names);
         s_comb.expand_step(&mut names).make_root(&mut names);
+
+        s_comb.checksum();
 
         let combinated = s_comb.combinate(&mut names).orient();
         let m = OwnedNetBuilder::decombinate(&combinated).unwrap();

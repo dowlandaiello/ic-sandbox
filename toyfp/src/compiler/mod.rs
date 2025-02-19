@@ -232,8 +232,7 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
 
     let cc = build_compilation_expr(true, e, &mut names);
 
-    cc.clone().iter_tree().for_each(|x| println!("{:?}", x));
-
+    #[cfg(test)]
     cc.checksum();
 
     cc.clone().iter_tree().for_each(|x| {
@@ -285,182 +284,61 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
         p
     };
 
-    let e_trans = match e.clone() {
-        SkExpr::Var(v) => OwnedNetBuilder::new(
-            SkCombinatorBuilder::Var {
-                name: v,
-                primary_port: None,
-            },
-            names,
+    let (builder, args) = match e.clone() {
+        SkExpr::Var(v) => {
+            return OwnedNetBuilder::new(
+                SkCombinatorBuilder::Var {
+                    name: v,
+                    primary_port: None,
+                },
+                names,
+            );
+        }
+        SkExpr::K(a, b) => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names),
+            vec![a, b],
         ),
-        SkExpr::K(a, b) => {
-            let temp_empty_var = OwnedNetBuilder::new(
-                SkCombinatorBuilder::Var {
-                    name: names.next_var_name(),
-                    primary_port: None,
-                },
-                names,
-            );
-            let e = OwnedNetBuilder::new(
-                SkCombinatorBuilder::K {
-                    primary_port: Some((0, temp_empty_var.clone())),
-                },
-                names,
-            );
-            OwnedNetBuilder::connect((0, temp_empty_var), (0, e.clone()));
-
-            let a_cc = a.map(|a| maybe_encode(build_compilation_expr(false, *a, names)));
-
-            if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
-                let empty_port_var = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-                let e_parent = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: Some((0, e.clone())),
-                        aux_ports: [Some((0, empty_port_var.clone())), Some(a_port.clone())],
-                    },
-                    names,
-                );
-                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, e_parent.clone()));
-                OwnedNetBuilder::connect(a_port, (2, e_parent.clone()));
-
-                let b_port = b
-                    .map(|b| maybe_encode(build_compilation_expr(false, *b, names)))
-                    .map(|b| best_port(&b))
-                    .expect("malformed expr");
-
-                let empty_port_var = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-                let constr_parent = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: Some((1, e_parent.clone())),
-                        aux_ports: [Some((0, empty_port_var.clone())), Some(b_port.clone())],
-                    },
-                    names,
-                );
-
-                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, constr_parent.clone()));
-                OwnedNetBuilder::connect(b_port, (2, constr_parent.clone()));
-                OwnedNetBuilder::connect((1, e_parent.clone()), (0, constr_parent.clone()));
-
-                OwnedNetBuilder::connect((0, e.clone()), (0, e_parent.clone()));
-            };
-
-            e
-        }
-        SkExpr::S(a, b, c) => {
-            let temp_empty_var = OwnedNetBuilder::new(
-                SkCombinatorBuilder::Var {
-                    name: names.next_var_name(),
-                    primary_port: None,
-                },
-                names,
-            );
-            let e = OwnedNetBuilder::new(
-                SkCombinatorBuilder::S {
-                    primary_port: Some((0, temp_empty_var.clone())),
-                },
-                names,
-            );
-            OwnedNetBuilder::connect((0, temp_empty_var), (0, e.clone()));
-
-            let a_cc = a.map(|a| maybe_encode(build_compilation_expr(false, *a, names)));
-
-            if let Some(a_port) = a_cc.map(|a| best_port(&a)) {
-                let empty_port_var = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-                let e_parent = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: Some((0, e.clone())),
-                        aux_ports: [Some((0, empty_port_var.clone())), Some(a_port.clone())],
-                    },
-                    names,
-                );
-
-                OwnedNetBuilder::connect((0, empty_port_var), (1, e_parent.clone()));
-                OwnedNetBuilder::connect(a_port, (2, e_parent.clone()));
-
-                let b_port = b
-                    .map(|b| maybe_encode(build_compilation_expr(false, *b, names)))
-                    .map(|b| best_port(&b))
-                    .expect("malformed expr");
-
-                let empty_port_var = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-                let constr_parent = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: Some((1, e_parent.clone())),
-                        aux_ports: [Some((0, empty_port_var.clone())), Some(b_port.clone())],
-                    },
-                    names,
-                );
-
-                OwnedNetBuilder::connect((0, empty_port_var.clone()), (1, constr_parent.clone()));
-                OwnedNetBuilder::connect(b_port, (2, constr_parent.clone()));
-                OwnedNetBuilder::connect((1, e_parent.clone()), (0, constr_parent.clone()));
-                OwnedNetBuilder::connect((0, e.clone()), (0, e_parent.clone()));
-
-                let c_port = c
-                    .map(|c| maybe_encode(build_compilation_expr(false, *c, names)))
-                    .map(|c| best_port(&c))
-                    .expect("malformed expr");
-
-                let empty_port_var = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-                let constr_parent_parent = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: Some((1, constr_parent.clone())),
-                        aux_ports: [Some((0, empty_port_var.clone())), Some(c_port.clone())],
-                    },
-                    names,
-                );
-
-                OwnedNetBuilder::connect(
-                    (0, empty_port_var.clone()),
-                    (1, constr_parent_parent.clone()),
-                );
-                OwnedNetBuilder::connect(c_port, (2, constr_parent_parent.clone()));
-                OwnedNetBuilder::connect(
-                    (1, constr_parent.clone()),
-                    (0, constr_parent_parent.clone()),
-                );
-            };
-
-            e
-        }
+        SkExpr::S(a, b, c) => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names),
+            vec![a, b, c],
+        ),
     };
 
-    e_trans
+    let last =
+        args.into_iter()
+            .filter_map(|x| x)
+            .enumerate()
+            .fold(builder.clone(), |acc, (i, x)| {
+                #[cfg(test)]
+                builder.checksum();
+
+                let cc = best_port(&maybe_encode(build_compilation_expr(false, *x, names)));
+
+                let arg_handle = OwnedNetBuilder::new(
+                    SkCombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+
+                OwnedNetBuilder::connect((2, arg_handle.clone()), cc);
+
+                let ins_parent_port = if i == 0 { 0 } else { 1 };
+
+                OwnedNetBuilder::connect((0, arg_handle.clone()), (ins_parent_port, acc.clone()));
+
+                arg_handle
+            });
+
+    last.make_root(names);
+
+    builder
         .clone()
         .iter_tree()
         .for_each(|x| tracing::trace!("encoding {} -> {:?}", e.clone(), x));
 
-    e_trans
+    builder
 }
 
 pub fn compile(e: Expr, names: &mut NameIter) -> AstPort {
@@ -505,6 +383,18 @@ mod test {
     #[test_log::test]
     fn test_eval_k_nested() {
         let (case, expected) = ("(K(K(K)(K))(K))", "(K)");
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into());
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_s() {
+        let (case, expected) = ("(S(K)(S)(K))", "(K(K)(S(K)))");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
