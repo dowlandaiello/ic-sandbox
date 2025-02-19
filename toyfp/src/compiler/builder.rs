@@ -261,49 +261,63 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     }
 
     fn expand_step(&self, names: &NameIter) -> Self {
-        // Lazy transformer from old portsd
-        // to new ports.
-        // This enables some circular configurations of nets.
-        #[derive(Default, Debug)]
-        struct PortMapper {
-            mappings: BTreeMap<Port, Port>,
-
-            conns: Vec<(Port, Port)>,
-
-            raw_conns: Vec<(Port, Port)>,
-        }
-
-        impl PortMapper {
-            fn iter_norm_conns(&self) -> impl Iterator<Item = (Port, Port)> + '_ {
-                self.conns
-                    .iter()
-                    .map(|(src, dest)| {
-                        (
-                            self.mappings.get(&src).unwrap_or(&src).clone(),
-                            self.mappings.get(&dest).unwrap_or(&dest).clone(),
-                        )
-                    })
-                    .chain(self.raw_conns.iter().cloned())
-            }
-
-            fn rewrite_conns(&mut self, src: Port, rhs: Port) {
-                self.mappings.insert(src, rhs);
-            }
-
-            fn connect(&mut self, lhs: Port, rhs: Port) {
-                self.conns.push((lhs, rhs));
-            }
-
-            fn connect_raw(&mut self, lhs: Port, rhs: Port) {
-                self.raw_conns.push((lhs, rhs));
-            }
-        }
-
         let builder = self.cloned();
 
         tracing::trace!("begin expansion {}", self.0.borrow().builder.name());
 
         let new_root = match &builder {
+            CombinatorBuilder::Z4 {
+                primary_port,
+                aux_ports,
+            } => {
+                let root_ref = self.update_with(|_| CombinatorBuilder::Constr {
+                    primary_port: None,
+                    aux_ports: [const { None }; 2],
+                });
+
+                let root_parent = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+
+                let root_parent_parent = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+
+                Self::connect((1, root_ref.clone()), (0, root_parent.clone()));
+                Self::connect((1, root_parent.clone()), (0, root_parent_parent.clone()));
+
+                self.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
+                if let Some(p) = &primary_port {
+                    Self::connect((0, root_ref.clone()), p.clone());
+                }
+
+                if let Some(p) = &aux_ports[0] {
+                    Self::connect(p.clone(), (1, root_parent_parent.clone()));
+                }
+
+                if let Some(p) = &aux_ports[1] {
+                    Self::connect(p.clone(), (2, root_parent_parent.clone()));
+                }
+
+                if let Some(p) = &aux_ports[2] {
+                    Self::connect(p.clone(), (2, root_parent.clone()));
+                }
+
+                if let Some(p) = &aux_ports[3] {
+                    Self::connect(p.clone(), (2, root_ref.clone()));
+                }
+
+                root_ref.clone()
+            }
             CombinatorBuilder::ZN {
                 primary_port,
                 aux_ports,
@@ -324,77 +338,35 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                         self.clone()
                     }
                     n => {
-                        let mut m = PortMapper::default();
+                        let parent_ports =
+                            aux_ports.iter().cloned().take(n - 1).collect::<Vec<_>>();
 
-                        let new_root = OwnedNetBuilder::new(
-                            CombinatorBuilder::Constr {
-                                primary_port: builder.primary_port().cloned(),
-                                aux_ports: [const { None }; 2],
+                        let parent = OwnedNetBuilder::new(
+                            CombinatorBuilder::ZN {
+                                primary_port: None,
+                                aux_ports: parent_ports,
                             },
                             names,
                         );
 
-                        // If n = 3, we will have 2 constrs, including child (self)
-                        // if n = 4, we will have 3 constrs, including child (self)
-                        let parent_constrs = (1..(n - 1))
-                            .map(|_| {
-                                let parent = OwnedNetBuilder::new(
-                                    CombinatorBuilder::Constr {
-                                        primary_port: None,
-                                        aux_ports: [const { None }; 2],
-                                    },
-                                    names,
-                                );
+                        for i in 0..(n - 1) {
+                            self.clone()
+                                .rewrite_conns((i + 1, self.clone()), (i + 1, parent.clone()));
+                        }
 
-                                parent
-                            })
-                            .collect::<Vec<_>>();
-
-                        assert_eq!(parent_constrs.len(), n - 2);
-
-                        // Make all internal wirings: (1, child) (0, parent)
-                        parent_constrs
-                            .iter()
-                            .chain([&new_root])
-                            .rev()
-                            .reduce(|acc, x| {
-                                m.connect_raw((1, acc.clone()), (0, x.clone()));
-
-                                x
-                            });
-
-                        // Make wirings to aux nodes:
-                        // Have to handle top case manually, as it has two aux nodes
-                        m.rewrite_conns(
-                            (1, self.clone()),
-                            (1, parent_constrs.get(0).unwrap_or(&new_root).clone()),
-                        );
-
-                        // Make wirings from all 1..n aux ports to child nodes
-                        let all_constrs = parent_constrs.iter().chain([&new_root]);
-
-                        // First pass: rewrite all conns
-                        parent_constrs
-                            .iter()
-                            .chain([&new_root].into_iter())
-                            .enumerate()
-                            .for_each(|(i, constr)| {
-                                m.rewrite_conns((2 + i, self.clone()), (2, constr.clone()));
-                            });
-
-                        all_constrs
-                            .enumerate()
-                            .filter_map(|(i, constr)| Some((constr, aux_ports[1 + i].clone()?)))
-                            .for_each(|(constr, port)| {
-                                m.connect(port, (2, constr.clone()));
-                            });
-
-                        // Should be done now
-                        m.iter_norm_conns().for_each(|(src, dest)| {
-                            Self::connect(src, dest);
+                        let constr_child = self.update_with(|_| CombinatorBuilder::Constr {
+                            primary_port: primary_port.clone(),
+                            aux_ports: [Some((0, parent.clone())), aux_ports[n - 1].clone()],
                         });
 
-                        new_root.clone()
+                        self.clone()
+                            .rewrite_conns((n, self.clone()), (2, constr_child.clone()));
+
+                        Self::connect((1, constr_child.clone()), (0, parent.clone()));
+
+                        parent.expand_step(names);
+
+                        self.clone()
                     }
                 }
             }
@@ -846,6 +818,10 @@ impl AsMut<CombinatorBuilder> for NamedBuilder {
 
 #[derive(Clone)]
 pub(crate) enum CombinatorBuilder {
+    Z4 {
+        primary_port: Option<Port>,
+        aux_ports: [Option<Port>; 4],
+    },
     ZN {
         primary_port: Option<Port>,
         aux_ports: Vec<Option<Port>>,
@@ -924,6 +900,7 @@ impl CombinatorBuilder {
 
     pub(crate) fn name(&self) -> String {
         match self {
+            Self::Z4 { .. } => "Z4".to_owned(),
             Self::ZN { aux_ports, .. } => format!("Z{}", aux_ports.len()),
             Self::D { .. } => "D".to_owned(),
             Self::K { .. } => "K".to_owned(),
@@ -937,6 +914,10 @@ impl CombinatorBuilder {
 
     pub(crate) fn set_primary_port(self, primary_port: Option<Port>) -> Self {
         match self {
+            Self::Z4 { aux_ports, .. } => Self::Z4 {
+                aux_ports,
+                primary_port,
+            },
             Self::ZN { aux_ports, .. } => Self::ZN {
                 aux_ports,
                 primary_port,
@@ -969,6 +950,17 @@ impl CombinatorBuilder {
                 aux_ports[i] = aux_port;
 
                 Self::ZN {
+                    primary_port,
+                    aux_ports,
+                }
+            }
+            Self::Z4 {
+                primary_port,
+                mut aux_ports,
+            } => {
+                aux_ports[i] = aux_port;
+
+                Self::Z4 {
                     primary_port,
                     aux_ports,
                 }
@@ -1048,6 +1040,14 @@ impl CombinatorBuilder {
                     .into_iter()
                     .chain(aux_ports.iter_mut().map(|x| x.as_mut())),
             ),
+            Self::Z4 {
+                primary_port,
+                aux_ports,
+            } => Box::new(
+                [primary_port.as_mut()]
+                    .into_iter()
+                    .chain(aux_ports.iter_mut().map(|x| x.as_mut())),
+            ),
             Self::Constr {
                 aux_ports,
                 primary_port,
@@ -1077,6 +1077,14 @@ impl CombinatorBuilder {
 
     pub(crate) fn iter_ports<'a>(&'a self) -> Box<dyn Iterator<Item = Option<&'a Port>> + 'a> {
         match self {
+            Self::Z4 {
+                primary_port,
+                aux_ports,
+            } => Box::new(
+                [primary_port.as_ref()]
+                    .into_iter()
+                    .chain(aux_ports.iter().map(|x| x.as_ref())),
+            ),
             Self::ZN {
                 primary_port,
                 aux_ports,
@@ -1114,7 +1122,8 @@ impl CombinatorBuilder {
 
     pub(crate) fn primary_port<'a>(&'a self) -> Option<&'a Port> {
         match self {
-            Self::ZN { primary_port, .. }
+            Self::Z4 { primary_port, .. }
+            | Self::ZN { primary_port, .. }
             | Self::Constr { primary_port, .. }
             | Self::Dup { primary_port, .. }
             | Self::D { primary_port, .. }
@@ -1127,6 +1136,7 @@ impl CombinatorBuilder {
 
     pub(crate) fn iter_aux_ports<'a>(&'a self) -> Box<dyn Iterator<Item = Option<&'a Port>> + 'a> {
         match self {
+            Self::Z4 { aux_ports, .. } => Box::new(aux_ports.iter().map(|elem| elem.as_ref())),
             Self::ZN { aux_ports, .. } => Box::new(aux_ports.iter().map(|elem| elem.as_ref())),
             Self::Constr { aux_ports, .. } | Self::Dup { aux_ports, .. } => {
                 Box::new(aux_ports.iter().map(|elem| elem.as_ref()))
@@ -1391,6 +1401,82 @@ mod test {
         let res = reduce_dyn(&comb_coder).remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient());
         matches!(dec, Some(SkExpr::S { .. }));
+    }
+
+    #[test_log::test]
+    fn test_interaction_manual_z4() {
+        use inetlib::reducers::combinators::reduce_dyn;
+        use std::collections::BTreeSet;
+
+        let mut names = Default::default();
+
+        let z4_1 = OwnedNetBuilder::new(
+            CombinatorBuilder::Z4 {
+                primary_port: None,
+                aux_ports: [const { None }; 4],
+            },
+            &mut names,
+        );
+        let z4_2 = OwnedNetBuilder::new(
+            CombinatorBuilder::Z4 {
+                primary_port: Some((0, z4_1.clone())),
+                aux_ports: [const { None }; 4],
+            },
+            &mut names,
+        );
+
+        OwnedNetBuilder::connect((0, z4_1.clone()), (0, z4_2.clone()));
+
+        let _ = (0..4)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z4_1.clone())),
+                    },
+                    &mut names,
+                );
+
+                OwnedNetBuilder::connect((0, v.clone()), (i + 1, z4_1.clone()));
+
+                v
+            })
+            .collect::<Vec<_>>();
+        let _ = (0..4)
+            .enumerate()
+            .map(|(i, _)| {
+                let v = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: Some((i + 1, z4_2.clone())),
+                    },
+                    &mut names,
+                );
+
+                OwnedNetBuilder::connect((0, v.clone()), (i + 1, z4_2.clone()));
+
+                v
+            })
+            .collect::<Vec<_>>();
+
+        z4_1.expand_step(&mut names);
+        z4_2.expand_step(&mut names);
+
+        z4_1.clone().iter_tree().for_each(|x| println!("{:?}", x));
+
+        assert_eq!(
+            reduce_dyn(&z4_1.combinate(&mut names))
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from_iter([
+                "v0 ~ v4".to_owned(),
+                "v1 ~ v5".to_owned(),
+                "v2 ~ v6".to_owned(),
+                "v3 ~ v7".to_owned()
+            ])
+        );
     }
 
     #[test_log::test]
