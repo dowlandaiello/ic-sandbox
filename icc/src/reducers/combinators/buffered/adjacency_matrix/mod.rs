@@ -13,5 +13,8 @@ pub use reducer::{BufferedMatrixReducer, ReducerBuilder};
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let builder = ReducerBuilder::default();
 
-    builder.with_init_net(e).finish().reduce()
+    let mut results = builder.with_init_net(e).finish().reduce();
+    results.sort_by(|a, b| a.iter_tree().count().cmp(&b.iter_tree().count()));
+
+    results
 }
