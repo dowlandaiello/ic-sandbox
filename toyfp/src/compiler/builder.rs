@@ -1,6 +1,6 @@
 use super::CombinatorBuilder as AbstractCombinatorBuilder;
 use crate::parser_sk::Expr as SkExpr;
-use ast_ext::{TreeCursor, TreeVisitor};
+use ast_ext::{TreeCursor, TreeVisitor, VisualDebug};
 use inetlib::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr as AstExpr, Port as AstPort, Var},
     ast_lafont::Ident,
@@ -54,6 +54,55 @@ impl TreeCursor<OwnedNetBuilder> for OwnedNetBuilder {
                 .collect::<Vec<_>>()
                 .into_iter(),
         )
+    }
+}
+
+impl VisualDebug for OwnedNetBuilder {
+    fn node_id(&self) -> usize {
+        self.0.borrow().name
+    }
+
+    fn node_label(&self) -> String {
+        format!(
+            "{} ({})",
+            self.0.borrow().builder.name(),
+            self.0.borrow().name
+        )
+    }
+
+    fn node_color(&self) -> String {
+        if self
+            .0
+            .borrow()
+            .builder
+            .primary_port()
+            .map(|(port, _)| port == &0)
+            .unwrap_or_default()
+        {
+            "red".to_owned()
+        } else {
+            "black".to_owned()
+        }
+    }
+
+    fn conns(&self) -> impl Iterator<Item = String> {
+        self.0
+            .borrow()
+            .builder
+            .iter_ports()
+            .enumerate()
+            .filter_map(|(i, x)| Some((i, x?)))
+            .map(|(i, (port, p))| {
+                format!(
+                    "{} -- {} [label=\"({}, {})\"]",
+                    self.node_id(),
+                    p.node_id(),
+                    i,
+                    port
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -768,7 +817,7 @@ impl OwnedNetBuilder {
         new_root
     }
 
-    pub(crate) fn iter_tree(self) -> impl Iterator<Item = OwnedNetBuilder> {
+    pub(crate) fn iter_tree(self) -> TreeVisitor<OwnedNetBuilder, OwnedNetBuilder> {
         TreeVisitor::new(self)
     }
 

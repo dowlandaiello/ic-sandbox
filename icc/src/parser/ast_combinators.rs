@@ -53,6 +53,24 @@ impl PartialOrd for Port {
 }
 
 impl Port {
+    pub fn checksum(&self) {
+        self.iter_tree().for_each(|x| {
+            x.iter_ports()
+                .into_iter()
+                .filter_map(|x| x)
+                .for_each(|(port, p)| {
+                    assert!(p
+                        .iter_ports()
+                        .into_iter()
+                        .nth(port)
+                        .flatten()
+                        .unwrap()
+                        .1
+                        .ptr_eq(&x));
+                });
+        });
+    }
+
     pub fn unroot(&self) -> Option<IndexedPort> {
         let old_primary_port = self.borrow().primary_port().cloned();
         self.borrow_mut().set_primary_port(None);

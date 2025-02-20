@@ -1,6 +1,6 @@
 use crate::parser::ast_combinators::Port;
 pub use buffered::adjacency_matrix::reduce_dyn;
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
 
 pub mod buffered;
 
@@ -10,6 +10,12 @@ pub type Ptr = usize;
 pub struct Conn {
     pub cell: Ptr,
     pub port: u8,
+}
+
+impl fmt::Display for Conn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(cell: {}, port: {})", self.cell, self.port)
+    }
 }
 
 impl From<(Ptr, u8)> for Conn {

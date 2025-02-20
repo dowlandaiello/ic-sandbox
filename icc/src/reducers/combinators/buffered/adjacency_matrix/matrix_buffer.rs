@@ -211,28 +211,46 @@ impl NetBuffer for MatrixBuffer {
         // It is normalized now
         let last_free = self.next_free.fetch_add(1, Ordering::SeqCst);
 
+        tracing::debug!("inserting {} in {}", c, last_free);
+
         self.cells[last_free].store_discriminant(Some(c));
 
         last_free
     }
 
     fn delete(&self, p: Ptr) {
+        tracing::debug!("deleting {}", p);
+
         self.len.fetch_sub(1, Ordering::SeqCst);
         self.next_free.store(p, Ordering::SeqCst);
 
         let cell = &self.cells[p];
-        cell.store_discriminant(None);
+        cell.wipe();
     }
 
     fn connect(&self, from: Option<Conn>, to: Option<Conn>) {
+        let maybe_fmt = |x: Option<Conn>| x.map(|x| x.to_string()).unwrap_or("<EMPTY>".to_string());
+
+        tracing::debug!("linking {} <-> {}", maybe_fmt(from), maybe_fmt(to),);
+
         if let Some(from) = from {
             let cell = &self.cells[from.cell];
             cell.store_port_i(from.port, to);
+
+            tracing::trace!(
+                "confirmation of port: {}",
+                maybe_fmt(cell.load_port_i(from.port))
+            );
         }
 
         if let Some(to) = to {
             let cell = &self.cells[to.cell];
             cell.store_port_i(to.port, from);
+
+            tracing::trace!(
+                "confirmation of port: {}",
+                maybe_fmt(cell.load_port_i(to.port))
+            );
         }
     }
 
@@ -252,7 +270,9 @@ impl NetBuffer for MatrixBuffer {
 
     fn get_cell(&self, idx: usize) -> Cell {
         let elem = &self.cells[idx];
-        let cell = elem.load_discriminant_uninit_var().unwrap();
+        let cell = elem
+            .load_discriminant_uninit_var()
+            .expect(&format!("failed to get cell contents: {}", idx));
 
         match cell {
             Cell::Var(_) => Cell::Var(idx),

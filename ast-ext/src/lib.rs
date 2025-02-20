@@ -27,11 +27,62 @@ pub trait TreeCursor<TValue>: Sized {
     fn children(&self) -> Box<dyn Iterator<Item = Self>>;
 }
 
+pub trait VisualDebug {
+    fn node_id(&self) -> usize;
+
+    fn node_label(&self) -> String;
+
+    fn node_color(&self) -> String;
+
+    fn conns(&self) -> impl Iterator<Item = String>;
+}
+
 pub struct TreeVisitor<TValue, TCursor: TreeCursor<TValue>> {
     to_visit: VecDeque<TCursor>,
     seen: BTreeSet<usize>,
 
     bruh: PhantomData<TValue>,
+}
+
+impl<TValue, TCursor> TreeVisitor<TValue, TCursor>
+where
+    TCursor: TreeCursor<TValue>,
+    TValue: VisualDebug,
+{
+    pub fn into_string(self) -> String {
+        let (nodes, conns): (Vec<String>, Vec<Vec<String>>) = self
+            .map(|x| {
+                (
+                    format!(
+                        "{} [shape=triangle color={} label=\"{}\"]",
+                        x.node_id(),
+                        x.node_color(),
+                        x.node_label()
+                    ),
+                    (x.conns().collect::<Vec<_>>()),
+                )
+            })
+            .collect();
+
+        format!(
+            "graph G {{
+{}
+
+{}
+}}",
+            nodes
+                .into_iter()
+                .map(|x| format!("{};", x))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            conns
+                .into_iter()
+                .flatten()
+                .map(|x| format!("{};", x))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
 }
 
 impl<TCursor: TreeCursor<TValue>, TValue> TreeVisitor<TValue, TCursor> {

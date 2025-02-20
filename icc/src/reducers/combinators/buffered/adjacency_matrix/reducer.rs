@@ -74,7 +74,11 @@ impl ReducerBuilder {
                             }
                         };
 
-                        (elem.id, buff.push(discriminant))
+                        let ins_id = buff.push(discriminant);
+
+                        tracing::trace!("expr {:?} -> cell {}", elem, ins_id);
+
+                        (elem.id, ins_id)
                     })
                     .collect::<Vec<_>>()
             })
@@ -86,12 +90,22 @@ impl ReducerBuilder {
             net.iter_tree().for_each(|elem| {
                 let slot = slots_for_ast_elems.get(&elem.id).unwrap();
 
+                tracing::trace!("walking expr {:?} (cell: {}) for linking", elem, slot);
+
                 elem.iter_ports()
                     .into_iter()
                     .enumerate()
                     .filter_map(|(i, x)| Some((i, x?)))
                     .for_each(|(port_self, (port_other, p))| {
                         let other_slot = slots_for_ast_elems.get(&p.id).unwrap();
+
+                        tracing::trace!(
+                            "linking (cell: {}, port: {}) <-> (cell: {}, port: {})",
+                            slot,
+                            port_self,
+                            other_slot,
+                            port_other,
+                        );
 
                         buff.connect(
                             Some(Conn {
@@ -159,7 +173,7 @@ impl ReductionWorker {
 
         let pair = (self.buffer.get_cell(a_id), self.buffer.get_cell(b_id));
 
-        tracing::trace!("reducing {} ({}) >< {} ({})", pair.0, a_id, pair.1, b_id);
+        tracing::debug!("reducing {} ({}) >< {} ({})", pair.0, a_id, pair.1, b_id);
 
         match pair {
             // Annihilation of alpha-alpha
@@ -291,6 +305,8 @@ impl ReductionWorker {
 
 impl Reducer for BufferedMatrixReducer {
     fn readback(&self) -> Vec<Port> {
+        tracing::debug!("reading back");
+
         let new_names = NameIter::starting_from(self.names.len());
 
         // Make ports before linking, link later
@@ -305,31 +321,36 @@ impl Reducer for BufferedMatrixReducer {
                     .map(|x| *x)
                     .unwrap_or_else(|| new_names.next_id());
 
-                (
-                    i,
-                    match discriminant {
-                        Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(name),
-                        Cell::Dup => Expr::Dup(Duplicator::new()).into_port_named(name),
-                        Cell::Era => Expr::Era(Eraser::new()).into_port_named(name),
-                        Cell::Var(v) => {
-                            let ident = self.idents.get(&v).unwrap().clone();
+                let expr = match discriminant {
+                    Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(name),
+                    Cell::Dup => Expr::Dup(Duplicator::new()).into_port_named(name),
+                    Cell::Era => Expr::Era(Eraser::new()).into_port_named(name),
+                    Cell::Var(v) => {
+                        let ident = self.idents.get(&v).unwrap().clone();
 
-                            Expr::Var(Var {
-                                name: Ident(ident),
-                                port: None,
-                            })
-                        }
-                        .into_port_named(name),
-                    },
-                )
+                        Expr::Var(Var {
+                            name: Ident(ident),
+                            port: None,
+                        })
+                    }
+                    .into_port_named(name),
+                };
+
+                tracing::trace!("cell {} -> expr {}", i, expr);
+
+                (i, expr)
             })
             .collect();
 
         // Link them
         ports_for_cells.iter().for_each(|(i, entry)| {
+            tracing::trace!("walking cell {} (expr: {}) for linking", i, entry);
+
             let mut ports = self.buffer.iter_ports(*i);
 
             if let Some(conn_p) = ports.next().flatten() {
+                tracing::trace!("linking (cell: {}, port: 0) <-> {}", i, conn_p);
+
                 let other_node = ports_for_cells.get(&conn_p.cell).unwrap();
                 let ast_conn = (conn_p.port as usize, other_node.clone());
 
@@ -339,11 +360,19 @@ impl Reducer for BufferedMatrixReducer {
             ports
                 .enumerate()
                 .filter_map(|(i, x)| Some((i, x?)))
-                .for_each(|(i, conn_aux)| {
+                .for_each(|(j, conn_aux)| {
+                    tracing::trace!(
+                        "linking (cell: {}, port: {}) <-> (cell: {}, port: {})",
+                        i,
+                        j + 1,
+                        conn_aux.cell,
+                        conn_aux.port
+                    );
+
                     let other_node = ports_for_cells.get(&conn_aux.cell).unwrap();
                     let ast_conn = (conn_aux.port as usize, other_node.clone());
 
-                    entry.borrow_mut().insert_aux_port(i, Some(ast_conn));
+                    entry.borrow_mut().insert_port_i(j + 1, Some(ast_conn));
                 });
         });
 
@@ -370,8 +399,22 @@ impl Reducer for BufferedMatrixReducer {
     }
 
     fn reduce(&mut self) -> Vec<Port> {
+        #[cfg(feature = "threadpool")]
         fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoParallelIterator<Item = (Conn, Conn)>) {
             r.into_par_iter().for_each(move |x| {
+                let worker = ReductionWorker {
+                    buffer: buffer.clone(),
+                };
+
+                let redexes = worker.reduce_step(x);
+
+                reduce_redexes(buffer.clone(), redexes);
+            });
+        }
+
+        #[cfg(not(feature = "threadpool"))]
+        fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoIterator<Item = (Conn, Conn)>) {
+            r.into_iter().for_each(move |x| {
                 let worker = ReductionWorker {
                     buffer: buffer.clone(),
                 };

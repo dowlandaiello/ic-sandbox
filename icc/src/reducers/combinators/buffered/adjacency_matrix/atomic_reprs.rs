@@ -282,6 +282,13 @@ impl CellRepr {
         PortWalker::new(self, 1, 3)
     }
 
+    pub(crate) fn wipe(&self) {
+        self.store_discriminant(None);
+        self.store_port_i(0, None);
+        self.store_port_i(1, None);
+        self.store_port_i(2, None);
+    }
+
     pub(crate) fn store_discriminant(&self, c: Option<Cell>) {
         if let Some(c) = c.map(|c| c.discriminant_uninit_var()) {
             self.discriminant.store(c << 1, DEFAULT_ORDERING);

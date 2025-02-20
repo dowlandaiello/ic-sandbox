@@ -239,7 +239,13 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
         x.expand_step(&mut names);
     });
 
+    #[cfg(test)]
+    cc.checksum();
+
     let combinated = cc.combinate(&mut names);
+
+    #[cfg(test)]
+    combinated.checksum();
 
     combinated
 }
@@ -401,6 +407,6 @@ mod test {
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[1].orient()).to_string(), expected);
     }
 }

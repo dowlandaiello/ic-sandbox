@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "ast-ext",
-    "icc", "icviz",
+    "icc",
     "toyfp",
 ]
 resolver = "2"
