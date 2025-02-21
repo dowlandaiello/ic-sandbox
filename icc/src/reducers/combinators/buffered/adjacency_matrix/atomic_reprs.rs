@@ -233,7 +233,7 @@ impl<'a> DoubleEndedIterator for PortWalker<'a> {
 
 impl CellRepr {
     pub(crate) fn is_empty(&self) -> bool {
-        (self.discriminant.load(DEFAULT_ORDERING) & 0b1) == 1
+        self.load_discriminant_uninit_var().is_none()
     }
 
     pub(crate) fn load_discriminant_uninit_var(&self) -> Option<Cell> {

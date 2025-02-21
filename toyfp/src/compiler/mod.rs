@@ -230,7 +230,7 @@ pub fn compile_icalc(s: Vec<IStmt>) -> Vec<AstPort> {
 pub fn compile_sk(e: SkExpr) -> AstPort {
     let mut names = NameIter::default();
 
-    let cc = build_compilation_expr(true, e, &mut names);
+    let cc = build_compilation_expr(e, &mut names);
 
     #[cfg(test)]
     cc.checksum();
@@ -256,7 +256,7 @@ pub fn decode_sk(p: &AstPort) -> SkExpr {
     OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
 }
 
-fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
+fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
     tracing::trace!("compiling {:?}", e);
 
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
@@ -282,14 +282,6 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
             .unwrap_or((1, p.clone()))
     };
 
-    let maybe_encode = |p: OwnedNetBuilder| {
-        if root {
-            p.clone().expand_step(names).encode(names);
-        }
-
-        p
-    };
-
     let (builder, args) = match e.clone() {
         SkExpr::Var(v) => {
             return OwnedNetBuilder::new(
@@ -300,42 +292,43 @@ fn build_compilation_expr(root: bool, e: SkExpr, names: &NameIter) -> OwnedNetBu
                 names,
             );
         }
-        SkExpr::K(a, b) => (
+        SkExpr::K => (
             OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names),
-            vec![a, b],
+            Vec::new(),
         ),
-        SkExpr::S(a, b, c) => (
+        SkExpr::S => (
             OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names),
-            vec![a, b, c],
+            Vec::new(),
         ),
+        SkExpr::Call(a, b) => {
+            let a_cc = build_compilation_expr(*a, names);
+
+            (a_cc, vec![*b])
+        }
     };
 
-    let last =
-        args.into_iter()
-            .filter_map(|x| x)
-            .enumerate()
-            .fold(builder.clone(), |acc, (i, x)| {
-                #[cfg(test)]
-                builder.checksum();
+    let last = args.into_iter().fold(builder.clone(), |acc, x| {
+        #[cfg(test)]
+        builder.checksum();
 
-                let cc = best_port(&maybe_encode(build_compilation_expr(false, *x, names)));
+        let cc = best_port(&build_compilation_expr(x, names).encode(names));
 
-                let arg_handle = OwnedNetBuilder::new(
-                    SkCombinatorBuilder::Constr {
-                        primary_port: None,
-                        aux_ports: [const { None }; 2],
-                    },
-                    names,
-                );
+        let arg_handle = OwnedNetBuilder::new(
+            SkCombinatorBuilder::Constr {
+                primary_port: None,
+                aux_ports: [const { None }; 2],
+            },
+            names,
+        );
 
-                OwnedNetBuilder::connect((2, arg_handle.clone()), cc);
+        OwnedNetBuilder::connect((2, arg_handle.clone()), cc);
 
-                let ins_parent_port = if i == 0 { 0 } else { 1 };
+        let ins_parent_port = best_port(&acc);
 
-                OwnedNetBuilder::connect((0, arg_handle.clone()), (ins_parent_port, acc.clone()));
+        OwnedNetBuilder::connect((0, arg_handle.clone()), ins_parent_port);
 
-                arg_handle
-            });
+        arg_handle
+    });
 
     last.make_root(names);
 
@@ -364,7 +357,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_k_simple() {
-        let (case, expected) = ("(K)", "(K)");
+        let (case, expected) = ("K", "K");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
@@ -376,7 +369,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_k_call() {
-        let (case, expected) = ("(K(K)(K))", "(K)");
+        let (case, expected) = ("((KK)K)", "K");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
@@ -388,7 +381,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_k_nested() {
-        let (case, expected) = ("(K(K(K)(K))(K))", "(K)");
+        let (case, expected) = ("((K((KK)K))K)", "K");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());
@@ -400,7 +393,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_s() {
-        let (case, expected) = ("(S(K)(S)(K))", "(K)");
+        let (case, expected) = ("(((SK)S)K)", "K");
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into());

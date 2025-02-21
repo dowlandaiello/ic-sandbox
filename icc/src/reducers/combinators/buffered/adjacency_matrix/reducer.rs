@@ -55,6 +55,9 @@ impl ReducerBuilder {
 
         let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
 
+        #[cfg(test)]
+        assert_eq!(buff.get_next_free(), 0);
+
         let slots_for_ast_elems: BTreeMap<usize, usize> = nets
             .clone()
             .map(|net| {

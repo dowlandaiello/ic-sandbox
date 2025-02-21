@@ -4,58 +4,26 @@ use std::fmt;
 
 #[derive(Clone, Debug)]
 pub enum Expr {
-    S(Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>),
-    K(Option<Box<Expr>>, Option<Box<Expr>>),
+    Call(Box<Expr>, Box<Expr>),
+    S,
+    K,
     Var(String),
-}
-
-impl Expr {
-    pub(crate) fn with_push_argument(self, arg: Option<Box<Expr>>) -> Self {
-        match self {
-            Self::S(a, b, c) => {
-                if a.is_none() {
-                    return Self::S(arg, b, c);
-                }
-
-                if b.is_none() {
-                    return Self::S(a, arg, c);
-                }
-
-                Self::S(a, b, arg)
-            }
-            Self::K(a, b) => {
-                if a.is_none() {
-                    return Self::K(arg, b);
-                }
-
-                Self::K(a, arg)
-            }
-            v @ Self::Var(_) => v,
-        }
-    }
 }
 
 #[derive(Debug)]
 pub enum SpannedExpr {
-    S {
-        span: Span,
-        a: Option<Box<SpannedExpr>>,
-        b: Option<Box<SpannedExpr>>,
-        c: Option<Box<SpannedExpr>>,
-    },
-    K {
-        span: Span,
-        a: Option<Box<SpannedExpr>>,
-        b: Option<Box<SpannedExpr>>,
-    },
+    Call(Box<SpannedExpr>, Box<SpannedExpr>),
+    S(Span),
+    K(Span),
     Var(Spanned<String>),
 }
 
 impl SpannedExpr {
     pub fn span(&self) -> &Span {
         match self {
-            Self::S { span, .. } => span,
-            Self::K { span, .. } => span,
+            Self::Call(lhs, _) => lhs.span(),
+            Self::S(span) => span,
+            Self::K(span) => span,
             Self::Var(Spanned(_, span)) => span,
         }
     }
@@ -64,21 +32,15 @@ impl SpannedExpr {
 impl From<SpannedExpr> for Spanned<Expr> {
     fn from(s: SpannedExpr) -> Self {
         match s {
-            SpannedExpr::S { a, b, c, span } => Self(
-                Expr::S(
-                    a.map(|x| Box::new((*x).into())),
-                    b.map(|x| Box::new((*x).into())),
-                    c.map(|x| Box::new((*x).into())),
-                ),
-                span,
-            ),
-            SpannedExpr::K { a, b, span } => Self(
-                Expr::K(
-                    a.map(|x| Box::new((*x).into())),
-                    b.map(|x| Box::new((*x).into())),
-                ),
-                span,
-            ),
+            SpannedExpr::Call(a, b) => {
+                let span = a.span().clone();
+                let a_e: Expr = (*a).into();
+                let b_e: Expr = (*b).into();
+
+                Self(Expr::Call(Box::new(a_e), Box::new(b_e)), span)
+            }
+            SpannedExpr::S(span) => Self(Expr::S, span),
+            SpannedExpr::K(span) => Self(Expr::K, span),
             SpannedExpr::Var(Spanned(x, span)) => Self(Expr::Var(x), span),
         }
     }
@@ -87,15 +49,9 @@ impl From<SpannedExpr> for Spanned<Expr> {
 impl From<SpannedExpr> for Expr {
     fn from(s: SpannedExpr) -> Self {
         match s {
-            SpannedExpr::S { a, b, c, .. } => Self::S(
-                a.map(|x| Box::new((*x).into())),
-                b.map(|x| Box::new((*x).into())),
-                c.map(|x| Box::new((*x).into())),
-            ),
-            SpannedExpr::K { a, b, .. } => Self::K(
-                a.map(|x| Box::new((*x).into())),
-                b.map(|x| Box::new((*x).into())),
-            ),
+            SpannedExpr::Call(a, b) => Self::Call(Box::new((*a).into()), Box::new((*b).into())),
+            SpannedExpr::S(_) => Self::S,
+            SpannedExpr::K(_) => Self::K,
             SpannedExpr::Var(v) => Self::Var(v.0),
         }
     }
@@ -104,20 +60,10 @@ impl From<SpannedExpr> for Expr {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::S(x, y, z) => write!(
-                f,
-                "(S{}{}{})",
-                x.as_ref().map(|x| x.to_string()).unwrap_or_default(),
-                y.as_ref().map(|x| x.to_string()).unwrap_or_default(),
-                z.as_ref().map(|x| x.to_string()).unwrap_or_default()
-            ),
-            Self::K(a, b) => write!(
-                f,
-                "(K{}{})",
-                a.as_ref().map(|x| x.to_string()).unwrap_or_default(),
-                b.as_ref().map(|x| x.to_string()).unwrap_or_default()
-            ),
-            Self::Var(v) => write!(f, "({})", v),
+            Self::S => write!(f, "S"),
+            Self::K => write!(f, "K"),
+            Self::Var(v) => write!(f, "{}", v),
+            Self::Call(a, b) => write!(f, "({}{})", a, b),
         }
     }
 }
@@ -165,40 +111,29 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
     };
 
     recursive(|expr| {
-        let k = span_just(Token::K);
-        let s = span_just(Token::S);
+        let k = span_just(Token::K).map(|Spanned(_, span)| SpannedExpr::K(span));
+        let s = span_just(Token::S).map(|Spanned(_, span)| SpannedExpr::S(span));
         let left_paren = span_just(Token::LeftParen);
         let right_paren = span_just(Token::RightParen);
         let ident = select! {
             Spanned(Token::Ident(i), s) => Spanned(i, s)
         };
 
-        left_paren
-            .then(choice((
-                k.then(expr.clone().repeated())
-                    .map(|(Spanned(_, s), args)| {
-                        let mut args_iter = args.into_iter();
+        let leaf = choice((
+            k,
+            s,
+            ident.map(|Spanned(i, s)| SpannedExpr::Var(Spanned(i, s))),
+        ));
 
-                        SpannedExpr::K {
-                            span: s,
-                            a: args_iter.next().map(|x: SpannedExpr| Box::new(x)),
-                            b: args_iter.next().map(|x: SpannedExpr| Box::new(x)),
-                        }
-                    }),
-                s.then(expr.repeated()).map(|(Spanned(_, s), args)| {
-                    let mut args_iter = args.into_iter();
+        let call = left_paren
+            .ignore_then(
+                expr.clone()
+                    .then(expr)
+                    .map(|(a, b)| SpannedExpr::Call(Box::new(a), Box::new(b))),
+            )
+            .then_ignore(right_paren);
 
-                    SpannedExpr::S {
-                        span: s,
-                        a: args_iter.next().map(|x: SpannedExpr| Box::new(x)),
-                        b: args_iter.next().map(|x: SpannedExpr| Box::new(x)),
-                        c: args_iter.next().map(|x: SpannedExpr| Box::new(x)),
-                    }
-                }),
-                ident.map(|Spanned(i, s)| SpannedExpr::Var(Spanned(i, s))),
-            )))
-            .then(right_paren)
-            .map(|((_, e), _)| e)
+        choice((call, leaf))
     })
 }
 
@@ -208,7 +143,7 @@ mod test {
 
     #[test]
     fn test_parse() {
-        let cases = ["(S)", "(K)", "(S(K)(K))", "(S(K)(K)(K))", "(S(K(S))(K)(K))"];
+        let cases = ["S", "K", "((SK)K)"];
 
         for case in cases {
             let lexed = lexer().parse(case).unwrap();

@@ -113,69 +113,24 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     fn decombinate(p: &AstPort) -> Option<SkExpr> {
         if let Some(root_expr) =
             Self::decombinate_expr(&p, CombinatorBuilder::K { primary_port: None })
-                .then(|| SkExpr::K(None, None))
+                .then(|| SkExpr::K)
                 .or_else(|| {
                     Self::decombinate_expr(&p, CombinatorBuilder::S { primary_port: None })
-                        .then(|| SkExpr::S(None, None, None))
+                        .then(|| SkExpr::S)
                 })
         {
             return Some(root_expr);
         }
 
-        // Application requires an active pair
-        if let Some((lhs, rhs)) = p.try_as_active_pair() {
-            tracing::trace!("found application {}", lhs.1);
+        // TODO: Need to figure out how to decode SK (partial application)
 
-            fn args(root: Option<&AstPort>) -> Option<Vec<AstPort>> {
-                match &*root?.borrow() {
-                    AstExpr::Constr(Constructor { aux_ports, .. }) => {
-                        let mut next_args = aux_ports.as_ref().iter();
-                        let (next, arg) = (next_args.next(), next_args.next());
-
-                        let mut res =
-                            vec![arg.map(|x| x.as_ref().map(|(_, x)| x)).flatten()?.clone()];
-
-                        if let Some(others) =
-                            args(next.map(|x| x.as_ref().map(|(_, x)| x)).flatten())
-                        {
-                            res.extend(others);
-                        }
-
-                        Some(res)
-                    }
-                    _ => None,
-                }
-            }
-
-            let args = args(Some(&rhs.1)).expect("missing application args");
-
-            tracing::trace!(
-                "application has arg {}",
-                args.iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-
-            lhs.1.borrow_mut().set_primary_port(None);
-
-            let mut to_call_dec =
-                Self::decombinate(&lhs.1).expect("combinator call missing valid applicand");
-
-            for arg in args {
-                to_call_dec = to_call_dec.with_push_argument(Some(Box::new(
-                    Self::decombinate(&arg).expect("invalid argument #1"),
-                )));
-            }
-
-            return Some(to_call_dec);
-        }
+        println!("{}", p);
 
         Self::decombinate_expr(p, CombinatorBuilder::K { primary_port: None })
-            .then(|| SkExpr::K(None, None))
+            .then(|| SkExpr::K)
             .or_else(|| {
                 Self::decombinate_expr(p, CombinatorBuilder::S { primary_port: None })
-                    .then(|| SkExpr::S(None, None, None))
+                    .then(|| SkExpr::S)
             })
             .or_else(|| unreachable!())
     }
@@ -649,9 +604,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 self.clone()
             }
         };
-
-        #[cfg(test)]
-        self.checksum();
 
         tracing::trace!("expansion finished");
 
@@ -1248,7 +1200,7 @@ mod test {
 
         assert!(matches!(
             OwnedNetBuilder::decombinate(&combinated).unwrap(),
-            SkExpr::K(None, None)
+            SkExpr::K
         ));
     }
 
@@ -1283,7 +1235,7 @@ mod test {
         let combinated = s_comb.combinate(&mut names).orient();
         let m = OwnedNetBuilder::decombinate(&combinated).unwrap();
 
-        assert!(matches!(m, SkExpr::S(None, None, None)));
+        assert!(matches!(m, SkExpr::S));
     }
 
     #[test_log::test]

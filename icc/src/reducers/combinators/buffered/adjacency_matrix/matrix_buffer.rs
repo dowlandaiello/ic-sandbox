@@ -70,7 +70,7 @@ impl MatrixBuffer {
         }
     }
 
-    fn get_next_free(&self) -> usize {
+    pub(crate) fn get_next_free(&self) -> usize {
         self.cells.iter().position(|x| x.is_empty()).unwrap()
     }
 }
