@@ -1,7 +1,7 @@
 use super::{Cell, Conn, Ptr};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-const DEFAULT_ORDERING: Ordering = Ordering::Relaxed;
+const DEFAULT_ORDERING: Ordering = Ordering::SeqCst;
 
 pub(crate) struct ConnRepr {
     port: AtomicU8,

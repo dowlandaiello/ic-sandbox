@@ -111,28 +111,84 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type EExpr = SkExpr;
 
     fn decombinate(p: &AstPort) -> Option<SkExpr> {
-        if let Some(root_expr) =
-            Self::decombinate_expr(&p, CombinatorBuilder::K { primary_port: None })
-                .then(|| SkExpr::K)
-                .or_else(|| {
-                    Self::decombinate_expr(&p, CombinatorBuilder::S { primary_port: None })
-                        .then(|| SkExpr::S)
-                })
-        {
-            return Some(root_expr);
-        }
+        let mut names = Default::default();
 
         // TODO: Need to figure out how to decode SK (partial application)
+        Self::decombinate_expr(
+            p,
+            OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names),
+            &names,
+        )
+        .then(|| SkExpr::K)
+        .or_else(|| {
+            Self::decombinate_expr(
+                p,
+                OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names),
+                &names,
+            )
+            .then(|| SkExpr::S)
+        })
+        .or_else(|| {
+            let mut names = Default::default();
 
-        println!("{}", p);
+            let elems = [
+                CombinatorBuilder::S { primary_port: None },
+                CombinatorBuilder::K { primary_port: None },
+            ];
+            let permutations = elems
+                .iter()
+                .map(|a| elems.iter().map(|b| (a.clone(), b.clone())))
+                .flatten();
 
-        Self::decombinate_expr(p, CombinatorBuilder::K { primary_port: None })
-            .then(|| SkExpr::K)
-            .or_else(|| {
-                Self::decombinate_expr(p, CombinatorBuilder::S { primary_port: None })
-                    .then(|| SkExpr::S)
-            })
-            .or_else(|| unreachable!())
+            permutations
+                .map(|(root, arg)| {
+                    let root_constr =
+                        OwnedNetBuilder::new(root.clone(), &mut names).expand_step(&names);
+                    let call = OwnedNetBuilder::new(
+                        CombinatorBuilder::Constr {
+                            primary_port: None,
+                            aux_ports: [const { None }; 2],
+                        },
+                        &mut names,
+                    );
+
+                    let arg_port = OwnedNetBuilder::new(arg.clone(), &mut names).encode(&names);
+                    OwnedNetBuilder::connect((2, call.clone()), (0, arg_port));
+
+                    let var = OwnedNetBuilder::new(
+                        CombinatorBuilder::Var {
+                            name: "bruh".to_owned(),
+                            primary_port: None,
+                        },
+                        &mut names,
+                    );
+
+                    OwnedNetBuilder::connect((1, call.clone()), (0, var.clone()));
+
+                    let call = call.expand_step(&names);
+
+                    OwnedNetBuilder::connect((0, root_constr), (0, call.clone()));
+
+                    Self::decombinate_expr(p, var, &names).then(|| match (root, arg) {
+                        (CombinatorBuilder::S { .. }, CombinatorBuilder::K { .. }) => {
+                            SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))
+                        }
+                        (CombinatorBuilder::K { .. }, CombinatorBuilder::S { .. }) => {
+                            SkExpr::Call(Box::new(SkExpr::K), Box::new(SkExpr::K))
+                        }
+                        (CombinatorBuilder::K { .. }, CombinatorBuilder::K { .. }) => {
+                            SkExpr::Call(Box::new(SkExpr::K), Box::new(SkExpr::K))
+                        }
+                        (CombinatorBuilder::S { .. }, CombinatorBuilder::S { .. }) => {
+                            SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::S))
+                        }
+                        _ => unreachable!(),
+                    })
+                })
+                .next()
+                .flatten()
+        })
+        .or_else(|| unreachable!())
     }
 
     fn combinate(&self, names: &NameIter) -> Self::CPort {
@@ -777,29 +833,17 @@ impl OwnedNetBuilder {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
-    fn decombinate_expr(p: &AstPort, cmp: CombinatorBuilder) -> bool {
-        let old_primary_port = p.unroot();
+    fn decombinate_expr(p: &AstPort, cmp: OwnedNetBuilder, names: &NameIter) -> bool {
+        cmp.clone().iter_tree().for_each(|x| {
+            x.expand_step(names);
+        });
 
-        let mut names = Default::default();
+        let combinated = cmp.make_root(names).combinate(names).orient();
 
-        let k_tree = Self::new(cmp.clone(), &mut names);
-        k_tree.expand_step(&mut names);
+        tracing::trace!("found    {}", p);
+        tracing::trace!("expected {}", combinated);
 
-        let combinated = k_tree.make_root(&mut names).combinate(&mut names).orient();
-        combinated.unroot();
-
-        tracing::trace!("found {}", p);
-        tracing::trace!("found {}", combinated);
-
-        if combinated.alpha_eq(&p) {
-            tracing::trace!("found {:?}", cmp);
-
-            true
-        } else {
-            p.borrow_mut().set_primary_port(old_primary_port);
-
-            false
-        }
+        combinated.alpha_eq(&p.orient())
     }
 
     pub(crate) fn cloned(&self) -> CombinatorBuilder {

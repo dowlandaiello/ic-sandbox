@@ -107,10 +107,12 @@ impl Port {
 
         // TODO: this is awful
         self.iter_tree()
+            .filter(|x| x.borrow().as_var().is_none())
             .map(|x| x.borrow().description())
             .collect::<BTreeSet<_>>()
             == other
                 .iter_tree()
+                .filter(|x| x.borrow().as_var().is_none())
                 .map(|x| x.borrow().description())
                 .collect::<BTreeSet<_>>()
     }
@@ -542,6 +544,7 @@ impl Expr {
         let ports = [self.primary_port()]
             .into_iter()
             .chain(self.aux_ports().iter().map(|x| x.as_ref()))
+            .filter(|x| x.map(|x| !x.1.borrow().is_var()).unwrap_or(true))
             .map(|x| x.map(|(p, port)| (*p, port.borrow().name())))
             .collect();
 
