@@ -128,66 +128,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             )
             .then(|| SkExpr::S)
         })
-        .or_else(|| {
-            let mut names = Default::default();
-
-            let elems = [
-                CombinatorBuilder::S { primary_port: None },
-                CombinatorBuilder::K { primary_port: None },
-            ];
-            let permutations = elems
-                .iter()
-                .map(|a| elems.iter().map(|b| (a.clone(), b.clone())))
-                .flatten();
-
-            permutations
-                .map(|(root, arg)| {
-                    let root_constr =
-                        OwnedNetBuilder::new(root.clone(), &mut names).expand_step(&names);
-                    let call = OwnedNetBuilder::new(
-                        CombinatorBuilder::Constr {
-                            primary_port: None,
-                            aux_ports: [const { None }; 2],
-                        },
-                        &mut names,
-                    );
-
-                    let arg_port = OwnedNetBuilder::new(arg.clone(), &mut names).encode(&names);
-                    OwnedNetBuilder::connect((2, call.clone()), (0, arg_port));
-
-                    let var = OwnedNetBuilder::new(
-                        CombinatorBuilder::Var {
-                            name: "bruh".to_owned(),
-                            primary_port: None,
-                        },
-                        &mut names,
-                    );
-
-                    OwnedNetBuilder::connect((1, call.clone()), (0, var.clone()));
-
-                    let call = call.expand_step(&names);
-
-                    OwnedNetBuilder::connect((0, root_constr), (0, call.clone()));
-
-                    Self::decombinate_expr(p, var, &names).then(|| match (root, arg) {
-                        (CombinatorBuilder::S { .. }, CombinatorBuilder::K { .. }) => {
-                            SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))
-                        }
-                        (CombinatorBuilder::K { .. }, CombinatorBuilder::S { .. }) => {
-                            SkExpr::Call(Box::new(SkExpr::K), Box::new(SkExpr::K))
-                        }
-                        (CombinatorBuilder::K { .. }, CombinatorBuilder::K { .. }) => {
-                            SkExpr::Call(Box::new(SkExpr::K), Box::new(SkExpr::K))
-                        }
-                        (CombinatorBuilder::S { .. }, CombinatorBuilder::S { .. }) => {
-                            SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::S))
-                        }
-                        _ => unreachable!(),
-                    })
-                })
-                .next()
-                .flatten()
-        })
         .or_else(|| unreachable!())
     }
 
