@@ -3,6 +3,7 @@ use super::{
     atomic_reprs::CellRepr,
     Cell, NetBuffer,
 };
+use lockfree::stack::Stack;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt,
@@ -17,7 +18,7 @@ use std::{
 pub struct MatrixBuffer {
     cells: Arc<[CellRepr]>,
     len: Arc<AtomicUsize>,
-    next_free: Arc<AtomicUsize>,
+    next_free: Arc<Stack<usize>>,
 }
 
 impl fmt::Debug for MatrixBuffer {
@@ -66,7 +67,7 @@ impl MatrixBuffer {
                 .map(|_| CellRepr::default())
                 .collect(),
             len: AtomicUsize::new(0).into(),
-            next_free: AtomicUsize::new(0).into(),
+            next_free: Stack::new().into(),
         }
     }
 
@@ -195,34 +196,23 @@ impl NetBuffer for MatrixBuffer {
     }
 
     fn push(&self, c: Cell) -> Ptr {
-        self.len.fetch_add(1, Ordering::SeqCst);
-
         // Free port may not be contiguous. We may be currently at an unsafe value
-        self.next_free
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |mut idx| {
-                if !self.cells[idx].is_empty() {
-                    idx = self.get_next_free();
-                }
+        let old_len = self.len.fetch_add(1, Ordering::SeqCst);
 
-                Some(idx)
-            })
-            .unwrap();
+        let next_free = self.next_free.pop().unwrap_or(old_len);
 
-        // It is normalized now
-        let last_free = self.next_free.fetch_add(1, Ordering::SeqCst);
+        tracing::debug!("inserting {} in {}", c, next_free);
 
-        tracing::debug!("inserting {} in {}", c, last_free);
+        self.cells[next_free].store_discriminant(Some(c));
 
-        self.cells[last_free].store_discriminant(Some(c));
-
-        last_free
+        next_free
     }
 
     fn delete(&self, p: Ptr) {
         tracing::debug!("deleting {}", p);
 
         self.len.fetch_sub(1, Ordering::SeqCst);
-        self.next_free.store(p, Ordering::SeqCst);
+        self.next_free.push(p);
 
         let cell = &self.cells[p];
         cell.wipe();
