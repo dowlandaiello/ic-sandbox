@@ -201,7 +201,7 @@ impl NetBuffer for MatrixBuffer {
 
         let next_free = self.next_free.pop().unwrap_or(old_len);
 
-        tracing::debug!("inserting {} in {}", c, next_free);
+        tracing::debug!("inserting {} in cell {}", c, next_free);
 
         self.cells[next_free].store_discriminant(Some(c));
 
@@ -209,7 +209,7 @@ impl NetBuffer for MatrixBuffer {
     }
 
     fn delete(&self, p: Ptr) {
-        tracing::debug!("deleting {}", p);
+        tracing::debug!("deleting cell {}", p);
 
         self.len.fetch_sub(1, Ordering::SeqCst);
         self.next_free.push(p);

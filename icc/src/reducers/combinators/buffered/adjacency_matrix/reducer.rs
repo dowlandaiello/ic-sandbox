@@ -30,6 +30,12 @@ macro_rules! conn_maybe_redex {
                 && !matches!(a_cell, Cell::Var(_))
                 && !matches!(b_cell, Cell::Var(_))
             {
+                tracing::trace!(
+                    "found new redex cell {} >< cell {}",
+                    a_conn.cell,
+                    b_conn.cell
+                );
+
                 $redexbuff.push((a_conn, b_conn));
             }
         }
@@ -168,6 +174,7 @@ pub struct ReductionWorker {
 }
 
 impl ReductionWorker {
+    #[tracing::instrument(skip(self))]
     fn reduce_step(&self, redex: (Conn, Conn)) -> Vec<(Conn, Conn)> {
         let mut redexes = Vec::default();
 
