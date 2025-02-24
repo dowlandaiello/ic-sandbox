@@ -1,5 +1,5 @@
 use crate::parser::ast_combinators::Port;
-pub use buffered::adjacency_matrix::reduce_dyn;
+pub use crossbeam::reduce_dyn;
 use std::fmt;
 
 pub mod buffered;

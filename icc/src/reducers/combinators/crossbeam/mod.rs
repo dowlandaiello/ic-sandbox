@@ -14,6 +14,13 @@ use std::{
     sync::{atomic::AtomicUsize, Arc},
 };
 
+pub fn reduce_dyn(e: &Port) -> Vec<Port> {
+    let mut reducer = Reducer::new([e].into_iter());
+    reducer.reduce();
+
+    reducer.readback()
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct OwnedCell {
     kind: Cell,
@@ -590,20 +597,20 @@ impl TraitReducer for Reducer {
         }
 
         #[cfg(not(feature = "threadpool"))]
-        fn reduce_redexes(buffer: MatrixBuffer, r: impl Iterator<Item = (Conn, Conn)>) {
+        fn reduce_redexes(buffer: Reducer, r: impl Iterator<Item = (Conn, Conn)>) {
             r.into_iter().for_each(move |x| {
-                let worker = ReductionWorker {
-                    buffer: buffer.clone(),
-                };
+                let redexes = buffer.reduce_step_raw(x);
 
-                let redexes = worker.reduce_step(x);
-
-                reduce_redexes(buffer.clone(), redexes);
+                reduce_redexes(buffer.clone(), redexes.into_iter());
             });
         }
 
         // Push all redexes
+        #[cfg(feature = "threadpool")]
         reduce_redexes(self.clone(), self.root_redexes.par_drain(..));
+
+        #[cfg(not(feature = "threadpool"))]
+        reduce_redexes(self.clone(), self.root_redexes.drain(..));
 
         self.readback()
     }
