@@ -79,6 +79,20 @@ impl Port {
     }
 
     pub fn orient(&self) -> Self {
+        let mut active_pairs = self
+            .iter_tree()
+            .filter_map(|x| x.try_as_active_pair())
+            .filter(|((_, a), (_, b))| {
+                a.borrow().as_var().is_none() && b.borrow().as_var().is_none()
+            })
+            .map(|((_, a), (_, b))| if a.id < b.id { a } else { b })
+            .collect::<Vec<_>>();
+        active_pairs.sort_by(|a, b| a.id.cmp(&b.id));
+
+        if let Some(first) = active_pairs.into_iter().next() {
+            return first;
+        }
+
         let mut roots = self
             .iter_tree()
             .filter(|x| x.borrow().is_var())

@@ -1,50 +1,7 @@
-use super::{Conn, Ptr};
-use std::{fmt, iter::DoubleEndedIterator};
+use super::{Cell, Conn, Ptr};
+use std::iter::DoubleEndedIterator;
 
 pub mod adjacency_matrix;
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Clone, Copy, Debug)]
-pub enum Cell {
-    Constr,
-    Dup,
-    Era,
-
-    // Vars have unique, monotonically increasing
-    // discriminants as well
-    Var(usize),
-}
-
-impl fmt::Display for Cell {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Constr => write!(f, "Constr"),
-            Self::Dup => write!(f, "Dup"),
-            Self::Era => write!(f, "Era"),
-            Self::Var(v) => write!(f, "{}", v),
-        }
-    }
-}
-
-impl Cell {
-    pub fn discriminant_uninit_var(&self) -> u8 {
-        match self {
-            Self::Constr => 0,
-            Self::Dup => 1,
-            Self::Era => 2,
-            Self::Var(_) => 3,
-        }
-    }
-
-    pub fn from_discriminant_uninit_var(d: u8) -> Self {
-        match d {
-            0 => Self::Constr,
-            1 => Self::Dup,
-            2 => Self::Era,
-            3 => Self::Var(0),
-            _ => panic!("discriminant out of bounds"),
-        }
-    }
-}
 
 pub trait NetBuffer {
     fn iter_tree(&self, p: Ptr) -> impl Iterator<Item = Ptr>;

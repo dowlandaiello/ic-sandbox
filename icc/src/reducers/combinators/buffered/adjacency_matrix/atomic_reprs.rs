@@ -1,7 +1,8 @@
 use super::{Cell, Conn, Ptr};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
-const DEFAULT_ORDERING: Ordering = Ordering::SeqCst;
+const DEFAULT_ORDERING_LOAD: Ordering = Ordering::SeqCst;
+const DEFAULT_ORDERING_STORE: Ordering = Ordering::SeqCst;
 
 pub(crate) struct ConnRepr {
     port: AtomicU8,
@@ -20,14 +21,14 @@ impl Default for ConnRepr {
 impl ConnRepr {
     fn store(&self, c: Option<Conn>) {
         if let Some(c) = c {
-            self.cell.store(c.cell << 1, DEFAULT_ORDERING);
-            self.port.store(c.port << 1, DEFAULT_ORDERING);
+            self.cell.store(c.cell << 1, DEFAULT_ORDERING_STORE);
+            self.port.store(c.port << 1, DEFAULT_ORDERING_STORE);
 
             return;
         }
 
-        self.port.store(0b1, DEFAULT_ORDERING);
-        self.cell.store(0b1, DEFAULT_ORDERING);
+        self.port.store(0b1, DEFAULT_ORDERING_STORE);
+        self.cell.store(0b1, DEFAULT_ORDERING_STORE);
     }
 
     fn load_port(&self) -> Option<u8> {
@@ -173,64 +174,6 @@ impl CellBuilder {
     }
 }
 
-struct PortWalker<'a> {
-    idx_front: usize,
-    idx_back: usize,
-    view: &'a CellRepr,
-}
-
-impl<'a> PortWalker<'a> {
-    fn new(view: &'a CellRepr, start_idx: usize, end_ptr: usize) -> Self {
-        Self {
-            idx_front: start_idx,
-            idx_back: end_ptr,
-            view,
-        }
-    }
-}
-
-impl<'a> Iterator for PortWalker<'a> {
-    type Item = Option<Conn>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.view.is_empty() {
-            return None;
-        }
-
-        let res = match self.idx_front {
-            3 => {
-                return None;
-            }
-            0 => self.view.load_primary_port(),
-            n => self.view.load_aux_port(n - 1),
-        };
-
-        self.idx_front += 1;
-
-        Some(res)
-    }
-}
-
-impl<'a> DoubleEndedIterator for PortWalker<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.view.is_empty() {
-            return None;
-        }
-
-        let res = match self.idx_back {
-            0 => {
-                return None;
-            }
-            1 => self.view.load_primary_port(),
-            n => self.view.load_aux_port(n - 2),
-        };
-
-        self.idx_back -= 1;
-
-        Some(res)
-    }
-}
-
 impl CellRepr {
     pub(crate) fn is_empty(&self) -> bool {
         self.load_discriminant_uninit_var().is_none()
@@ -273,13 +216,18 @@ impl CellRepr {
     }
 
     pub(crate) fn iter_ports<'a>(&'a self) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
-        PortWalker::new(self, 0, 3)
+        [
+            self.load_primary_port(),
+            self.load_aux_port(0),
+            self.load_aux_port(1),
+        ]
+        .into_iter()
     }
 
     pub(crate) fn iter_aux_ports<'a>(
         &'a self,
     ) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
-        PortWalker::new(self, 1, 3)
+        [self.load_aux_port(0), self.load_aux_port(1)].into_iter()
     }
 
     pub(crate) fn wipe(&self) {
@@ -291,9 +239,9 @@ impl CellRepr {
 
     pub(crate) fn store_discriminant(&self, c: Option<Cell>) {
         if let Some(c) = c.map(|c| c.discriminant_uninit_var()) {
-            self.discriminant.store(c << 1, DEFAULT_ORDERING);
+            self.discriminant.store(c << 1, DEFAULT_ORDERING_STORE);
         } else {
-            self.discriminant.store(0b1, DEFAULT_ORDERING);
+            self.discriminant.store(0b1, DEFAULT_ORDERING_STORE);
         }
     }
 }
@@ -313,7 +261,7 @@ fn store_optional_usize(u: Option<usize>) -> AtomicUsize {
 }
 
 fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
-    let mut u = u.load(DEFAULT_ORDERING);
+    let mut u = u.load(DEFAULT_ORDERING_LOAD);
 
     let empty = u & 0b1;
 
@@ -327,7 +275,7 @@ fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
 }
 
 fn load_optional_usize(u: &AtomicUsize) -> Option<usize> {
-    let mut u = u.load(DEFAULT_ORDERING);
+    let mut u = u.load(DEFAULT_ORDERING_LOAD);
 
     let empty = u & 0b1;
 

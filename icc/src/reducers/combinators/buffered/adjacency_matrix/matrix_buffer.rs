@@ -3,7 +3,7 @@ use super::{
     atomic_reprs::CellRepr,
     Cell, NetBuffer,
 };
-use lockfree::stack::Stack;
+use lockfree::queue::Queue;
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt,
@@ -18,7 +18,7 @@ use std::{
 pub struct MatrixBuffer {
     cells: Arc<[CellRepr]>,
     len: Arc<AtomicUsize>,
-    next_free: Arc<Stack<usize>>,
+    next_free: Arc<Queue<usize>>,
 }
 
 impl fmt::Debug for MatrixBuffer {
@@ -59,6 +59,44 @@ impl fmt::Debug for MatrixBuffer {
 }
 
 impl MatrixBuffer {
+    // Ensures nothing is still pointing to cell
+    #[tracing::instrument(skip(self))]
+    fn checksum_references(&self, cell: Ptr) {
+        tracing::trace!("checksumming {}", cell);
+
+        self.iter_cells().for_each(|x| {
+            assert_ne!(x, cell);
+
+            self.iter_ports(x)
+                .enumerate()
+                .filter_map(|(i, x)| Some((i, x?)))
+                .for_each(
+                    |(
+                        port_self,
+                        Conn {
+                            cell: other_cell,
+                            port: other_port,
+                        },
+                    )| {
+                        tracing::trace!(
+                            "in {:?} <-> {:?}",
+                            Conn {
+                                port: port_self as u8,
+                                cell: x
+                            },
+                            Conn {
+                                port: other_port,
+                                cell: other_cell
+                            }
+                        );
+                        assert_ne!(other_cell, cell)
+                    },
+                )
+        });
+
+        tracing::trace!("checksum ok");
+    }
+
     pub(crate) fn new_with_capacity_nodes(capacity: usize) -> Self {
         // Capacitied to N^2, we should always have room at the beginning
 
@@ -67,7 +105,7 @@ impl MatrixBuffer {
                 .map(|_| CellRepr::default())
                 .collect(),
             len: AtomicUsize::new(0).into(),
-            next_free: Stack::new().into(),
+            next_free: Queue::new().into(),
         }
     }
 
@@ -211,11 +249,13 @@ impl NetBuffer for MatrixBuffer {
     fn delete(&self, p: Ptr) {
         tracing::debug!("deleting cell {}", p);
 
-        self.len.fetch_sub(1, Ordering::SeqCst);
-        self.next_free.push(p);
-
         let cell = &self.cells[p];
         cell.wipe();
+
+        self.checksum_references(p);
+
+        self.len.fetch_sub(1, Ordering::SeqCst);
+        self.next_free.push(p);
     }
 
     fn connect(&self, from: Option<Conn>, to: Option<Conn>) {

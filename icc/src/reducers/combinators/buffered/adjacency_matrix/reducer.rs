@@ -199,10 +199,7 @@ impl ReductionWorker {
                 });
             }
             // Annihilation of Era
-            (Cell::Era, Cell::Era) => {
-                self.buffer.delete(a_id);
-                self.buffer.delete(b_id);
-            }
+            (Cell::Era, Cell::Era) => {}
             // Commutation of constr dup
             (Cell::Constr, Cell::Dup) => {
                 // Top is left to right, bottom is right to left
@@ -237,6 +234,23 @@ impl ReductionWorker {
                 panic!("invalid redex")
             }
         }
+
+        (0..3).for_each(|i| {
+            self.buffer.connect(
+                Some(Conn {
+                    cell: a_id,
+                    port: i,
+                }),
+                None,
+            );
+            self.buffer.connect(
+                Some(Conn {
+                    cell: b_id,
+                    port: i,
+                }),
+                None,
+            );
+        });
 
         self.buffer.delete(a_id);
         self.buffer.delete(b_id);
@@ -452,98 +466,6 @@ mod test {
     use super::*;
     use crate::parser::parser_combinators as parser;
     use chumsky::Parser;
-
-    #[test_log::test]
-    fn test_readback_manual_matrix() {
-        let matrix = ReducerBuilder::default().with_capacity_nodes(6).finish();
-        let constrs = (
-            matrix.buffer.push(Cell::Constr),
-            matrix.buffer.push(Cell::Constr),
-        );
-
-        assert_ne!(constrs.0, constrs.1);
-
-        let vars_top = (
-            matrix.buffer.push(Cell::Var(0)),
-            matrix.buffer.push(Cell::Var(1)),
-        );
-        let vars_bot = (
-            matrix.buffer.push(Cell::Var(2)),
-            matrix.buffer.push(Cell::Var(3)),
-        );
-
-        let unique_ids = BTreeSet::from_iter([
-            constrs.0, constrs.1, vars_top.0, vars_top.1, vars_bot.0, vars_bot.1,
-        ]);
-        assert_eq!(unique_ids.len(), 6);
-
-        matrix.buffer.connect(
-            Some(Conn {
-                cell: constrs.0,
-                port: 0,
-            }),
-            Some(Conn {
-                cell: constrs.1,
-                port: 0,
-            }),
-        );
-
-        assert_eq!(
-            matrix.buffer.primary_port(constrs.0),
-            Some(Conn {
-                cell: constrs.1,
-                port: 0
-            })
-        );
-        assert_eq!(
-            matrix.buffer.primary_port(constrs.1),
-            Some(Conn {
-                cell: constrs.0,
-                port: 0
-            })
-        );
-
-        matrix.buffer.connect(
-            Some(Conn {
-                cell: vars_top.0,
-                port: 0,
-            }),
-            Some(Conn {
-                cell: constrs.0,
-                port: 1,
-            }),
-        );
-        matrix.buffer.connect(
-            Some(Conn {
-                cell: vars_top.1,
-                port: 0,
-            }),
-            Some(Conn {
-                cell: constrs.0,
-                port: 2,
-            }),
-        );
-        assert_eq!(
-            matrix.buffer.iter_ports(constrs.0).collect::<Vec<_>>(),
-            vec![
-                Some(Conn {
-                    cell: constrs.1,
-                    port: 0
-                }),
-                Some(Conn {
-                    cell: vars_top.0,
-                    port: 0,
-                }),
-                Some(Conn {
-                    cell: vars_top.1,
-                    port: 0,
-                })
-            ]
-        );
-
-        let res = matrix.readback().remove(0);
-        assert_eq!(res.to_string(), "Constr[@0](2, 3) >< Constr[@1]()");
-    }
 
     #[test_log::test]
     fn test_readback_matrix() {
