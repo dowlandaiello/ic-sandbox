@@ -1319,7 +1319,8 @@ mod test {
                 aux_port: None,
             },
             &mut names,
-        );
+        )
+        .make_root(&mut names);
 
         OwnedNetBuilder::connect((0, net.clone()), (0, d_comb.clone()));
 
@@ -1482,10 +1483,10 @@ mod test {
                 .map(|x| x.to_string())
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from_iter([
-                "v0 ~ v4".to_owned(),
-                "v1 ~ v5".to_owned(),
-                "v2 ~ v6".to_owned(),
-                "v3 ~ v7".to_owned()
+                "v4 ~ v0".to_owned(),
+                "v5 ~ v1".to_owned(),
+                "v6 ~ v2".to_owned(),
+                "v7 ~ v3".to_owned()
             ])
         );
     }
@@ -1555,7 +1556,7 @@ mod test {
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect::<BTreeSet<_>>(),
-            BTreeSet::from_iter(["v0 ~ v2".to_owned(), "v1 ~ v3".to_owned()])
+            BTreeSet::from_iter(["v2 ~ v0".to_owned(), "v3 ~ v1".to_owned()])
         );
     }
 
@@ -1627,10 +1628,10 @@ mod test {
                 .map(|x| x.to_string())
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from_iter([
-                "v0 ~ v4".to_owned(),
-                "v1 ~ v5".to_owned(),
-                "v2 ~ v6".to_owned(),
-                "v3 ~ v7".to_owned()
+                "v4 ~ v0".to_owned(),
+                "v5 ~ v1".to_owned(),
+                "v6 ~ v2".to_owned(),
+                "v7 ~ v3".to_owned()
             ])
         );
     }

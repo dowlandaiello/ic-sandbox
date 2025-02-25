@@ -57,7 +57,7 @@ impl Port {
         self.iter_tree().for_each(|x| {
             x.iter_ports()
                 .into_iter()
-                .filter_map(|x| x)
+                .map(|x| x.unwrap())
                 .for_each(|(port, p)| {
                     assert!(p
                         .iter_ports()

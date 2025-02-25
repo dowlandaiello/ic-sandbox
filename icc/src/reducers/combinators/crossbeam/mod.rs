@@ -16,9 +16,7 @@ use std::{
 
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let mut reducer = Reducer::new([e].into_iter());
-    reducer.reduce();
-
-    reducer.readback()
+    reducer.reduce()
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -31,6 +29,7 @@ pub struct OwnedCell {
 impl OwnedCell {
     #[tracing::instrument]
     fn connect(
+        redexes: &mut Vec<(Conn, Conn)>,
         lhs_cell: &mut OwnedCell,
         lhs_cell_id: usize,
         lhs_port: u8,
@@ -54,6 +53,23 @@ impl OwnedCell {
                 port: lhs_port,
             }),
         );
+
+        if lhs_port == 0
+            && rhs_port == 0
+            && !matches!(lhs_cell.kind, Cell::Var(_))
+            && !matches!(rhs_cell.kind, Cell::Var(_))
+        {
+            redexes.push((
+                Conn {
+                    cell: lhs_cell_id,
+                    port: 0,
+                },
+                Conn {
+                    cell: rhs_cell_id,
+                    port: 0,
+                },
+            ));
+        }
     }
 
     fn make_constr() -> Self {
@@ -116,7 +132,7 @@ impl Reducer {
         let next_free = Arc::new(Queue::from_iter(n_nodes..(n_nodes * n_nodes)));
         let mut names: BTreeMap<usize, usize> = Default::default();
         let mut idents: BTreeMap<usize, String> = Default::default();
-        let mut redexes: BTreeSet<BTreeSet<usize>> = Default::default();
+        let mut redexes: Vec<(Conn, Conn)> = Default::default();
 
         let cells_for_ast_elems: BTreeMap<usize, RefCell<(OwnedCell, Ptr)>> = nets
             .clone()
@@ -171,14 +187,8 @@ impl Reducer {
                             cells_for_ast_elems.get(&p.id).unwrap().borrow_mut();
                         let other_idx = other_cell_cell_idx.1;
 
-                        if port_other == 0 && port_self == 0 {
-                            redexes.insert(BTreeSet::from_iter([
-                                cell_cell_idx.1,
-                                other_cell_cell_idx.1,
-                            ]));
-                        }
-
                         OwnedCell::connect(
+                            &mut redexes,
                             &mut cell_cell_idx.0,
                             idx,
                             port_self as u8,
@@ -214,20 +224,15 @@ impl Reducer {
             idents,
             root_redexes: redexes
                 .into_iter()
-                .map(|x| {
-                    let mut iter = x.into_iter();
-
-                    (
-                        Conn {
-                            cell: iter.next().unwrap(),
-                            port: 0,
-                        },
-                        Conn {
-                            cell: iter.next().unwrap(),
-                            port: 0,
-                        },
-                    )
+                .map(|(lhs, rhs)| {
+                    if lhs.cell < rhs.cell {
+                        (lhs, rhs)
+                    } else {
+                        (rhs, lhs)
+                    }
                 })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
                 .collect(),
         }
     }
@@ -264,7 +269,7 @@ impl Reducer {
         self.next_free.pop().unwrap()
     }
 
-    fn make_commutation_era(&self, a: OwnedCell) {
+    fn make_commutation_era(&self, redexes: &mut Vec<(Conn, Conn)>, a: OwnedCell) {
         let mut eras = [
             (self.get_next_free(), OwnedCell::make_era()),
             (self.get_next_free(), OwnedCell::make_era()),
@@ -277,6 +282,7 @@ impl Reducer {
             let mut top_left_cell = top_left_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut top_left_cell,
                 top_left_arg.cell,
                 top_left_arg.port,
@@ -294,6 +300,7 @@ impl Reducer {
             let mut top_right_cell = top_right_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut top_right_cell,
                 top_right_arg.cell,
                 top_right_arg.port,
@@ -308,7 +315,7 @@ impl Reducer {
         });
     }
 
-    fn make_commutation(&self, a: OwnedCell, b: OwnedCell) {
+    fn make_commutation(&self, redexes: &mut Vec<(Conn, Conn)>, a: OwnedCell, b: OwnedCell) {
         // left to right
         let mut dups = [
             (self.get_next_free(), OwnedCell::make_dup()),
@@ -322,6 +329,7 @@ impl Reducer {
         // Internal conns
         // Outer internal conns
         OwnedCell::connect(
+            redexes,
             &mut dups[0].1,
             dups[0].0,
             2,
@@ -330,6 +338,7 @@ impl Reducer {
             1,
         );
         OwnedCell::connect(
+            redexes,
             &mut dups[1].1,
             dups[1].0,
             1,
@@ -340,6 +349,7 @@ impl Reducer {
 
         // Inner internal conns
         OwnedCell::connect(
+            redexes,
             &mut dups[0].1,
             dups[0].0,
             1,
@@ -348,6 +358,7 @@ impl Reducer {
             1,
         );
         OwnedCell::connect(
+            redexes,
             &mut dups[1].1,
             dups[1].0,
             2,
@@ -367,6 +378,7 @@ impl Reducer {
             let mut top_left_cell = top_left_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut top_left_cell,
                 top_left_arg.cell,
                 top_left_arg.port,
@@ -384,6 +396,7 @@ impl Reducer {
             let mut top_right_cell = top_right_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut top_right_cell,
                 top_right_arg.cell,
                 top_right_arg.port,
@@ -401,6 +414,7 @@ impl Reducer {
             let mut bot_left_cell = bot_left_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut bot_left_cell,
                 bot_left_arg.cell,
                 bot_left_arg.port,
@@ -418,6 +432,7 @@ impl Reducer {
             let mut bot_right_cell = bot_right_cell.unwrap();
 
             OwnedCell::connect(
+                redexes,
                 &mut bot_right_cell,
                 bot_right_arg.cell,
                 bot_right_arg.port,
@@ -445,6 +460,7 @@ impl Reducer {
         );
 
         tracing::debug!("reducing {} ({}) >< {} ({})", a.kind, a_id, b.kind, b_id);
+        tracing::trace!("reducing {:?} >< {:?}", a, b);
 
         match (a.kind, b.kind) {
             // Annihilation of alpha-alpha
@@ -463,23 +479,25 @@ impl Reducer {
             // Commutation of constr dup
             (Cell::Constr, Cell::Dup) => {
                 // Top is left to right, bottom is right to left
-                self.make_commutation(a, b);
+                self.make_commutation(&mut redexes, a, b);
             }
             // Commutation of dup constr
             (Cell::Dup, Cell::Constr) => {
-                self.make_commutation(b, a);
+                self.make_commutation(&mut redexes, b, a);
             }
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
-                self.make_commutation_era(a);
+                self.make_commutation_era(&mut redexes, a);
             }
             (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
-                self.make_commutation_era(b);
+                self.make_commutation_era(&mut redexes, b);
             }
             _ => {
                 panic!("invalid redex")
             }
         }
+
+        tracing::debug!("next redexes: {:?}", redexes);
 
         redexes
     }
@@ -572,6 +590,12 @@ impl TraitReducer for Reducer {
         // TODO: This is really inefficient!
         ports_for_cells
             .into_iter()
+            .filter(|(_, cell)| {
+                cell.iter_tree()
+                    .filter(|x| x.borrow().as_var().is_some())
+                    .next()
+                    .is_some()
+            })
             .map(|(_, cell)| {
                 (
                     cell.iter_tree()
