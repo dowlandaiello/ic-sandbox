@@ -22,14 +22,6 @@ pub struct MatrixBuffer {
 
 impl fmt::Debug for MatrixBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        #[derive(Debug)]
-        struct OwnedCell {
-            pos: usize,
-            discriminant: Cell,
-            primary_port: Option<Conn>,
-            aux_ports: [Option<Conn>; 2],
-        }
-
         let cell_debugs = self
             .cells
             .iter()

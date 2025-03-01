@@ -14,7 +14,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     iter::{self, DoubleEndedIterator},
     ops::DerefMut,
-    sync::MutexGuard,
+    sync::{atomic::AtomicBool, MutexGuard},
+    sync::{atomic::Ordering, Arc},
 };
 
 #[derive(Default)]
@@ -141,6 +142,10 @@ impl ReducerBuilder {
                     (elems.next().unwrap(), elems.next().unwrap())
                 })
                 .collect(),
+            locked: (0..(n_nodes * n_nodes))
+                .map(|_| AtomicBool::new(false))
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 
@@ -150,6 +155,10 @@ impl ReducerBuilder {
             idents: self.idents,
             names: self.names,
             root_redexes: Default::default(),
+            locked: (0..(capacity * capacity))
+                .map(|_| AtomicBool::new(false))
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -159,6 +168,7 @@ pub struct CapacitiedBufferedMatrixReducerBuilder {
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
     root_redexes: Vec<(Conn, Conn)>,
+    locked: Arc<[AtomicBool]>,
 }
 
 impl CapacitiedBufferedMatrixReducerBuilder {
@@ -168,6 +178,7 @@ impl CapacitiedBufferedMatrixReducerBuilder {
             idents: self.idents,
             names: self.names,
             root_redexes: self.root_redexes,
+            locked: self.locked,
         }
     }
 }
@@ -177,14 +188,29 @@ pub struct BufferedMatrixReducer {
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
     root_redexes: Vec<(Conn, Conn)>,
+    locked: Arc<[AtomicBool]>,
 }
 
 #[derive(Clone)]
 pub struct ReductionWorker {
     buffer: MatrixBuffer,
+    locked: Arc<[AtomicBool]>,
 }
 
 impl ReductionWorker {
+    fn mark_locked(&self, cell: Ptr) -> Option<()> {
+        self.locked[cell]
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .ok()
+            .map(|_| ())
+    }
+
+    fn mark_unlocked(&self, cell: Ptr) {
+        self.locked[cell]
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .unwrap();
+    }
+
     fn conn_maybe_redex(
         &self,
         a: (Conn, OwnedCell),
@@ -193,7 +219,7 @@ impl ReductionWorker {
         Option<(Conn, Conn)>,
         ((usize, OwnedCell), (usize, OwnedCell)),
     ) {
-        tracing::debug!("linking {} ~ {}", a.0, b.0);
+        tracing::trace!("linking {} ~ {}", a.0, b.0);
 
         let (a_conn, mut a_cell) = a;
         let (b_conn, mut b_cell) = b;
@@ -229,54 +255,72 @@ impl ReductionWorker {
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
-        // Thi is to ensure consistent lock ordering
-        let pair = if a_id < b_id {
-            let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
-            let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
+        tracing::debug!("reducing {} >< {}", a_id, b_id);
 
-            (lock_a, lock_b)
-        } else {
-            let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
-            let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
+        let mut maybe_to_lock = None;
+        let mut maybe_locks: Option<BTreeMap<usize, _>> = None;
 
-            (lock_a, lock_b)
-        };
+        while maybe_locks.is_none() {
+            // Thi is to ensure consistent lock ordering
+            let pair = if a_id < b_id {
+                let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
+                let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
 
-        tracing::debug!(
-            "reducing {} ({}) >< {} ({})",
-            pair.0.discriminant,
-            a_id,
-            pair.1.discriminant,
-            b_id
-        );
+                (lock_a, lock_b)
+            } else {
+                let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
+                let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
 
-        let to_lock = [a_id, b_id]
-            .into_iter()
-            .chain(
-                pair.0
-                    .iter_aux_ports()
-                    .filter_map(|x| x)
-                    .map(|Conn { cell, port: _ }| cell),
-            )
-            .chain(
-                pair.1
-                    .iter_aux_ports()
-                    .filter_map(|x| x)
-                    .map(|Conn { cell, port: _ }| cell),
-            )
-            .collect::<BTreeSet<_>>();
+                (lock_a, lock_b)
+            };
 
-        tracing::trace!("locking {:?}", to_lock);
+            maybe_to_lock = Some(
+                [a_id, b_id]
+                    .into_iter()
+                    .chain(
+                        pair.0
+                            .iter_aux_ports()
+                            .filter_map(|x| x)
+                            .map(|Conn { cell, port: _ }| cell),
+                    )
+                    .chain(
+                        pair.1
+                            .iter_aux_ports()
+                            .filter_map(|x| x)
+                            .map(|Conn { cell, port: _ }| cell),
+                    )
+                    .collect::<BTreeSet<_>>(),
+            );
 
-        let mut locks: BTreeMap<usize, _> = to_lock
-            .into_iter()
-            .map(|cell_id| (cell_id, self.buffer.get_cell(cell_id).lock().unwrap()))
-            .collect::<BTreeMap<_, _>>();
+            if self
+                .locked
+                .iter()
+                .take(*maybe_to_lock.as_ref().unwrap().iter().next().unwrap())
+                .any(|is_locked| is_locked.load(Ordering::Relaxed))
+            {
+                continue;
+            }
 
-        let mut a_lock = locks.remove(&a_id);
-        let mut b_lock = locks.remove(&b_id);
+            maybe_locks = maybe_to_lock
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|cell_id| {
+                    let lock = self.buffer.get_cell(*cell_id).try_lock().ok()?;
+                    self.mark_locked(*cell_id)?;
 
+                    Some((*cell_id, lock))
+                })
+                .collect::<Option<BTreeMap<usize, _>>>();
+        }
+
+        let to_lock = maybe_to_lock.unwrap();
+        let mut locks = maybe_locks.unwrap();
+
+        let mut a_lock = locks.get_mut(&a_id);
         let a_cell = *a_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
+
+        let mut b_lock = locks.get_mut(&b_id);
         let b_cell = *b_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
 
         let transformations = {
@@ -447,7 +491,7 @@ impl ReductionWorker {
         );
 
         cells.into_iter().for_each(|(id, cell)| {
-            tracing::debug!("updating cell {}: {:?}", id, cell);
+            tracing::trace!("updating cell {}: {:?}", id, cell);
 
             if let Some(lock) = locks.get_mut(&id) {
                 lock.as_mut().unwrap().merge(&cell);
@@ -462,14 +506,22 @@ impl ReductionWorker {
             }
         });
 
-        let a_cell_ref = a_lock.as_mut().unwrap().deref_mut();
-        let b_cell_ref = b_lock.as_mut().unwrap().deref_mut();
-
         tracing::trace!("deleting cell {}", a_id);
         tracing::trace!("deleting cell {}", b_id);
 
-        *a_cell_ref = None;
-        *b_cell_ref = None;
+        let mut a_lock = locks.get_mut(&a_id);
+        let a_cell_ref = a_lock.as_mut().unwrap().deref_mut();
+
+        **a_cell_ref = None;
+
+        let mut b_lock = locks.get_mut(&b_id);
+        let b_cell_ref = b_lock.as_mut().unwrap().deref_mut();
+
+        **b_cell_ref = None;
+
+        to_lock.iter().for_each(|cell_id| {
+            self.mark_unlocked(*cell_id);
+        });
 
         new_redexes
     }
@@ -640,6 +692,7 @@ impl Reducer for BufferedMatrixReducer {
     fn reduce_step(&self, redex: (Conn, Conn)) {
         let worker = ReductionWorker {
             buffer: self.buffer.clone(),
+            locked: self.locked.clone(),
         };
 
         worker.reduce_step(redex);
@@ -647,15 +700,20 @@ impl Reducer for BufferedMatrixReducer {
 
     fn reduce(&mut self) -> Vec<Port> {
         #[cfg(feature = "threadpool")]
-        fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoParallelIterator<Item = (Conn, Conn)>) {
+        fn reduce_redexes(
+            buffer: MatrixBuffer,
+            locked: Arc<[AtomicBool]>,
+            r: impl IntoParallelIterator<Item = (Conn, Conn)>,
+        ) {
             r.into_par_iter().for_each(move |x| {
                 let worker = ReductionWorker {
                     buffer: buffer.clone(),
+                    locked: locked.clone(),
                 };
 
                 let redexes = worker.reduce_step(x);
 
-                reduce_redexes(buffer.clone(), redexes);
+                reduce_redexes(buffer.clone(), locked.clone(), redexes);
             });
         }
 
@@ -676,10 +734,18 @@ impl Reducer for BufferedMatrixReducer {
 
         // Push all redexes
         #[cfg(feature = "threadpool")]
-        reduce_redexes(self.buffer.clone(), self.root_redexes.par_drain(..));
+        reduce_redexes(
+            self.buffer.clone(),
+            self.locked.clone(),
+            self.root_redexes.par_drain(..),
+        );
 
         #[cfg(not(feature = "threadpool"))]
-        reduce_redexes(self.buffer.clone(), self.root_redexes.drain(..));
+        reduce_redexes(
+            self.buffer.clone(),
+            self.locked.clone(),
+            self.root_redexes.drain(..),
+        );
 
         self.readback()
     }
