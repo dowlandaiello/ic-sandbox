@@ -307,7 +307,6 @@ impl ReductionWorker {
                 .iter()
                 .map(|cell_id| {
                     let lock = self.buffer.get_cell(*cell_id).try_lock().ok()?;
-                    self.mark_locked(*cell_id)?;
 
                     Some((*cell_id, lock))
                 })
@@ -316,6 +315,10 @@ impl ReductionWorker {
 
         let to_lock = maybe_to_lock.unwrap();
         let mut locks = maybe_locks.unwrap();
+
+        to_lock
+            .iter()
+            .for_each(|cell_id| self.mark_locked(*cell_id).unwrap());
 
         let mut a_lock = locks.get_mut(&a_id);
         let a_cell = *a_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
