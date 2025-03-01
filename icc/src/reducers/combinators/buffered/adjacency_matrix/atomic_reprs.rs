@@ -246,21 +246,21 @@ impl CellRepr {
     }
 }
 
-fn store_optional_u8(u: Option<u8>) -> AtomicU8 {
+pub(crate) fn store_optional_u8(u: Option<u8>) -> AtomicU8 {
     AtomicU8::new(match u {
         None => 0b1,
         Some(x) => x << 1,
     })
 }
 
-fn store_optional_usize(u: Option<usize>) -> AtomicUsize {
+pub(crate) fn store_optional_usize(u: Option<usize>) -> AtomicUsize {
     AtomicUsize::new(match u {
         None => 0b1,
         Some(x) => x << 1,
     })
 }
 
-fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
+pub(crate) fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
     let mut u = u.load(DEFAULT_ORDERING_LOAD);
 
     let empty = u & 0b1;
@@ -274,7 +274,7 @@ fn load_optional_u8(u: &AtomicU8) -> Option<u8> {
     Some(u)
 }
 
-fn load_optional_usize(u: &AtomicUsize) -> Option<usize> {
+pub(crate) fn load_optional_usize(u: &AtomicUsize) -> Option<usize> {
     let mut u = u.load(DEFAULT_ORDERING_LOAD);
 
     let empty = u & 0b1;

@@ -1,7 +1,7 @@
 use super::{
     super::{super::Reducer, Conn, NetBuffer, Ptr},
     matrix_buffer::MatrixBuffer,
-    Cell,
+    Cell, OwnedCell,
 };
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
@@ -9,38 +9,13 @@ use crate::parser::{
     naming::NameIter,
 };
 #[cfg(feature = "threadpool")]
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelDrainRange, ParallelIterator};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    iter::DoubleEndedIterator,
+    iter::{self, DoubleEndedIterator},
+    ops::DerefMut,
+    sync::MutexGuard,
 };
-
-macro_rules! conn_maybe_redex {
-    ($self:ident, $redexbuff:expr, $a:expr, $b:expr) => {
-        $self.buffer.connect($a, $b);
-
-        if let Some(((a_conn, a_cell), (b_conn, b_cell))) = $a.zip($b).map(|(a, b)| {
-            (
-                (a, $self.buffer.get_cell(a.cell)),
-                (b, $self.buffer.get_cell(b.cell)),
-            )
-        }) {
-            if a_conn.port == 0
-                && b_conn.port == 0
-                && !matches!(a_cell, Cell::Var(_))
-                && !matches!(b_cell, Cell::Var(_))
-            {
-                tracing::trace!(
-                    "found new redex cell {} >< cell {}",
-                    a_conn.cell,
-                    b_conn.cell
-                );
-
-                $redexbuff.push((a_conn, b_conn));
-            }
-        }
-    };
-}
 
 #[derive(Default)]
 pub struct ReducerBuilder {
@@ -60,9 +35,7 @@ impl ReducerBuilder {
         let n_nodes = nets.clone().map(|net| net.iter_tree().count()).sum();
 
         let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
-
-        #[cfg(test)]
-        assert_eq!(buff.get_next_free(), 0);
+        let mut root_redexes = BTreeSet::new();
 
         let slots_for_ast_elems: BTreeMap<usize, usize> = nets
             .clone()
@@ -116,16 +89,42 @@ impl ReducerBuilder {
                             port_other,
                         );
 
-                        buff.connect(
-                            Some(Conn {
-                                cell: *slot,
-                                port: port_self as u8,
-                            }),
+                        let cell_self = buff.get_cell(*slot);
+
+                        cell_self.lock().unwrap().as_mut().unwrap().set_port_i(
+                            port_self as u8,
                             Some(Conn {
                                 cell: *other_slot,
                                 port: port_other as u8,
                             }),
                         );
+
+                        let cell_other = buff.get_cell(*other_slot);
+
+                        cell_other.lock().unwrap().as_mut().unwrap().set_port_i(
+                            port_other as u8,
+                            Some(Conn {
+                                cell: *slot,
+                                port: port_self as u8,
+                            }),
+                        );
+
+                        if port_self == 0
+                            && port_other == 0
+                            && !matches!(*elem.borrow(), Expr::Var(_))
+                            && !matches!(*p.borrow(), Expr::Var(_))
+                        {
+                            root_redexes.insert(BTreeSet::from_iter([
+                                Conn {
+                                    cell: *other_slot,
+                                    port: port_other as u8,
+                                },
+                                Conn {
+                                    cell: *slot,
+                                    port: port_self as u8,
+                                },
+                            ]));
+                        }
                     });
             })
         });
@@ -134,6 +133,14 @@ impl ReducerBuilder {
             cells: buff,
             idents: self.idents,
             names: self.names,
+            root_redexes: root_redexes
+                .into_iter()
+                .map(|x| {
+                    let mut elems = x.into_iter();
+
+                    (elems.next().unwrap(), elems.next().unwrap())
+                })
+                .collect(),
         }
     }
 
@@ -142,6 +149,7 @@ impl ReducerBuilder {
             cells: MatrixBuffer::new_with_capacity_nodes(capacity),
             idents: self.idents,
             names: self.names,
+            root_redexes: Default::default(),
         }
     }
 }
@@ -150,6 +158,7 @@ pub struct CapacitiedBufferedMatrixReducerBuilder {
     cells: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
+    root_redexes: Vec<(Conn, Conn)>,
 }
 
 impl CapacitiedBufferedMatrixReducerBuilder {
@@ -158,6 +167,7 @@ impl CapacitiedBufferedMatrixReducerBuilder {
             buffer: self.cells,
             idents: self.idents,
             names: self.names,
+            root_redexes: self.root_redexes,
         }
     }
 }
@@ -166,6 +176,7 @@ pub struct BufferedMatrixReducer {
     buffer: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
+    root_redexes: Vec<(Conn, Conn)>,
 }
 
 #[derive(Clone)]
@@ -174,110 +185,326 @@ pub struct ReductionWorker {
 }
 
 impl ReductionWorker {
+    fn conn_maybe_redex(
+        &self,
+        a: (Conn, OwnedCell),
+        b: (Conn, OwnedCell),
+    ) -> (
+        Option<(Conn, Conn)>,
+        ((usize, OwnedCell), (usize, OwnedCell)),
+    ) {
+        tracing::debug!("linking {} ~ {}", a.0, b.0);
+
+        let (a_conn, mut a_cell) = a;
+        let (b_conn, mut b_cell) = b;
+
+        a_cell.wipe();
+        b_cell.wipe();
+
+        a_cell.set_port_i(a_conn.port, Some(b_conn));
+        b_cell.set_port_i(b_conn.port, Some(a_conn));
+
+        if a_conn.port == 0
+            && b_conn.port == 0
+            && !matches!(a_cell.discriminant, Cell::Var(_))
+            && !matches!(b_cell.discriminant, Cell::Var(_))
+        {
+            tracing::trace!(
+                "found new redex cell {} >< cell {}",
+                a_conn.cell,
+                b_conn.cell
+            );
+
+            return (
+                Some((a_conn, b_conn)),
+                ((a_conn.cell, a_cell), (b_conn.cell, b_cell)),
+            );
+        }
+
+        (None, ((a_conn.cell, a_cell), (b_conn.cell, b_cell)))
+    }
+
     #[tracing::instrument(skip(self))]
     fn reduce_step(&self, redex: (Conn, Conn)) -> Vec<(Conn, Conn)> {
-        let mut redexes = Vec::default();
-
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
-        let pair = (self.buffer.get_cell(a_id), self.buffer.get_cell(b_id));
+        // Thi is to ensure consistent lock ordering
+        let pair = if a_id < b_id {
+            let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
+            let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
 
-        tracing::debug!("reducing {} ({}) >< {} ({})", pair.0, a_id, pair.1, b_id);
+            (lock_a, lock_b)
+        } else {
+            let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
+            let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
 
-        match pair {
-            // Annihilation of alpha-alpha
-            (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
-                let (top_ports, bottom_ports) = (
-                    self.buffer.iter_aux_ports(a_id),
-                    self.buffer.iter_aux_ports(b_id),
-                );
+            (lock_a, lock_b)
+        };
 
-                // Remember, bottom ports is flipped due to orientation
-                top_ports.zip(bottom_ports).for_each(|(a, b)| {
-                    conn_maybe_redex!(self, &mut redexes, a, b);
-                });
+        tracing::debug!(
+            "reducing {} ({}) >< {} ({})",
+            pair.0.discriminant,
+            a_id,
+            pair.1.discriminant,
+            b_id
+        );
+
+        let to_lock = [a_id, b_id]
+            .into_iter()
+            .chain(
+                pair.0
+                    .iter_aux_ports()
+                    .filter_map(|x| x)
+                    .map(|Conn { cell, port: _ }| cell),
+            )
+            .chain(
+                pair.1
+                    .iter_aux_ports()
+                    .filter_map(|x| x)
+                    .map(|Conn { cell, port: _ }| cell),
+            )
+            .collect::<BTreeSet<_>>();
+
+        tracing::trace!("locking {:?}", to_lock);
+
+        let mut locks: BTreeMap<usize, _> = to_lock
+            .into_iter()
+            .map(|cell_id| (cell_id, self.buffer.get_cell(cell_id).lock().unwrap()))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut a_lock = locks.remove(&a_id);
+        let mut b_lock = locks.remove(&b_id);
+
+        let a_cell = *a_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
+        let b_cell = *b_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
+
+        let transformations = {
+            fn map_conn<'a>(
+                c: Conn,
+                locks: &BTreeMap<usize, MutexGuard<'a, Option<OwnedCell>>>,
+            ) -> (Conn, OwnedCell) {
+                tracing::trace!("deguarding {}", c.cell);
+
+                (c, locks.get(&c.cell).unwrap().unwrap())
             }
-            // Annihilation of Era
-            (Cell::Era, Cell::Era) => {}
-            // Commutation of constr dup
-            (Cell::Constr, Cell::Dup) => {
-                // Top is left to right, bottom is right to left
-                let (top_ports, bottom_ports) = (
-                    self.buffer.iter_aux_ports(a_id),
-                    self.buffer.iter_aux_ports(b_id),
-                );
 
-                self.make_commutation(&mut redexes, top_ports, bottom_ports);
-            }
-            // Commutation of dup constr
-            (Cell::Dup, Cell::Constr) => {
-                let (top_ports, bottom_ports) = (
-                    self.buffer.iter_aux_ports(b_id),
-                    self.buffer.iter_aux_ports(a_id),
-                );
+            match (a_cell.discriminant, b_cell.discriminant) {
+                // Annihilation of alpha-alpha
+                (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
+                    tracing::trace!(
+                        "a aux: {:?} b aux: {:?}",
+                        a_cell.unwrap_aux_ports(),
+                        b_cell.unwrap_aux_ports()
+                    );
 
-                self.make_commutation(&mut redexes, top_ports, bottom_ports);
-            }
-            // Commutation of alpha era
-            (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
-                let top_ports = self.buffer.iter_aux_ports(a_id);
+                    let (top_ports, bottom_ports) = (
+                        a_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                        b_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                    );
 
-                self.make_era_commutation(&mut redexes, top_ports);
-            }
-            (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
-                let top_ports = self.buffer.iter_aux_ports(b_id);
+                    // Remember, bottom ports is flipped due to orientation
+                    Box::new(
+                        top_ports
+                            .into_iter()
+                            .zip(bottom_ports)
+                            .map(|(a, b)| self.conn_maybe_redex(a, b)),
+                    )
+                        as Box<
+                            dyn Iterator<
+                                Item = (
+                                    Option<(Conn, Conn)>,
+                                    ((usize, OwnedCell), (usize, OwnedCell)),
+                                ),
+                            >,
+                        >
+                }
+                // Annihilation of Era
+                (Cell::Era, Cell::Era) => Box::new(iter::empty())
+                    as Box<
+                        dyn Iterator<
+                            Item = (
+                                Option<(Conn, Conn)>,
+                                ((usize, OwnedCell), (usize, OwnedCell)),
+                            ),
+                        >,
+                    >,
+                // Commutation of constr dup
+                (Cell::Constr, Cell::Dup) => {
+                    // Top is left to right, bottom is right to left
+                    let (top_ports, bottom_ports) = (
+                        a_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                        b_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                    );
 
-                self.make_era_commutation(&mut redexes, top_ports);
-            }
-            _ => {
-                panic!("invalid redex")
-            }
-        }
+                    Box::new(self.make_commutation(top_ports, bottom_ports))
+                        as Box<
+                            dyn Iterator<
+                                Item = (
+                                    Option<(Conn, Conn)>,
+                                    ((usize, OwnedCell), (usize, OwnedCell)),
+                                ),
+                            >,
+                        >
+                }
+                // Commutation of dup constr
+                (Cell::Dup, Cell::Constr) => {
+                    let (top_ports, bottom_ports) = (
+                        b_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                        a_cell
+                            .unwrap_aux_ports()
+                            .into_iter()
+                            .map(|x| map_conn(x, &locks)),
+                    );
 
-        (0..3).for_each(|i| {
-            self.buffer.connect(
-                Some(Conn {
-                    cell: a_id,
-                    port: i,
-                }),
-                None,
-            );
-            self.buffer.connect(
-                Some(Conn {
-                    cell: b_id,
-                    port: i,
-                }),
-                None,
-            );
+                    Box::new(self.make_commutation(top_ports, bottom_ports))
+                        as Box<
+                            dyn Iterator<
+                                Item = (
+                                    Option<(Conn, Conn)>,
+                                    ((usize, OwnedCell), (usize, OwnedCell)),
+                                ),
+                            >,
+                        >
+                }
+                // Commutation of alpha era
+                (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
+                    let top_ports = a_cell
+                        .unwrap_aux_ports()
+                        .into_iter()
+                        .map(|x| map_conn(x, &locks));
+
+                    Box::new(self.make_era_commutation(top_ports))
+                        as Box<
+                            dyn Iterator<
+                                Item = (
+                                    Option<(Conn, Conn)>,
+                                    ((usize, OwnedCell), (usize, OwnedCell)),
+                                ),
+                            >,
+                        >
+                }
+                (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
+                    let top_ports = b_cell
+                        .unwrap_aux_ports()
+                        .into_iter()
+                        .map(|x| map_conn(x, &locks));
+
+                    Box::new(self.make_era_commutation(top_ports))
+                        as Box<
+                            dyn Iterator<
+                                Item = (
+                                    Option<(Conn, Conn)>,
+                                    ((usize, OwnedCell), (usize, OwnedCell)),
+                                ),
+                            >,
+                        >
+                }
+                _ => {
+                    panic!("invalid redex")
+                }
+            }
+        };
+
+        let (new_redexes, cells) = transformations.fold(
+            (Vec::new(), BTreeMap::<usize, OwnedCell>::new()),
+            |(mut redexes, mut cells), (maybe_redex, ((id_a, cell_a), (id_b, cell_b)))| {
+                if let Some(r) = maybe_redex {
+                    redexes.push(r);
+                }
+
+                cells
+                    .entry(id_a)
+                    .and_modify(|cell| {
+                        cell.merge(&cell_a);
+                    })
+                    .or_insert(cell_a);
+
+                cells
+                    .entry(id_b)
+                    .and_modify(|cell| {
+                        cell.merge(&cell_b);
+                    })
+                    .or_insert(cell_b);
+
+                (redexes, cells)
+            },
+        );
+
+        cells.into_iter().for_each(|(id, cell)| {
+            tracing::debug!("updating cell {}: {:?}", id, cell);
+
+            if let Some(lock) = locks.get_mut(&id) {
+                lock.as_mut().unwrap().merge(&cell);
+            } else {
+                self.buffer
+                    .get_cell(id)
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .merge(&cell);
+            }
         });
 
-        self.buffer.delete(a_id);
-        self.buffer.delete(b_id);
+        let a_cell_ref = a_lock.as_mut().unwrap().deref_mut();
+        let b_cell_ref = b_lock.as_mut().unwrap().deref_mut();
 
-        redexes
+        tracing::trace!("deleting cell {}", a_id);
+        tracing::trace!("deleting cell {}", b_id);
+
+        *a_cell_ref = None;
+        *b_cell_ref = None;
+
+        new_redexes
     }
 
-    fn make_era_commutation(
-        &self,
-        redexes: &mut Vec<(Conn, Conn)>,
-        top_ports: impl Iterator<Item = Option<Conn>>,
-    ) {
+    fn make_era_commutation<'a>(
+        &'a self,
+        top_ports: impl Iterator<Item = (Conn, OwnedCell)> + 'a,
+    ) -> impl Iterator<
+        Item = (
+            Option<(Conn, Conn)>,
+            ((usize, OwnedCell), (usize, OwnedCell)),
+        ),
+    > + 'a {
         let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
 
         top_ports
-            .zip(eras.iter().map(|ptr| Some((*ptr, 0).into())))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, redexes, a, b);
-            });
+            .zip(eras.into_iter().map(|ptr| {
+                (
+                    (ptr, 0).into(),
+                    (*self.buffer.get_cell(ptr).lock().unwrap()).unwrap(),
+                )
+            }))
+            .map(|(a, b)| self.conn_maybe_redex(a, (b.0, b.1)))
     }
 
-    fn make_commutation(
-        &self,
-        redexes: &mut Vec<(Conn, Conn)>,
-        top_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
-        bottom_ports: impl DoubleEndedIterator<Item = Option<Conn>>,
-    ) {
+    fn make_commutation<'a>(
+        &'a self,
+        top_ports: impl DoubleEndedIterator<Item = (Conn, OwnedCell)> + 'a,
+        bottom_ports: impl DoubleEndedIterator<Item = (Conn, OwnedCell)> + 'a,
+    ) -> impl Iterator<
+        Item = (
+            Option<(Conn, Conn)>,
+            ((usize, OwnedCell), (usize, OwnedCell)),
+        ),
+    > + 'a {
         // left to right
         let dups = [self.buffer.push(Cell::Dup), self.buffer.push(Cell::Dup)];
 
@@ -287,28 +514,6 @@ impl ReductionWorker {
             self.buffer.push(Cell::Constr),
         ];
 
-        top_ports
-            .zip(dups.iter().map(|ptr| {
-                Some(Conn {
-                    cell: *ptr,
-                    port: 0,
-                })
-            }))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, redexes, a, b);
-            });
-        bottom_ports
-            .rev()
-            .zip(constrs.iter().map(|ptr| {
-                Some(Conn {
-                    cell: *ptr,
-                    port: 0,
-                })
-            }))
-            .for_each(|(a, b)| {
-                conn_maybe_redex!(self, redexes, a, b);
-            });
-
         let conn_left = ((dups[0], 2), (constrs[0], 1));
         let conn_right = ((dups[1], 1), (constrs[1], 2));
         let conn_middle_left = ((dups[0], 1), (constrs[1], 1));
@@ -316,14 +521,29 @@ impl ReductionWorker {
 
         let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
 
-        conns.iter().for_each(|(a, b)| {
-            conn_maybe_redex!(
-                self,
-                redexes,
-                Some::<Conn>((*a).into()),
-                Some::<Conn>((*b).into())
-            );
-        });
+        top_ports
+            .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+            .map(|(a, b)| {
+                let b_cell = self.buffer.get_cell(b.cell).lock().unwrap().unwrap();
+
+                self.conn_maybe_redex(a, (b, b_cell))
+            })
+            .chain(
+                bottom_ports
+                    .rev()
+                    .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                    .map(|(a, b)| {
+                        let b_cell = self.buffer.get_cell(b.cell).lock().unwrap().unwrap();
+
+                        self.conn_maybe_redex(a, (b, b_cell))
+                    })
+                    .chain(conns.into_iter().map(|(a, b)| {
+                        let a_cell = self.buffer.get_cell(a.0).lock().unwrap().unwrap();
+                        let b_cell = self.buffer.get_cell(a.0).lock().unwrap().unwrap();
+
+                        self.conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
+                    })),
+            )
     }
 }
 
@@ -338,7 +558,10 @@ impl Reducer for BufferedMatrixReducer {
             .buffer
             .iter_cells()
             .map(|i| (i, self.buffer.get_cell(i)))
-            .map(|(i, discriminant)| {
+            .map(|(i, locked_cell)| {
+                let cell = locked_cell.lock().unwrap().unwrap();
+                let discriminant = cell.discriminant;
+
                 let name = self
                     .names
                     .get(&i)
@@ -452,10 +675,11 @@ impl Reducer for BufferedMatrixReducer {
         tracing::trace!("reduction frame: {:#?}", self.buffer);
 
         // Push all redexes
-        reduce_redexes(
-            self.buffer.clone(),
-            self.buffer.iter_redexes().collect::<Vec<_>>(),
-        );
+        #[cfg(feature = "threadpool")]
+        reduce_redexes(self.buffer.clone(), self.root_redexes.par_drain(..));
+
+        #[cfg(not(feature = "threadpool"))]
+        reduce_redexes(self.buffer.clone(), self.root_redexes.drain(..));
 
         self.readback()
     }

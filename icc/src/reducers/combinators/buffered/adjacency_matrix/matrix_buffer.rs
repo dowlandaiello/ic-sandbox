@@ -1,7 +1,6 @@
 use super::{
     super::super::{Conn, Ptr},
-    atomic_reprs::CellRepr,
-    Cell, NetBuffer,
+    Cell, NetBuffer, OwnedCell,
 };
 use lockfree::queue::Queue;
 use std::{
@@ -10,13 +9,13 @@ use std::{
     iter::DoubleEndedIterator,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
 #[derive(Clone)]
 pub struct MatrixBuffer {
-    cells: Arc<[CellRepr]>,
+    cells: Arc<[Mutex<Option<OwnedCell>>]>,
     len: Arc<AtomicUsize>,
     next_free: Arc<Queue<usize>>,
 }
@@ -34,87 +33,43 @@ impl fmt::Debug for MatrixBuffer {
         let cell_debugs = self
             .cells
             .iter()
-            .enumerate()
-            .filter_map(|(i, repr)| {
-                let disc = repr.load_discriminant_uninit_var().map(|c| match c {
-                    Cell::Var(_) => Cell::Var(i),
-                    x => x,
-                })?;
-
-                Some(OwnedCell {
-                    pos: i,
-                    discriminant: disc,
-                    primary_port: repr.load_primary_port(),
-                    aux_ports: [repr.load_aux_port(0), repr.load_aux_port(1)],
-                })
-            })
+            .filter_map(|x| x.lock().unwrap().clone())
             .collect::<Vec<_>>();
 
         f.debug_struct("MatrixBuffer")
             .field("cells", &cell_debugs)
             .field("len", &self.len.load(Ordering::Relaxed))
-            .field("next_free", &self.get_next_free())
             .finish()
     }
 }
 
 impl MatrixBuffer {
-    // Ensures nothing is still pointing to cell
-    #[tracing::instrument(skip(self))]
-    fn checksum_references(&self, cell: Ptr) {
-        tracing::trace!("checksumming {}", cell);
-
-        self.iter_cells().for_each(|x| {
-            assert_ne!(x, cell);
-
-            self.iter_ports(x)
-                .enumerate()
-                .filter_map(|(i, x)| Some((i, x?)))
-                .for_each(
-                    |(
-                        port_self,
-                        Conn {
-                            cell: other_cell,
-                            port: other_port,
-                        },
-                    )| {
-                        tracing::trace!(
-                            "in {:?} <-> {:?}",
-                            Conn {
-                                port: port_self as u8,
-                                cell: x
-                            },
-                            Conn {
-                                port: other_port,
-                                cell: other_cell
-                            }
-                        );
-                        assert_ne!(other_cell, cell)
-                    },
-                )
-        });
-
-        tracing::trace!("checksum ok");
-    }
-
     pub(crate) fn new_with_capacity_nodes(capacity: usize) -> Self {
         // Capacitied to N^2, we should always have room at the beginning
 
         Self {
             cells: (0..capacity * capacity)
-                .map(|_| CellRepr::default())
+                .map(|_| Mutex::new(Default::default()))
                 .collect(),
             len: AtomicUsize::new(0).into(),
-            next_free: Queue::new().into(),
+            next_free: Queue::from_iter(0..capacity * capacity).into(),
         }
     }
 
-    pub(crate) fn get_next_free(&self) -> usize {
-        self.cells.iter().position(|x| x.is_empty()).unwrap()
+    pub(crate) fn get_cell(&self, ptr: Ptr) -> &Mutex<Option<OwnedCell>> {
+        &self.cells[ptr]
     }
 }
 
 impl NetBuffer for MatrixBuffer {
+    fn push(&self, cell: Cell) -> Ptr {
+        let next_free = self.next_free.pop().unwrap();
+
+        *self.cells[next_free].lock().unwrap() = Some(OwnedCell::new(cell));
+
+        next_free
+    }
+
     fn iter_tree(&self, p: Ptr) -> impl Iterator<Item = Ptr> {
         struct TreeWalker<'a> {
             view: &'a MatrixBuffer,
@@ -162,167 +117,25 @@ impl NetBuffer for MatrixBuffer {
     }
 
     fn iter_cells(&self) -> impl Iterator<Item = Ptr> {
-        self.cells
-            .iter()
-            .enumerate()
-            .filter_map(|(i, x)| if x.is_empty() { None } else { Some(i) })
-    }
-
-    fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a {
-        struct RedexVisitor<'a> {
-            seen: BTreeSet<BTreeSet<Conn>>,
-            pos: Ptr,
-            view: &'a MatrixBuffer,
-        }
-
-        impl<'a> RedexVisitor<'a> {
-            fn new(view: &'a MatrixBuffer) -> Self {
-                Self {
-                    seen: Default::default(),
-                    pos: Default::default(),
-                    view,
-                }
+        self.cells.iter().enumerate().filter_map(|(i, x)| {
+            if x.lock().unwrap().is_none() {
+                None
+            } else {
+                Some(i)
             }
-        }
-
-        impl<'a> Iterator for RedexVisitor<'a> {
-            type Item = (Conn, Conn);
-
-            fn next(&mut self) -> Option<Self::Item> {
-                loop {
-                    if self.pos >= self.view.cells.len() {
-                        return None;
-                    }
-
-                    let redex = self
-                        .view
-                        .iter_ports(self.pos)
-                        .filter_map(|x| x)
-                        .filter_map(|Conn { cell, .. }| {
-                            let (conn_a, conn_b) = self.view.get_conn(cell, self.pos)?;
-                            let (cell_a, cell_b) =
-                                (self.view.get_cell(self.pos), self.view.get_cell(cell));
-
-                            if matches!(cell_a, Cell::Var(_)) || matches!(cell_b, Cell::Var(_)) {
-                                return None;
-                            }
-
-                            if conn_a.port == 0 && conn_b.port == 0 {
-                                Some((conn_a, conn_b))
-                            } else {
-                                None
-                            }
-                        })
-                        .next();
-
-                    self.pos += 1;
-
-                    if let Some(redex) = redex {
-                        let record = BTreeSet::from_iter([redex.0, redex.1]);
-
-                        if !self.seen.contains(&record) {
-                            self.seen.insert(record);
-
-                            return Some(redex);
-                        }
-                    }
-                }
-            }
-        }
-
-        RedexVisitor::new(self)
-    }
-
-    fn push(&self, c: Cell) -> Ptr {
-        // Free port may not be contiguous. We may be currently at an unsafe value
-        let old_len = self.len.fetch_add(1, Ordering::SeqCst);
-
-        let next_free = self.next_free.pop().unwrap_or(old_len);
-
-        tracing::debug!("inserting {} in cell {}", c, next_free);
-
-        self.cells[next_free].store_discriminant(Some(c));
-
-        next_free
-    }
-
-    fn delete(&self, p: Ptr) {
-        tracing::debug!("deleting cell {}", p);
-
-        let cell = &self.cells[p];
-        cell.wipe();
-
-        self.checksum_references(p);
-
-        self.len.fetch_sub(1, Ordering::SeqCst);
-        self.next_free.push(p);
-    }
-
-    fn connect(&self, from: Option<Conn>, to: Option<Conn>) {
-        let maybe_fmt = |x: Option<Conn>| x.map(|x| x.to_string()).unwrap_or("<EMPTY>".to_string());
-
-        tracing::debug!("linking {} <-> {}", maybe_fmt(from), maybe_fmt(to),);
-
-        if let Some(from) = from {
-            let cell = &self.cells[from.cell];
-            cell.store_port_i(from.port, to);
-
-            tracing::trace!(
-                "confirmation of port: {}",
-                maybe_fmt(cell.load_port_i(from.port))
-            );
-        }
-
-        if let Some(to) = to {
-            let cell = &self.cells[to.cell];
-            cell.store_port_i(to.port, from);
-
-            tracing::trace!(
-                "confirmation of port: {}",
-                maybe_fmt(cell.load_port_i(to.port))
-            );
-        }
-    }
-
-    fn get_conn(&self, from: usize, to: usize) -> Option<(Conn, Conn)> {
-        let from_cell = &self.cells[from];
-        let to_cell = &self.cells[to];
-
-        let a_conn = from_cell
-            .iter_ports()
-            .filter_map(|x| x)
-            .filter(|x| x.cell == to)
-            .next()?;
-        let b_conn = to_cell.load_port_i(a_conn.port)?;
-
-        Some((a_conn, b_conn))
-    }
-
-    fn get_cell(&self, idx: usize) -> Cell {
-        let elem = &self.cells[idx];
-        let cell = elem
-            .load_discriminant_uninit_var()
-            .expect(&format!("failed to get cell contents: {}", idx));
-
-        match cell {
-            Cell::Var(_) => Cell::Var(idx),
-            x => x,
-        }
+        })
     }
 
     fn iter_aux_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
-        let cell_repr = &self.cells[cell];
+        let cell_guard = &self.cells[cell].lock().unwrap();
 
-        cell_repr.iter_aux_ports()
+        cell_guard.unwrap().aux_ports.into_iter()
     }
 
     fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
-        let cell_repr = &self.cells[cell];
+        let cell_guard = &self.cells[cell].lock().unwrap();
+        let cell = cell_guard.unwrap();
 
-        cell_repr.iter_ports()
-    }
-
-    fn primary_port(&self, cell: usize) -> Option<Conn> {
-        self.cells[cell].load_primary_port()
+        [cell.primary_port].into_iter().chain(cell.aux_ports)
     }
 }

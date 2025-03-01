@@ -1,18 +1,27 @@
-use super::{Cell, Conn, Ptr, Reducer as TraitReducer};
+use super::{
+    buffered::adjacency_matrix::atomic_reprs::{load_optional_usize, store_optional_usize},
+    Cell, Conn, Ptr, Reducer as TraitReducer,
+};
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
     ast_lafont::Ident,
     naming::NameIter,
 };
+use ast_ext::{TreeCursor, TreeVisitor};
 use crossbeam::atomic::AtomicCell;
 use lockfree::queue::Queue;
 #[cfg(feature = "threadpool")]
-use rayon::iter::{IntoParallelIterator, ParallelDrainRange, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    sync::{atomic::AtomicUsize, Arc},
+    sync::{
+        atomic::{ordering::Ordering, AtomicUsize},
+        Arc,
+    },
 };
+
+const N_MAX_AUX_PORTS_PER_NODE: usize = 2;
 
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let mut reducer = Reducer::new([e].into_iter());
@@ -115,11 +124,11 @@ impl OwnedCell {
 #[derive(Clone)]
 pub struct Reducer {
     cells: Arc<[AtomicCell<Option<OwnedCell>>]>,
-    len: Arc<AtomicUsize>,
     next_free: Arc<Queue<usize>>,
     root_redexes: Vec<(Conn, Conn)>,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
+    substitutions: Arc<[AtomicUsize]>,
 }
 
 impl Reducer {
@@ -218,7 +227,6 @@ impl Reducer {
 
         Self {
             cells: cells.into(),
-            len: Arc::new(AtomicUsize::new(n_nodes)),
             next_free,
             names,
             idents,
@@ -234,35 +242,58 @@ impl Reducer {
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .collect(),
+            substitutions: (0..(n_nodes * n_nodes * N_MAX_AUX_PORTS_PER_NODE))
+                .map(|_| store_optional_usize(None))
+                .collect::<Vec<_>>()
+                .into(),
         }
+    }
+
+    fn substitution_index(&self, conn: Conn) -> usize {
+        conn.cell + (conn.port as usize)
+    }
+
+    fn get_substitution(&self, conn: Conn) -> &AtomicUsize {
+        &self.substitutions[conn.cell + (conn.port as usize)]
+    }
+
+    fn make_substitution(&self, src_conn: Conn, dest_conn: Conn) {
+        self.get_substitution(src_conn)
+            .swap(self.substitution_index(dest_conn) << 1, Ordering::Relaxed);
     }
 
     #[tracing::instrument(skip(self))]
     fn connect(&self, redexes: &mut Vec<(Conn, Conn)>, lhs: Conn, rhs: Conn) {
         tracing::trace!("connecting");
 
-        let _ = self.cells[lhs.cell].fetch_update(|lhs_cell| {
-            let mut cell_lhs = lhs_cell.unwrap();
+        // We need to do a substitution to permit local synchronization
+        if lhs.port != 0 {
+            self.make_substitution(lhs, rhs);
+        } else {
+            let mut lhs_cell = self.cells[lhs.cell]
+                .take()
+                .expect(&format!("getting cell {}", lhs.cell));
 
-            let _ = self.cells[rhs.cell].fetch_update(|rhs_cell| {
-                let mut cell = rhs_cell.unwrap();
-                cell.set_port_i(rhs.port, Some(lhs));
+            lhs_cell.set_port_i(lhs.port, Some(rhs));
 
-                if lhs.port == 0
-                    && rhs.port == 0
-                    && !matches!(cell_lhs.kind, Cell::Var(_))
-                    && !matches!(cell.kind, Cell::Var(_))
-                {
-                    redexes.push((lhs, rhs));
-                }
+            self.cells[lhs.cell].swap(Some(lhs_cell));
+        }
 
-                Some(Some(cell))
-            });
+        if rhs.port != 0 {
+            self.make_substitution(lhs, rhs);
+        } else {
+            let mut rhs_cell = self.cells[rhs.cell]
+                .take()
+                .expect(&format!("getting cell {}", rhs.cell));
 
-            cell_lhs.set_port_i(lhs.port, Some(rhs));
+            rhs_cell.set_port_i(rhs.port, Some(lhs));
 
-            Some(Some(cell_lhs))
-        });
+            self.cells[rhs.cell].swap(Some(rhs_cell));
+        }
+
+        if lhs.port == 0 && rhs.port == 0 {
+            redexes.push((lhs, rhs));
+        }
     }
 
     fn get_next_free(&self) -> usize {
@@ -449,15 +480,19 @@ impl Reducer {
 
     #[tracing::instrument(skip(self))]
     fn reduce_step_raw(&self, redex: (Conn, Conn)) -> Vec<(Conn, Conn)> {
+        tracing::trace!("begin reduction");
+
         let mut redexes = Vec::default();
 
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
-        let (a, b) = (
-            self.cells[a_id].take().unwrap(),
-            self.cells[b_id].take().unwrap(),
-        );
+        let a = self.cells[a_id]
+            .take()
+            .expect(&format!("get cell {} in {} >< {}", a_id, a_id, b_id));
+        let b = self.cells[b_id]
+            .take()
+            .expect(&format!("get cell {} in {} >< {}", a_id, a_id, b_id));
 
         tracing::debug!("reducing {} ({}) >< {} ({})", a.kind, a_id, b.kind, b_id);
         tracing::trace!("reducing {:?} >< {:?}", a, b);
@@ -493,13 +528,48 @@ impl Reducer {
                 self.make_commutation_era(&mut redexes, b);
             }
             _ => {
-                panic!("invalid redex")
+                self.cells[a_id].swap(Some(a));
+                self.cells[b_id].swap(Some(b));
+
+                return Default::default();
             }
         }
 
+        tracing::trace!("deleted cell {}", b_id);
+        tracing::trace!("deleted cell {}", a_id);
         tracing::debug!("next redexes: {:?}", redexes);
 
         redexes
+    }
+
+    fn iter_cells<'a>(&'a self) -> impl Iterator<Item = (Ptr, OwnedCell)> + 'a {
+        self.cells.iter().enumerate().filter_map(|(i, cell)| {
+            let val = cell.take()?;
+            cell.swap(Some(val));
+
+            Some((i, val))
+        })
+    }
+
+    fn iter_tree(&self, p: Ptr) -> impl Iterator<Item = OwnedCell> {
+        TreeVisitor::new(ReducerCursor {
+            pos: p,
+            view: self.clone(),
+        })
+    }
+
+    fn iter_redexes<'a>(&'a self) -> impl Iterator<Item = (Conn, Conn)> + 'a {
+        self.iter_cells().filter_map(|(i, cell)| {
+            let primary_port = cell.primary_port?;
+
+            Some((primary_port, Conn { cell: i, port: 0 }))
+        })
+    }
+
+    fn walk(&self) {
+        let vars = self
+            .iter_cells()
+            .filter(|(_, cell)| matches!(cell.kind, Cell::Var(_)));
     }
 }
 
@@ -590,12 +660,6 @@ impl TraitReducer for Reducer {
         // TODO: This is really inefficient!
         ports_for_cells
             .into_iter()
-            .filter(|(_, cell)| {
-                cell.iter_tree()
-                    .filter(|x| x.borrow().as_var().is_some())
-                    .next()
-                    .is_some()
-            })
             .map(|(_, cell)| {
                 (
                     cell.iter_tree()
@@ -629,9 +693,20 @@ impl TraitReducer for Reducer {
             });
         }
 
-        // Push all redexes
+        tracing::trace!("spawning root redexes {:?}", self.root_redexes);
+
+        // Walk from vars to child redexes in the tree
+        // Run these in paralle, and all subsequent steps in parallel
         #[cfg(feature = "threadpool")]
-        reduce_redexes(self.clone(), self.root_redexes.par_drain(..));
+        {
+            self.walk();
+
+            loop {
+                if self.iter_redexes().count() <= 0 {
+                    break;
+                }
+            }
+        }
 
         #[cfg(not(feature = "threadpool"))]
         reduce_redexes(self.clone(), self.root_redexes.drain(..));
@@ -641,6 +716,42 @@ impl TraitReducer for Reducer {
 
     fn reduce_step(&self, redex: (Conn, Conn)) {
         self.reduce_step_raw(redex);
+    }
+}
+
+pub struct ReducerCursor {
+    pos: Ptr,
+    view: Reducer,
+}
+
+impl TreeCursor<OwnedCell> for ReducerCursor {
+    fn hash(&self) -> usize {
+        self.pos
+    }
+
+    fn value(&self) -> OwnedCell {
+        let val = self.view.cells[self.pos].take().unwrap();
+        self.view.cells[self.pos].swap(Some(val.clone()));
+
+        val
+    }
+
+    fn children(&self) -> Box<dyn Iterator<Item = Self>> {
+        let val = self.view.cells[self.pos].take().unwrap();
+        self.view.cells[self.pos].swap(Some(val.clone()));
+
+        let view = self.view.clone();
+
+        Box::new(
+            [val.primary_port]
+                .into_iter()
+                .chain(val.aux_ports.into_iter())
+                .filter_map(|x| x)
+                .map(move |Conn { cell, .. }| ReducerCursor {
+                    pos: cell,
+                    view: view.clone(),
+                }),
+        )
     }
 }
 
@@ -663,7 +774,6 @@ mod test {
 	    "Dup[@1](a, b) >< Constr[@2](d, c)",
 	    "Constr[@5](a, Dup[@6](d, @5#1, Constr[@4](b, @6#2, Dup[@7](c, @5#2, @4#2)#2)#1)#1, @7#1)",
         ];
-
         for case in cases {
             let parsed = parser::parser()
                 .parse(parser::lexer().parse(case).unwrap())

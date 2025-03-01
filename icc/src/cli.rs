@@ -8,7 +8,10 @@ use inetlib::{
     bytecode::combinated::CombinatedProgram,
     parser::parser_combinators::{self},
     preprocessor,
-    reducers::combinators::{crossbeam, Reducer},
+    reducers::combinators::{
+        buffered::adjacency_matrix::{BufferedMatrixReducer, ReducerBuilder},
+        Reducer,
+    },
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -103,8 +106,9 @@ pub fn repl() {
                             todo!()
                         }
                         Ok("reduce") => {
-                            let mut reducer =
-                                crossbeam::Reducer::new([&parsed.nets[0]].into_iter());
+                            let mut reducer = ReducerBuilder::default()
+                                .with_init_nets([&parsed.nets[0]].into_iter())
+                                .finish();
                             let res = reducer.reduce();
 
                             println!(

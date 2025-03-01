@@ -8,18 +8,6 @@ use std::{collections::BTreeSet, ops::DerefMut, sync::Arc};
 #[cfg(feature = "threadpool")]
 use rayon::prelude::*;
 
-pub struct AstReducer;
-
-impl Reducer for AstReducer {
-    fn reduce(e: &Port) -> Vec<Port> {
-        reduce_dyn(e)
-    }
-
-    fn reduce_step(e: &Port, names: Arc<NameIter>) -> Option<Vec<Port>> {
-        reduce_step_dyn(e, names)
-    }
-}
-
 #[derive(Default, Debug, Clone)]
 pub struct Reduction {
     pub nets: Vec<Port>,
@@ -112,19 +100,6 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     }
 
     nets.into_iter().collect()
-}
-
-fn with_lock(
-    p: &Option<IndexedPort>,
-    mut f: impl FnMut(Option<(usize, Port, &mut Expr)>) -> Option<Vec<Port>>,
-) -> Option<Vec<Port>> {
-    let bor = p.as_ref().map(|p| (p.clone(), p.1.borrow_mut()));
-
-    if let Some((p, mut bor)) = bor {
-        f(Some((p, bor.deref_mut())))
-    } else {
-        f(None)
-    }
 }
 
 pub fn reduce_step_dyn(e: &Port, names: Arc<NameIter>) -> Option<Reduction> {
