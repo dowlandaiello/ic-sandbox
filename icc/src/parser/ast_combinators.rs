@@ -2,6 +2,7 @@ use crate::{
     parser::{ast_lafont::Ident, naming::NameIter},
     UNIT_STR,
 };
+use ast_ext::{TreeCursor, TreeVisitor, VisualDebug};
 use std::{
     cmp::Ordering,
     collections::{BTreeSet, VecDeque},
@@ -49,6 +50,66 @@ impl PartialEq for Port {
 impl PartialOrd for Port {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.id.partial_cmp(&other.id)
+    }
+}
+
+impl TreeCursor<Port> for Port {
+    fn hash(&self) -> usize {
+        self.id
+    }
+
+    fn value(&self) -> Port {
+        self.clone()
+    }
+
+    fn children(&self) -> Box<dyn Iterator<Item = Self>> {
+        Box::new(
+            self.iter_ports()
+                .into_iter()
+                .filter_map(|x| x)
+                .map(|(_, x)| x),
+        )
+    }
+}
+
+impl VisualDebug for Port {
+    fn node_id(&self) -> usize {
+        self.id
+    }
+
+    fn node_label(&self) -> String {
+        format!("{} ({})", self.borrow().name(), self.id,)
+    }
+
+    fn node_color(&self) -> String {
+        if self
+            .borrow()
+            .primary_port()
+            .map(|(port, _)| port == &0)
+            .unwrap_or_default()
+        {
+            "red".to_owned()
+        } else {
+            "black".to_owned()
+        }
+    }
+
+    fn conns(&self) -> impl Iterator<Item = String> {
+        self.iter_ports()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, x)| Some((i, x?)))
+            .map(|(i, (port, p))| {
+                format!(
+                    "{} -- {} [label=\"({}, {})\"]",
+                    self.node_id(),
+                    p.node_id(),
+                    i,
+                    port
+                )
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -115,20 +176,22 @@ impl Port {
     }
 
     pub fn alpha_eq(&self, other: &Port) -> bool {
-        if self.iter_tree().count() != other.iter_tree().count() {
-            return false;
-        }
-
         // TODO: this is awful
-        self.iter_tree()
+        let a = self
+            .iter_children()
             .filter(|x| x.borrow().as_var().is_none())
             .map(|x| x.borrow().description())
-            .collect::<BTreeSet<_>>()
-            == other
-                .iter_tree()
-                .filter(|x| x.borrow().as_var().is_none())
-                .map(|x| x.borrow().description())
-                .collect::<BTreeSet<_>>()
+            .collect::<BTreeSet<_>>();
+        let b = other
+            .iter_children()
+            .filter(|x| x.borrow().as_var().is_none())
+            .map(|x| x.borrow().description())
+            .collect::<BTreeSet<_>>();
+
+        tracing::trace!("found:    {:?}", a);
+        tracing::trace!("expected: {:?}", b);
+
+        a == b
     }
 
     #[cfg(not(feature = "threadpool"))]
@@ -407,7 +470,23 @@ impl Port {
     }
 
     pub fn iter_tree(&self) -> impl Iterator<Item = Port> {
-        PortTreeWalker::new([self.clone()])
+        PortTreeWalker::new([self.clone()].into_iter())
+    }
+
+    pub fn iter_tree_visitor(&self) -> TreeVisitor<Port, Port> {
+        TreeVisitor::new(self.clone())
+    }
+
+    pub fn iter_children(&self) -> impl Iterator<Item = Port> {
+        PortTreeWalker {
+            seen: BTreeSet::from_iter([self.id]),
+            to_visit: self
+                .iter_ports()
+                .into_iter()
+                .skip(1)
+                .filter_map(|x| x.map(|(_, x)| x))
+                .collect(),
+        }
     }
 
     pub fn try_as_wired_vars(&self) -> Option<(Port, Port)> {
@@ -469,7 +548,7 @@ pub struct PortTreeWalker {
 }
 
 impl PortTreeWalker {
-    pub fn new(i: impl IntoIterator<Item = Port>) -> Self {
+    pub fn new(i: impl Iterator<Item = Port>) -> Self {
         Self {
             seen: Default::default(),
             to_visit: i.into_iter().collect(),

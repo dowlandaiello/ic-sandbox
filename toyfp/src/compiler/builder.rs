@@ -111,24 +111,37 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type EExpr = SkExpr;
 
     fn decombinate(p: &AstPort) -> Option<SkExpr> {
-        let mut names = Default::default();
+        let k = |p| {
+            let mut names = Default::default();
 
-        // TODO: Need to figure out how to decode SK (partial application)
-        Self::decombinate_expr(
-            p,
-            OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names),
-            &names,
-        )
-        .then(|| SkExpr::K)
-        .or_else(|| {
+            Self::decombinate_expr(
+                p,
+                OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names),
+                &names,
+            )
+            .then(|| SkExpr::K)
+        };
+
+        let s = |p| {
+            let mut names = Default::default();
+
             Self::decombinate_expr(
                 p,
                 OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names),
                 &names,
             )
             .then(|| SkExpr::S)
-        })
-        .or_else(|| unreachable!())
+        };
+
+        // There is some element in this tree which is an actual S or K element
+        // and is not encoded
+        let root = p
+            .iter_tree()
+            .filter_map(|p| s(p.clone()).or_else(|| k(p)))
+            .next()
+            .unwrap();
+
+        Some(root)
     }
 
     fn combinate(&self, names: &NameIter) -> Self::CPort {
@@ -680,6 +693,8 @@ impl OwnedNetBuilder {
     }
 
     pub(crate) fn encode(self, names: &NameIter) -> Self {
+        tracing::trace!("encoding {:?}", self);
+
         self.expand_step(names);
 
         let dup_refs = self
@@ -773,7 +788,7 @@ impl OwnedNetBuilder {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
-    fn decombinate_expr(p: &AstPort, cmp: OwnedNetBuilder, names: &NameIter) -> bool {
+    fn decombinate_expr(p: AstPort, cmp: OwnedNetBuilder, names: &NameIter) -> bool {
         cmp.clone().iter_tree().for_each(|x| {
             x.expand_step(names);
         });
@@ -783,7 +798,7 @@ impl OwnedNetBuilder {
         tracing::trace!("found    {}", p);
         tracing::trace!("expected {}", combinated);
 
-        combinated.alpha_eq(&p.orient())
+        p.alpha_eq(&combinated)
     }
 
     pub(crate) fn cloned(&self) -> CombinatorBuilder {

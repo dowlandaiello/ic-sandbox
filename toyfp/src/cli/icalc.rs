@@ -37,13 +37,13 @@ pub fn read_program(in_fname: &str) -> Vec<Stmt> {
 pub fn compile(f_name: &str) -> Vec<Port> {
     let parsed = read_program(f_name);
 
-    compiler::compile_icalc(parsed)
+    compiler::compile_icalc(parsed).0
 }
 
 pub fn eval(f_name: &str) -> Vec<Expr> {
     let parsed = read_program(f_name);
 
-    let prog = compiler::compile_icalc(parsed);
+    let (prog, tags) = compiler::compile_icalc(parsed);
 
     let mut reducer = ReducerBuilder::default()
         .with_init_nets(prog.iter())
@@ -53,7 +53,7 @@ pub fn eval(f_name: &str) -> Vec<Expr> {
     let res = reducer.readback();
     let exprs = res
         .into_iter()
-        .map(|port| compiler::decompile_icalc(port))
+        .map(|port| compiler::decompile_icalc(port, &tags))
         .collect();
 
     exprs
