@@ -5,7 +5,7 @@ use crate::{
 use ast_ext::{TreeCursor, TreeVisitor, VisualDebug};
 use std::{
     cmp::Ordering,
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     hash::Hash,
     ops::Deref,
@@ -114,6 +114,36 @@ impl VisualDebug for Port {
 }
 
 impl Port {
+    pub fn deep_clone(&self, names: &NameIter) -> Port {
+        let mut new_for_id: BTreeMap<usize, Port> = [self.clone()]
+            .into_iter()
+            .chain(self.iter_tree_visitor())
+            .map(|port| (port.id, port.borrow().clone().into_port(names)))
+            .collect();
+
+        // Wire nodes
+        self.iter_tree().for_each(|port| {
+            let new_self = new_for_id.get(&port.id).clone().unwrap();
+
+            port.iter_ports()
+                .into_iter()
+                .enumerate()
+                .filter_map(|(port, x)| Some((port, x?)))
+                .for_each(|(port_self, (port_other, other))| {
+                    let new_other = new_for_id.get(&other.id).clone().unwrap();
+
+                    new_other
+                        .borrow_mut()
+                        .insert_port_i(port_other, Some((port_self, new_self.clone())));
+                    new_self
+                        .borrow_mut()
+                        .insert_port_i(port_self, Some((port_other, new_other.clone())));
+                })
+        });
+
+        new_for_id.remove(&self.id).unwrap()
+    }
+
     pub fn checksum(&self) {
         self.iter_tree().for_each(|x| {
             x.iter_ports()

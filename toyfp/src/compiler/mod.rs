@@ -21,7 +21,7 @@ pub trait CombinatorBuilder: Sized {
     type CPort;
     type EExpr;
 
-    fn decombinate(p: &Self::CPort) -> Option<Self::EExpr>;
+    fn decombinate(p: &Self::CPort, names: &NameIter) -> Option<Self::EExpr>;
 
     fn combinate(&self, names: &NameIter) -> Self::CPort;
 
@@ -351,22 +351,22 @@ pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String
     (net, tags)
 }
 
-pub fn compile_sk(e: SkExpr) -> AstPort {
-    let mut names = NameIter::default();
-
-    let cc = build_compilation_expr(e, &mut names);
+pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
+    let cc = build_compilation_expr(e, &names);
 
     #[cfg(test)]
     cc.checksum();
 
     cc.clone().iter_tree().for_each(|x| {
-        x.expand_step(&mut names);
+        x.expand_step(&names);
     });
 
     #[cfg(test)]
     cc.checksum();
 
-    let combinated = cc.combinate(&mut names);
+    let combinated = cc.combinate(&names);
+
+    println!("{}", combinated.iter_tree_visitor().into_string());
 
     #[cfg(test)]
     combinated.checksum();
@@ -374,10 +374,12 @@ pub fn compile_sk(e: SkExpr) -> AstPort {
     combinated
 }
 
-pub fn decode_sk(p: &AstPort) -> SkExpr {
+pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
     tracing::trace!("decoding {}", p);
 
-    OwnedNetBuilder::decombinate(p).expect("invalid SK expression")
+    println!("{}", p.clone().iter_tree_visitor().into_string());
+
+    OwnedNetBuilder::decombinate(p, names).expect("invalid SK expression")
 }
 
 fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
@@ -464,8 +466,21 @@ fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
     builder
 }
 
-pub fn compile(e: Expr, names: &mut NameIter) -> AstPort {
-    todo!()
+pub fn compile(e: Expr, names: &NameIter) -> AstPort {
+    fn precompile(e: Expr) -> SkExpr {
+        match e {
+            Expr::Id(v) => SkExpr::Var(v),
+            Expr::Application { lhs, rhs } => {
+                SkExpr::Call(Box::new(precompile(*lhs)), Box::new(precompile(*rhs)))
+            }
+            Expr::Abstraction { bind_id, body } => {
+                todo!()
+            }
+        }
+    }
+
+    let sk = precompile(e);
+    compile_sk(sk, names)
 }
 
 pub fn decompile(p: &AstPort) -> Option<Expr> {
@@ -481,78 +496,99 @@ mod test {
     };
     use ast_ext::Spanned;
     use chumsky::Parser;
-    use inetlib::reducers::combinators::reduce_dyn;
+    use inetlib::reducers::combinators::{
+        buffered::adjacency_matrix::ReducerBuilder, reduce_dyn, Reducer,
+    };
 
     #[test_log::test]
     fn test_eval_k_simple() {
         let (case, expected) = ("K", "K");
+        let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
+        let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
 
     #[test_log::test]
     fn test_eval_k_call() {
         let (case, expected) = ("((KK)K)", "K");
+        let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
+        let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
 
     #[test_log::test]
     fn test_eval_k_nested() {
         let (case, expected) = ("((K((KK)K))K)", "K");
+        let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
+        let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
 
     #[test_log::test]
     fn test_eval_s() {
         let (case, expected) = ("(((SK)S)K)", "K");
+        let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
+        let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_partial() {
+        let (case, expected) = ("(KK)", "(KK)");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_partial_s() {
+        let (case, expected) = ("(SK)", "(SK)");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
 
     #[test_log::test]
     fn test_eval_s_arg() {
         let (case, expected) = ("(((K(KS))K)K)", "(KK)");
+        let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
+        let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
-    }
-
-    #[test_log::test]
-    fn test_eval_partial() {
-        let (case, expected) = ("S", "(KK)");
-
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
-        let compiled = compile_sk(parsed.into());
-
-        let result = reduce_dyn(&compiled);
-
-        assert_eq!(decode_sk(&result[0].orient()).to_string(), expected);
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
 
     #[test_log::test]
@@ -575,6 +611,36 @@ def S = \\n \\s \\z (s n)
             .map(|Spanned(x, _)| x)
             .collect();
 
-        let compiled = compile_icalc(parsed);
+        let _ = compile_icalc(parsed);
+    }
+
+    #[test_log::test]
+    fn test_eval_icalc() {
+        let case = "def Z = \\s \\z z
+def S = \\n \\s \\z (s n)
+(S Z)";
+
+        let parsed = parser_icalc::parser()
+            .parse(
+                parser_icalc::lexer()
+                    .parse(case)
+                    .unwrap()
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|Spanned(x, _)| x)
+            .collect();
+
+        let cc = compile_icalc(parsed);
+
+        let mut reducer = ReducerBuilder::default()
+            .with_init_nets(cc.0.iter())
+            .finish();
+        let result = reducer.reduce();
+
+        result.iter().for_each(|x| println!("{}", x));
     }
 }

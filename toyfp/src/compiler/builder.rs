@@ -6,6 +6,7 @@ use inetlib::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
+use inetlib::reducers::combinators::reduce_dyn;
 use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, iter, rc::Rc};
 
 pub type Port = (usize, OwnedNetBuilder);
@@ -110,7 +111,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type CPort = AstPort;
     type EExpr = SkExpr;
 
-    fn decombinate(p: &AstPort) -> Option<SkExpr> {
+    fn decombinate(p: &AstPort, names: &NameIter) -> Option<SkExpr> {
         let k = |p| {
             let mut names = Default::default();
 
@@ -133,15 +134,66 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .then(|| SkExpr::S)
         };
 
-        // There is some element in this tree which is an actual S or K element
-        // and is not encoded
-        let root = p
-            .iter_tree()
-            .filter_map(|p| s(p.clone()).or_else(|| k(p)))
-            .next()
-            .unwrap();
+        s(p.clone()).or_else(|| k(p.clone())).or_else(|| {
+            let mut curr = (0, p.clone());
+            let mut mk_res: Box<dyn Fn(SkExpr) -> SkExpr> =
+                Box::new(|inner| SkExpr::Call(Box::new(inner), Box::new(SkExpr::K)));
 
-        Some(root)
+            loop {
+                tracing::trace!("normalizing expr: {}", p);
+
+                // Continuously reduce this expression with a K argument until we get to a reconizable result
+                let k_app = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+                let k_arg =
+                    OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, names)
+                        .expand_step(names)
+                        .encode(names)
+                        .expand_step(names);
+                let var = OwnedNetBuilder::new(
+                    CombinatorBuilder::Var {
+                        name: names.next_var_name(),
+                        primary_port: None,
+                    },
+                    names,
+                );
+
+                OwnedNetBuilder::connect((2, k_app.clone()), (0, k_arg.clone()));
+                OwnedNetBuilder::connect((1, k_app.clone()), (0, var.clone()));
+
+                let combinated = k_app.combinate(names);
+                combinated.borrow_mut().set_primary_port(Some(curr.clone()));
+                curr.1
+                    .borrow_mut()
+                    .insert_port_i(curr.0, Some((0, combinated.clone())));
+
+                tracing::trace!("bruh {}", p);
+
+                curr = (1, combinated.clone());
+
+                let to_reduce = p.deep_clone(names);
+
+                tracing::trace!(
+                    "reducing for decoding: {}",
+                    to_reduce.clone().iter_tree_visitor().into_string()
+                );
+
+                let res = reduce_dyn(&to_reduce).remove(0).orient();
+
+                if let Some(res) = s(res.clone()).or_else(|| k(res.clone())) {
+                    return Some(mk_res(res));
+                }
+
+                mk_res = Box::new(move |inner| {
+                    SkExpr::Call(Box::new(mk_res(inner)), Box::new(SkExpr::K))
+                });
+            }
+        })
     }
 
     fn combinate(&self, names: &NameIter) -> Self::CPort {
@@ -362,6 +414,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 // and cannot remove agents, which Z_1 expansion does.
                 // See combinate() for implementation
                 match aux_ports.len() {
+                    0 => unreachable!(),
                     1 => self.clone(),
                     2 => {
                         self.update_with(|_| CombinatorBuilder::Constr {
@@ -1198,7 +1251,7 @@ mod test {
         println!("{}", combinated);
 
         assert!(matches!(
-            OwnedNetBuilder::decombinate(&combinated).unwrap(),
+            OwnedNetBuilder::decombinate(&combinated, &names).unwrap(),
             SkExpr::K
         ));
     }
@@ -1232,7 +1285,7 @@ mod test {
         s_comb.checksum();
 
         let combinated = s_comb.combinate(&mut names).orient();
-        let m = OwnedNetBuilder::decombinate(&combinated).unwrap();
+        let m = OwnedNetBuilder::decombinate(&combinated, &names).unwrap();
 
         assert!(matches!(m, SkExpr::S));
     }
@@ -1386,7 +1439,7 @@ mod test {
         let _ = decoder.combinate(&mut names);
 
         let res = reduce_dyn(&comb_coder).remove(0);
-        let dec = OwnedNetBuilder::decombinate(&res.orient());
+        let dec = OwnedNetBuilder::decombinate(&res.orient(), &names);
 
         assert!(matches!(dec, Some(SkExpr::K { .. })))
     }
@@ -1426,7 +1479,7 @@ mod test {
         let comb_coder = coder.combinate(&mut names);
 
         let res = reduce_dyn(&comb_coder).remove(0);
-        let dec = OwnedNetBuilder::decombinate(&res.orient());
+        let dec = OwnedNetBuilder::decombinate(&res.orient(), &names);
         matches!(dec, Some(SkExpr::S { .. }));
     }
 

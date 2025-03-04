@@ -29,11 +29,12 @@ pub fn read_program(in_fname: &str) -> Expr {
 
 pub fn eval(f_name: &str) -> Expr {
     let parsed = read_program(f_name);
-    let combinated = compiler::compile_sk(parsed.clone());
+    let names = Default::default();
+    let combinated = compiler::compile_sk(parsed.clone(), &names);
 
     tracing::trace!("job: {}", combinated);
 
-    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient())
+    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient(), &names)
 }
 
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
@@ -155,16 +156,17 @@ pub fn repl() {
 
     loop {
         let readline = rl.readline(">> ");
+        let names = Default::default();
 
         match readline {
             Ok(line) => {
                 let parsed = assert_parse_literal_ok(line.as_str());
-                let combinated = compiler::compile_sk(parsed.clone());
+                let combinated = compiler::compile_sk(parsed.clone(), &names);
 
                 tracing::trace!("job: {}", combinated);
 
                 let reduced =
-                    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient());
+                    compiler::decode_sk(&reduce_dyn(&combinated).get(0).unwrap().orient(), &names);
                 println!("{}", reduced);
             }
             Err(ReadlineError::Interrupted) => {

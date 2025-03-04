@@ -4,15 +4,15 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.forEachDefaultSystem (system:
+    flake-utils.lib.eachDefaultSystem (system:
       let pkgs = nixpkgs.legacyPackages."${system}";
       in {
-        shells.default = pkgs.mkShell {
+        devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs.buildPackages; [
             rust-bin.stable.latest.default
             pkg-config
           ];
-          buildInputs = with pkgs; [ openssl clang gdb ];
+          buildInputs = with pkgs; [ openssl clang gdb ghc ];
           shellHook = ''
             export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
           '';

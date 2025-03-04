@@ -29,11 +29,12 @@ pub fn repl() {
 
     loop {
         let readline = rl.readline(">> ");
+        let names = Default::default();
 
         match readline {
             Ok(line) => {
                 let parsed = assert_parse_literal_ok(line.as_str());
-                let combinated = compiler::compile(parsed.clone(), &mut NameIter::default());
+                let combinated = compiler::compile(parsed.clone(), &names);
 
                 if let Some(reduced) = compiler::decompile(reduce_dyn(&combinated).get(0).unwrap())
                 {

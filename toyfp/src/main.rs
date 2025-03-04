@@ -103,6 +103,7 @@ fn main() {
             let input_fname = arg_matches
                 .get_one::<String>("source")
                 .expect("missing source file name");
+            let names = Default::default();
 
             if arg_matches.get_flag("icalc") {
                 let res = cli::icalc::compile(input_fname);
@@ -117,7 +118,7 @@ fn main() {
 
             if arg_matches.get_flag("sk") {
                 let program = cli::sk::read_program(input_fname);
-                let compiled = compiler::compile_sk(program);
+                let compiled = compiler::compile_sk(program, &names);
 
                 println!("{}", compiled);
 
@@ -125,7 +126,7 @@ fn main() {
             }
 
             let program = cli::lambda::read_program(input_fname);
-            let compiled = compiler::compile(program, &mut NameIter::default());
+            let compiled = compiler::compile(program, &names);
 
             println!("{}", compiled);
         }

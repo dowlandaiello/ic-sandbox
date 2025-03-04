@@ -721,15 +721,20 @@ impl Reducer for BufferedMatrixReducer {
         }
 
         #[cfg(not(feature = "threadpool"))]
-        fn reduce_redexes(buffer: MatrixBuffer, r: impl IntoIterator<Item = (Conn, Conn)>) {
+        fn reduce_redexes(
+            buffer: MatrixBuffer,
+            locked: Arc<[AtomicBool]>,
+            r: impl IntoIterator<Item = (Conn, Conn)>,
+        ) {
             r.into_iter().for_each(move |x| {
                 let worker = ReductionWorker {
                     buffer: buffer.clone(),
+                    locked: locked.clone(),
                 };
 
                 let redexes = worker.reduce_step(x);
 
-                reduce_redexes(buffer.clone(), redexes);
+                reduce_redexes(buffer.clone(), locked.clone(), redexes);
             });
         }
 

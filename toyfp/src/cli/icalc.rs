@@ -51,6 +51,9 @@ pub fn eval(f_name: &str) -> Vec<Expr> {
     reducer.reduce();
 
     let res = reducer.readback();
+
+    res.iter().for_each(|x| println!("{}", x));
+
     let exprs = res
         .into_iter()
         .map(|port| compiler::decompile_icalc(port, &tags))
