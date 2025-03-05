@@ -34,7 +34,7 @@ Extensive refactoring needs to be completed across the entire project, as many c
 
 ## In Progress
 
-I am currently working on a more formal compiler from a high level language to my interaction combinator VM. Specifically, I am working on a compiler in Lean from the BCKW combinators to the interaction combinators. So far, I have prototyped an implementation of the BCKW combinators in the interaction combinator paradigm, pictured below.
+I am currently working on a more formal compiler from a high level language to my interaction combinator VM. Specifically, I am working on a compiler in Lean from the BCKW combinators to the interaction combinators. So far, I have prototyped an implementation of the BCKW combinators in the interaction combinator paradigm, pictured in an abbreviated form below. Note that decoder agents are omitted in places whewre they are obvious.
 
 ![pic 1](./.github.img/BCKW_-_page_1.png)
 ![pic 2](./.github.img/BCKW_-_page_2.png)
