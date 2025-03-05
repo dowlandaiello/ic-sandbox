@@ -36,9 +36,9 @@ Extensive refactoring needs to be completed across the entire project, as many c
 
 I am currently working on a more formal compiler from a high level language to my interaction combinator VM. Specifically, I am working on a compiler in Lean from the BCKW combinators to the interaction combinators. So far, I have prototyped an implementation of the BCKW combinators in the interaction combinator paradigm, pictured below.
 
-![pic 1](.github.img/BCKW_-_page_1.webp)
-![pic 2](.github.img/BCKW_-_page_2.webp)
-![pic 3](.github.img/BCKW_-_page_3.webp)
+![pic 1](./.github.img/BCKW_-_page_1.webp)
+![pic 2](./.github.img/BCKW_-_page_2.webp)
+![pic 3](./.github.img/BCKW_-_page_3.webp)
 
 Furthermore, I have many optimizations in the pipeline for my interaction combinator runtime. I hope to finalize my BCKW compiler before this is completed.
 
