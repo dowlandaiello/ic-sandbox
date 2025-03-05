@@ -43,7 +43,7 @@ where `><` represents an active pair.
 
 For example:
 
-```prolog
+```haskell
 Constr[@1](a, b) >< Constr[@2](c, d)
 -- => a ~ b
 --    c ~ d
@@ -51,7 +51,7 @@ Constr[@1](a, b) >< Constr[@2](c, d)
 
 Another example:
 
-```prolog
+```haskell
 Constr[@1](Constr[@2](a, b)#0, Constr[@3](c, d)#0) >< Constr[@4](Constr[@5](e, f)#0, Constr[@6](g, h)#0)
 ```
 
