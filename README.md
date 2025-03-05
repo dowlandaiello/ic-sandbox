@@ -36,10 +36,22 @@ Extensive refactoring needs to be completed across the entire project, as many c
 
 I am currently working on a more formal compiler from a high level language to my interaction combinator VM. Specifically, I am working on a compiler in Lean from the BCKW combinators to the interaction combinators. So far, I have prototyped an implementation of the BCKW combinators in the interaction combinator paradigm, pictured in an abbreviated form below. Note that decoder agents are omitted in places whewre they are obvious.
 
-![pic 1](./.github.img/BCKW_-_page_1.png)
-![pic 2](./.github.img/BCKW_-_page_2.png)
-![pic 3](./.github.img/BCKW_-_page_3.png)
+![pic 1](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_1.png?raw=true)
+![pic 2](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_2.png?raw=true)
+![pic 3](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_3.png?raw=true)
 
 Furthermore, I have many optimizations in the pipeline for my interaction combinator runtime. I hope to finalize my BCKW compiler before this is completed.
+
+## References
+
+1. Mazza, Damiano. (2007). A denotational semantics for the symmetric interaction combinators. Mathematical Structures in Computer Science. 17. 527-562. 10.1017/S0960129507006135.
+2. Taelin, Victor. HVM2: A PARALLEL EVALUATOR FOR INTERACTION COMBINATORS. https://github.com/higherOrderCO/hvm
+3. Lafont, Y. (1997). Interaction Combinators. Inf. Comput., 137, 69-101.
+4. Lafont Y. (1989). Interaction nets. In Proceedings of the 17th ACM SIGPLAN-SIGACT symposium on Principles of programming languages (POPL '90). Association for Computing Machinery, New York, NY, USA, 95–108. https://doi.org/10.1145/96709.96718
+5. Hassan A. et al (2009). Compilation of Interaction Nets. Electronic Notes in Theoretical Computer Science, Volume 253, Issue 4, 2009, Pages 73-90, https://doi.org/10.1016/j.entcs.2009.10.018.
+
+Among others which escape my mind at the moment.
+
+## Thanks
 
 Thanks for stopping by! :D
