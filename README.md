@@ -9,7 +9,7 @@ Home of my self-directed research into the interaction combinators.
   - various compilers, virtual machines, and interpreters for interaction nets and combinators
 - `toyfp` contains a compiler from the SK combinators to my interaction combinator language
 - `formalfp` contains a compiler written in Lean from the BCKW combinators to my interaction combinator language
-- `astext` contains come utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
+- `astext` contains some utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
 
 ## Usage
 
