@@ -24,6 +24,37 @@ Type `cargo run --bin toyfp dev --sk` to enter the SK combinator -> interaction 
 
 Type `cargo test` to run tests. One which is in-progress will fail in `toyfp`.
 
+## IC IR Syntax
+
+In modified, informal Backus-Naur Form notation:
+
+```haskell
+comment ::= -- <stuff>
+id      ::= 0 | 1 | .. | n
+ref     ::= @<id>
+port    ::= <agent>#<port number in agent> | <ref>#<port number in agent>
+var     ::= <C style identifier>
+agent   ::= <var> | Constr[@<id>](<port>, <port>)
+expr    ::= <agent> | <agent> >< <agent>
+program ::= <comment?>\n<expr>
+```
+
+where `><` represents an active pair.
+
+For example:
+
+```prolog
+Constr[@1](a, b) >< Constr[@2](c, d)
+-- => a ~ b
+--    c ~ d
+```
+
+Another example:
+
+```prolog
+Constr[@1](Constr[@2](a, b)#0, Constr[@3](c, d)#0) >< Constr[@4](Constr[@5](e, f)#0, Constr[@6](g, h)#0)
+```
+
 ## Limitations
 
 All of these packages are in progress. `icc` has stabilized, and the runtime is working, featuring parallelism. More optimization needs to be done, but it is demonstrated to be correct via unit tests.
