@@ -25,3 +25,4 @@ ariadne = { workspace = true }
 rustyline = { workspace = true }
 tracing = { workspace = true }
 test-log = { workspace = true }
+itertools = { workspace = true }

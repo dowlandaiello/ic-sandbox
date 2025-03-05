@@ -7,6 +7,7 @@ use inetlib::parser::{
     naming::NameIter,
 };
 use inetlib::reducers::combinators::reduce_dyn;
+use itertools::Itertools;
 use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, iter, rc::Rc};
 
 pub type Port = (usize, OwnedNetBuilder);
@@ -111,14 +112,29 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
     type CPort = AstPort;
     type EExpr = SkExpr;
 
+    // We can trivially detect S or K.
+    // Detecting partial application is more difficult.
+    // However, we can still compare against reductions.
+    // Thus, we can reassmble the expression using an
+    // alphabet of "partial" expressions {S_, S__, K_}
     fn decombinate(p: &AstPort, names: &NameIter) -> Option<SkExpr> {
+        let combinate_cmp = |cmp: OwnedNetBuilder| {
+            cmp.clone().iter_tree().for_each(|x| {
+                x.expand_step(names);
+            });
+
+            cmp.make_root(names).combinate(names).orient()
+        };
+
         let k = |p| {
             let mut names = Default::default();
 
             Self::decombinate_expr(
                 p,
-                OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, &mut names),
-                &names,
+                combinate_cmp(OwnedNetBuilder::new(
+                    CombinatorBuilder::K { primary_port: None },
+                    &mut names,
+                )),
             )
             .then(|| SkExpr::K)
         };
@@ -128,72 +144,31 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
             Self::decombinate_expr(
                 p,
-                OwnedNetBuilder::new(CombinatorBuilder::S { primary_port: None }, &mut names),
-                &names,
+                combinate_cmp(OwnedNetBuilder::new(
+                    CombinatorBuilder::S { primary_port: None },
+                    &mut names,
+                )),
             )
             .then(|| SkExpr::S)
         };
 
-        s(p.clone()).or_else(|| k(p.clone())).or_else(|| {
-            let mut curr = (0, p.clone());
-            let mut mk_res: Box<dyn Fn(SkExpr) -> SkExpr> =
-                Box::new(|inner| SkExpr::Call(Box::new(inner), Box::new(SkExpr::K)));
+        let alphabet = [
+            (CombinatorBuilder::S { primary_port: None }, SkExpr::S),
+            (CombinatorBuilder::K { primary_port: None }, SkExpr::K),
+        ];
 
-            loop {
-                tracing::trace!("normalizing expr: {}", p);
+        let alphabet_incomplete_s = alphabet.iter().combinations(2).map(|sequence| {
+            [(CombinatorBuilder::S { primary_port: None }, SkExpr::S)]
+                .into_iter()
+                .chain(sequence.into_iter().cloned())
+        });
+        let alphabet_incomplete_k = alphabet.iter().combinations(1).map(|sequence| {
+            [(CombinatorBuilder::K { primary_port: None }, SkExpr::K)]
+                .into_iter()
+                .chain(sequence.into_iter().cloned())
+        });
 
-                // Continuously reduce this expression with a K argument until we get to a reconizable result
-                let k_app = OwnedNetBuilder::new(
-                    CombinatorBuilder::Constr {
-                        primary_port: None,
-                        aux_ports: [const { None }; 2],
-                    },
-                    names,
-                );
-                let k_arg =
-                    OwnedNetBuilder::new(CombinatorBuilder::K { primary_port: None }, names)
-                        .expand_step(names)
-                        .encode(names)
-                        .expand_step(names);
-                let var = OwnedNetBuilder::new(
-                    CombinatorBuilder::Var {
-                        name: names.next_var_name(),
-                        primary_port: None,
-                    },
-                    names,
-                );
-
-                OwnedNetBuilder::connect((2, k_app.clone()), (0, k_arg.clone()));
-                OwnedNetBuilder::connect((1, k_app.clone()), (0, var.clone()));
-
-                let combinated = k_app.combinate(names);
-                combinated.borrow_mut().set_primary_port(Some(curr.clone()));
-                curr.1
-                    .borrow_mut()
-                    .insert_port_i(curr.0, Some((0, combinated.clone())));
-
-                tracing::trace!("bruh {}", p);
-
-                curr = (1, combinated.clone());
-
-                let to_reduce = p.deep_clone(names);
-
-                tracing::trace!(
-                    "reducing for decoding: {}",
-                    to_reduce.clone().iter_tree_visitor().into_string()
-                );
-
-                let res = reduce_dyn(&to_reduce).remove(0).orient();
-
-                if let Some(res) = s(res.clone()).or_else(|| k(res.clone())) {
-                    return Some(mk_res(res));
-                }
-
-                mk_res = Box::new(move |inner| {
-                    SkExpr::Call(Box::new(mk_res(inner)), Box::new(SkExpr::K))
-                });
-            }
-        })
+        s(p.clone()).or_else(|| k(p.clone())).or_else(|| todo!())
     }
 
     fn combinate(&self, names: &NameIter) -> Self::CPort {
@@ -841,17 +816,11 @@ impl OwnedNetBuilder {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
-    fn decombinate_expr(p: AstPort, cmp: OwnedNetBuilder, names: &NameIter) -> bool {
-        cmp.clone().iter_tree().for_each(|x| {
-            x.expand_step(names);
-        });
-
-        let combinated = cmp.make_root(names).combinate(names).orient();
-
+    fn decombinate_expr(p: AstPort, cmp: AstPort) -> bool {
         tracing::trace!("found    {}", p);
-        tracing::trace!("expected {}", combinated);
+        tracing::trace!("expected {}", cmp);
 
-        p.alpha_eq(&combinated)
+        p.alpha_eq(&cmp)
     }
 
     pub(crate) fn cloned(&self) -> CombinatorBuilder {
