@@ -34,7 +34,7 @@ id      ::= 0 | 1 | .. | n
 ref     ::= @<id>
 port    ::= <agent>#<port number in agent> | <ref>#<port number in agent>
 var     ::= <C style identifier>
-agent   ::= <var> | Constr[@<id>](<port>, <port>)
+agent   ::= <var> | Constr[@<id>](<port>, <port>) | Dup[@<id>](<port>, <port>) | Era[@<id>](<port>)
 expr    ::= <agent> | <agent> >< <agent>
 program ::= <comment?>\n<expr>
 ```
