@@ -13,7 +13,7 @@ Home of my self-directed research into the interaction combinators.
 
 ## Usage
 
-Two notable endpoints are:
+Two notable entrypoints are:
 
 - The `icc` binary, which contains an interaction combinator REPL, interpreter, and syntax checker
 - The `toyfp` binary, which contains a repl for the SK combinators targeting my interaction combinator VM
