@@ -560,49 +560,22 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             CombinatorBuilder::S { primary_port } => {
                 tracing::trace!("expanding S");
 
-                let top_left_z = OwnedNetBuilder::new(
-                    CombinatorBuilder::Z4 {
-                        primary_port: primary_port.clone(),
-                        aux_ports: [const { None }; 4],
-                    },
-                    names,
-                );
-                let middle_left_z = OwnedNetBuilder::new(
-                    CombinatorBuilder::Z4 {
-                        primary_port: None,
-                        aux_ports: [const { None }; 4],
-                    },
-                    names,
-                );
+                self.update_with(|_| CombinatorBuilder::Z4 {
+                    primary_port: primary_port.clone(),
+                    aux_ports: [const { None }; 4],
+                });
 
-                let right_bottom_z_ref = self;
-
-                let d = OwnedNetBuilder::new(
+                let right_d_1 = OwnedNetBuilder::new(
                     CombinatorBuilder::D {
                         primary_port: None,
                         aux_port: None,
                     },
                     names,
                 );
-
-                let left_middle_constr = OwnedNetBuilder::new(
-                    CombinatorBuilder::Constr {
+                let right_d_2 = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
                         primary_port: None,
-                        aux_ports: [const { None }; 2],
-                    },
-                    names,
-                );
-                let middle_constr = OwnedNetBuilder::new(
-                    CombinatorBuilder::Constr {
-                        primary_port: None,
-                        aux_ports: [const { None }; 2],
-                    },
-                    names,
-                );
-                let bottom_middle_right_constr = OwnedNetBuilder::new(
-                    CombinatorBuilder::Constr {
-                        primary_port: None,
-                        aux_ports: [const { None }; 2],
+                        aux_port: None,
                     },
                     names,
                 );
@@ -615,62 +588,39 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     names,
                 );
 
-                // Connect bottom z
-                let right_bottom_z = CombinatorBuilder::Z4 {
-                    primary_port: primary_port.clone(),
-                    aux_ports: [const { None }; 4],
-                };
-
-                self.update_with(|_| right_bottom_z);
-
-                // Top left  Z conns
-                Self::connect((0, top_left_z.clone()), (3, right_bottom_z_ref.clone()));
-                Self::connect((1, top_left_z.clone()), (4, top_left_z.clone()));
-                Self::connect((2, top_left_z.clone()), (2, middle_left_z.clone()));
-                Self::connect((3, top_left_z.clone()), (3, middle_left_z.clone()));
-
-                // Middle left Z conns
-                Self::connect(
-                    (0, middle_left_z.clone()),
-                    (2, bottom_middle_right_constr.clone()),
+                let z3 = OwnedNetBuilder::new(
+                    CombinatorBuilder::ZN {
+                        primary_port: None,
+                        aux_ports: vec![None; 3],
+                    },
+                    names,
                 );
-                Self::connect((1, middle_left_z.clone()), (0, left_middle_constr.clone()));
-                Self::connect((4, middle_left_z.clone()), (1, left_middle_constr.clone()));
 
-                // Bottom right Z conns
-                if let Some(p) = primary_port {
-                    Self::connect((0, right_bottom_z_ref.clone()), p.clone());
-                }
-
-                Self::connect(
-                    (1, right_bottom_z_ref.clone()),
-                    (1, bottom_middle_right_constr.clone()),
+                let constr = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
                 );
-                Self::connect((2, right_bottom_z_ref.clone()), (0, dup.clone()));
-                Self::connect((4, right_bottom_z_ref.clone()), (0, d.clone()));
 
-                // Dup conns
-                Self::connect((1, dup.clone()), (2, left_middle_constr.clone()));
-                Self::connect((2, dup.clone()), (2, middle_constr.clone()));
+                OwnedNetBuilder::connect((1, self.clone()), (1, z3.clone()));
+                OwnedNetBuilder::connect((2, self.clone()), (0, dup.clone()));
+                OwnedNetBuilder::connect((3, self.clone()), (0, right_d_1.clone()));
+                OwnedNetBuilder::connect((4, self.clone()), (0, right_d_2.clone()));
 
-                // D conns
-                Self::connect((1, d.clone()), (0, middle_constr.clone()));
+                OwnedNetBuilder::connect((0, z3.clone()), (1, right_d_2.clone()));
+                OwnedNetBuilder::connect((0, constr.clone()), (1, right_d_1.clone()));
 
-                // Middle constr conns
-                Self::connect(
-                    (1, middle_constr.clone()),
-                    (0, bottom_middle_right_constr.clone()),
-                );
-                Self::connect((2, middle_constr.clone()), (2, dup.clone()));
+                OwnedNetBuilder::connect((1, dup.clone()), (3, z3.clone()));
+                OwnedNetBuilder::connect((2, dup.clone()), (2, constr.clone()));
 
-                top_left_z.expand_step(names);
+                OwnedNetBuilder::connect((1, constr.clone()), (2, z3.clone()));
 
-                middle_left_z.expand_step(names);
-
-                right_bottom_z_ref.expand_step(names);
-
-                d.expand_step(names);
-                d.expand_step(names);
+                right_d_1.expand_step(names);
+                right_d_2.expand_step(names);
+                z3.expand_step(names);
+                self.expand_step(names);
 
                 self.clone()
             }
