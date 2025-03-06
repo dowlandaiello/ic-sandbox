@@ -777,7 +777,9 @@ impl OwnedNetBuilder {
     pub(crate) fn encode(self, names: &NameIter) -> Self {
         tracing::trace!("encoding {:?}", self);
 
-        self.expand_step(names);
+        self.clone().iter_tree().for_each(|x| {
+            x.expand_step(names);
+        });
 
         let dup_refs = self
             .clone()

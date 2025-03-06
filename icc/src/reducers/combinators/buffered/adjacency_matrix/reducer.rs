@@ -526,6 +526,9 @@ impl ReductionWorker {
             self.mark_unlocked(*cell_id);
         });
 
+        self.buffer.push_next_free(a_id);
+        self.buffer.push_next_free(b_id);
+
         new_redexes
     }
 

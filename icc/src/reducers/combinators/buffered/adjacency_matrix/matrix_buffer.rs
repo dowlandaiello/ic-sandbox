@@ -36,6 +36,10 @@ impl fmt::Debug for MatrixBuffer {
 }
 
 impl MatrixBuffer {
+    pub(crate) fn push_next_free(&self, free: usize) {
+        self.next_free.push(free);
+    }
+
     pub(crate) fn new_with_capacity_nodes(capacity: usize) -> Self {
         // Capacitied to N^2, we should always have room at the beginning
 

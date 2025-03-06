@@ -5,7 +5,7 @@ use std::fmt;
 #[derive(Clone, Debug)]
 pub enum Expr {
     Call(Box<Expr>, Box<Expr>),
-    xS,
+    S,
     K,
     Var(String),
 }

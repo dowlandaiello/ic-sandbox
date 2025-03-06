@@ -348,7 +348,7 @@ pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String
 }
 
 pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
-    let cc = build_compilation_expr(e.clone(), &names);
+    let cc = build_compilation_expr(e.clone(), false, &names);
 
     if !matches!(e, SkExpr::S) && !matches!(e, SkExpr::K) {
         let var = OwnedNetBuilder::new(
@@ -383,6 +383,8 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
         old_var.expand_step(names);
     }
 
+    println!("{}", cc.clone().iter_tree().into_string());
+
     #[cfg(test)]
     cc.checksum();
 
@@ -407,7 +409,7 @@ pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
     OwnedNetBuilder::decombinate(p, names).expect("invalid SK expression")
 }
 
-fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
+fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNetBuilder {
     tracing::trace!("compiling {:?}", e);
 
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
@@ -444,15 +446,25 @@ fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
             );
         }
         SkExpr::K => (
-            OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names),
+            if is_arg {
+                OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names)
+                    .encode(names)
+            } else {
+                OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names)
+            },
             Vec::new(),
         ),
         SkExpr::S => (
-            OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names),
+            if is_arg {
+                OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names)
+                    .encode(names)
+            } else {
+                OwnedNetBuilder::new(SkCombinatorBuilder::S { primary_port: None }, names)
+            },
             Vec::new(),
         ),
         SkExpr::Call(a, b) => {
-            let a_cc = build_compilation_expr(*a, names);
+            let a_cc = build_compilation_expr(*a, false, names);
 
             (a_cc, vec![*b])
         }
@@ -462,7 +474,7 @@ fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
         #[cfg(test)]
         builder.checksum();
 
-        let cc = best_port(&build_compilation_expr(x, names).encode(names));
+        let cc = best_port(&build_compilation_expr(x, true, names));
 
         let arg_handle = OwnedNetBuilder::new(
             SkCombinatorBuilder::Constr {
@@ -486,7 +498,7 @@ fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
     builder
         .clone()
         .iter_tree()
-        .for_each(|x| tracing::trace!("encoding {} -> {:?}", e.clone(), x));
+        .for_each(|x| tracing::debug!("encoding {} -> {:?}", e.clone(), x));
 
     builder
 }
@@ -578,6 +590,19 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_eval_s_arg_simple() {
+        let (case, expected) = ("((KS)K)", "S");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
     fn test_eval_partial() {
         let (case, expected) = ("(KK)", "(KK)");
         let names = Default::default();
@@ -605,13 +630,17 @@ mod test {
 
     #[test_log::test]
     fn test_eval_s_arg() {
-        let (case, expected) = ("(((K(KS))K)K)", "(KK)");
+        let (case, expected) = ("((K(KS))K)", "(S)");
         let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
+
+        result
+            .iter()
+            .for_each(|x| println!("bruh {}", x.iter_tree_visitor().into_string()));
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
