@@ -342,17 +342,46 @@ pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String
 
     let inlined = inline_icalc(expr.clone(), &def_table);
 
-    println!("{}", inlined);
-
     let bruh = cc_expr(inlined, &mut net, &mut tags, &mut names);
-
-    println!("{}", bruh.clone().iter_tree_visitor().into_string());
 
     (net, tags)
 }
 
 pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
-    let cc = build_compilation_expr(e, &names);
+    let cc = build_compilation_expr(e.clone(), &names);
+
+    if !matches!(e, SkExpr::S) && !matches!(e, SkExpr::K) {
+        let var = OwnedNetBuilder::new(
+            SkCombinatorBuilder::Var {
+                primary_port: None,
+                name: names.next_var_name(),
+            },
+            names,
+        );
+
+        let old_var = cc
+            .clone()
+            .iter_tree()
+            .filter(|elem| matches!(elem.0.borrow().builder, SkCombinatorBuilder::Var { .. }))
+            .next()
+            .unwrap();
+
+        let old_primary_port = old_var.0.borrow().builder.primary_port().unwrap().clone();
+
+        old_var.update_with(|_| {
+            let new_builder = SkCombinatorBuilder::D {
+                primary_port: None,
+                aux_port: None,
+            };
+
+            new_builder
+        });
+
+        OwnedNetBuilder::connect(old_primary_port, (0, old_var.clone()));
+        OwnedNetBuilder::connect((0, var.clone()), (1, old_var.clone()));
+
+        old_var.expand_step(names);
+    }
 
     #[cfg(test)]
     cc.checksum();
@@ -366,8 +395,6 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
 
     let combinated = cc.combinate(&names);
 
-    println!("{}", combinated.iter_tree_visitor().into_string());
-
     #[cfg(test)]
     combinated.checksum();
 
@@ -376,8 +403,6 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
 
 pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
     tracing::trace!("decoding {}", p);
-
-    println!("{}", p.clone().iter_tree_visitor().into_string());
 
     OwnedNetBuilder::decombinate(p, names).expect("invalid SK expression")
 }
