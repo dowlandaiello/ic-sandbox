@@ -70,6 +70,7 @@ pub enum Token {
     Ident(String),
     Dot,
     Eq,
+    Newline,
 }
 
 impl fmt::Display for Token {
@@ -81,36 +82,26 @@ impl fmt::Display for Token {
             Self::Ident(s) => write!(f, "{}", s),
             Self::Dot => write!(f, "."),
             Self::Eq => write!(f, "="),
+            Self::Newline => write!(f, "\n"),
         }
     }
 }
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
-    let comment = just(COMMENT_STR).then_ignore(text::newline().not().repeated());
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let lambda = just("\\").map(|_| Token::Lambda);
     let ident = text::ident().map(|i| Token::Ident(i));
     let dot = just(".").map(|_| Token::Dot);
     let eq = just("=").map(|_| Token::Eq);
+    let newline = text::newline().map(|_| Token::Newline);
 
-    let tok = choice((left_paren, right_paren, lambda, ident, dot, eq));
+    let tok = choice((left_paren, right_paren, lambda, ident, dot, eq, newline));
 
-    tok.padded_by(text::whitespace())
+    tok.padded_by(just(" ").or_not())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
-        .separated_by(
-            comment
-                .padded()
-                .map(|_| ())
-                .or(text::newline())
-                .repeated()
-                .at_least(1),
-        )
-        .allow_leading()
-        .allow_trailing()
         .then_ignore(end())
-        .flatten()
 }
 
 pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simple<Spanned<Token>>> {
@@ -174,7 +165,8 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
         )
     });
 
-    def.repeated()
+    def.then_ignore(span_just(Token::Newline).repeated().at_least(1))
+        .repeated()
         .then(expr.map_with_span(|e, span: Span| Spanned(Stmt::Expr(e.0), span)))
         .map(|(mut defs, entry)| {
             defs.push(entry);
