@@ -2,10 +2,25 @@ use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
 use std::fmt;
 
+const COMMENT_STR: &str = "--";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     Def { bind_name: String, def: Expr },
     Expr(Expr),
+}
+
+impl fmt::Display for Stmt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Def { bind_name, def } => {
+                write!(f, "{} = {}", bind_name, def)
+            }
+            Self::Expr(e) => {
+                write!(f, "{}", e)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -31,12 +46,12 @@ impl fmt::Display for Expr {
             Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
             Self::Application { lhs, rhs } => {
                 let lhs_repr = match lhs.as_ref() {
-                    e @ &Self::Id(_) => e.to_string(),
+                    e @ &Self::Id(_) => format!("({})", e),
                     e @ &Self::Abstraction { .. } => format!("({})", e),
                     e @ &Self::Application { .. } => e.to_string(),
                 };
                 let rhs_repr = match rhs.as_ref() {
-                    e @ &Self::Id(_) => e.to_string(),
+                    e @ &Self::Id(_) => format!("({})", e),
                     e @ &Self::Abstraction { .. } => format!("({})", e),
                     e @ &Self::Application { .. } => e.to_string(),
                 };
@@ -54,6 +69,7 @@ pub enum Token {
     Lambda,
     Ident(String),
     Dot,
+    Eq,
 }
 
 impl fmt::Display for Token {
@@ -64,25 +80,40 @@ impl fmt::Display for Token {
             Self::Lambda => write!(f, "\\"),
             Self::Ident(s) => write!(f, "{}", s),
             Self::Dot => write!(f, "."),
+            Self::Eq => write!(f, "="),
         }
     }
 }
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+    let comment = just(COMMENT_STR).then_ignore(text::newline().not().repeated());
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let lambda = just("\\").map(|_| Token::Lambda);
-    let ident = text::ident().map(|s| Token::Ident(s));
+    let ident = text::ident().map(|i| Token::Ident(i));
     let dot = just(".").map(|_| Token::Dot);
+    let eq = just("=").map(|_| Token::Eq);
 
-    choice((left_paren, right_paren, lambda, ident, dot))
-        .padded_by(text::whitespace())
+    let tok = choice((left_paren, right_paren, lambda, ident, dot, eq));
+
+    tok.padded_by(text::whitespace())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
+        .separated_by(
+            comment
+                .padded()
+                .map(|_| ())
+                .or(text::newline())
+                .repeated()
+                .at_least(1),
+        )
+        .allow_leading()
+        .allow_trailing()
         .then_ignore(end())
+        .flatten()
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spanned<Token>>> {
+pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simple<Spanned<Token>>> {
     let span_just = move |val: Token| {
         filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
             tok.0 == val
@@ -93,7 +124,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spa
     Spanned(Token::Ident(i), s) => Spanned(Expr::Id(i), s),
     };
 
-    recursive(|expr| {
+    let expr = recursive(|expr| {
         let abstraction = span_just(Token::Lambda)
             .ignore_then(select! {
             Spanned(Token::Ident(i), s) => Spanned(i, s)
@@ -126,7 +157,30 @@ pub fn parser() -> impl Parser<Spanned<Token>, Spanned<Expr>, Error = Simple<Spa
             });
 
         choice((application, id, abstraction))
-    })
+    });
+
+    let def = select! {
+    Spanned(Token::Ident(i), s) => Spanned(i, s)
+    }
+    .then_ignore(span_just(Token::Eq))
+    .then(expr.clone())
+    .map(|(bind, def)| {
+        Spanned(
+            Stmt::Def {
+                bind_name: bind.0,
+                def: def.0,
+            },
+            bind.1,
+        )
+    });
+
+    def.repeated()
+        .then(expr.map_with_span(|e, span: Span| Spanned(Stmt::Expr(e.0), span)))
+        .map(|(mut defs, entry)| {
+            defs.push(entry);
+
+            defs
+        })
 }
 
 #[cfg(test)]
@@ -137,11 +191,17 @@ mod test {
     fn test_parse_ok() {
         let cases = [
             ("a", "a"),
-            ("(a)(b)", "ab"),
+            ("(a)(b)", "(a)(b)"),
             ("\\a.a", "\\a.a"),
             ("\\f.x", "\\f.x"),
-            ("(\\a.a)(a)", "(\\a.a)a"),
-            ("(\\a.\\b.a)(c)(d)", "(\\a.\\b.a)cd"),
+            ("(\\a.a)(a)", "(\\a.a)(a)"),
+            ("(\\a.\\b.a)(c)(d)", "(\\a.\\b.a)(c)(d)"),
+            (
+                "id = \\x.x
+(id)(x)",
+                "id = \\x.x
+(id)(x)",
+            ),
         ];
 
         for (case, expected) in cases {
@@ -149,7 +209,10 @@ mod test {
                 parser()
                     .parse(lexer().parse(case).unwrap())
                     .unwrap()
-                    .to_string(),
+                    .iter()
+                    .map(|stmt| stmt.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
                 expected
             );
         }

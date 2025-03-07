@@ -1,14 +1,15 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
+use ast_ext::Spanned;
 use chumsky::{error::SimpleReason, prelude::*};
-use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
+use inetlib::reducers::combinators::reduce_dyn;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{fs::OpenOptions, io::Read, path::PathBuf};
 use toyfplib::{
     compiler,
-    parser::{self, Expr},
+    parser::{self, Stmt, Token},
 };
 
-pub fn read_program(in_fname: &str) -> Expr {
+pub fn read_program(in_fname: &str) -> impl Iterator<Item = Stmt> + Clone {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -19,46 +20,62 @@ pub fn read_program(in_fname: &str) -> Expr {
 
     let input_path = PathBuf::from(in_fname);
 
-    let parsed: Expr = assert_parse_ok(input_path.clone(), input.trim());
-
-    parsed
+    assert_parse_ok(input_path.clone(), input.trim())
 }
 
 pub fn repl() {
     let mut rl = DefaultEditor::new().expect("failed to get readline editor");
 
     loop {
-        let readline = rl.readline(">> ");
         let names = Default::default();
+        let mut stmts = String::new();
 
-        match readline {
-            Ok(line) => {
-                let parsed = assert_parse_literal_ok(line.as_str());
-                let combinated = compiler::compile(parsed.clone(), &names);
+        loop {
+            let readline = rl.readline(if stmts.is_empty() { ">> " } else { ".. " });
 
-                if let Some(reduced) = compiler::decompile(reduce_dyn(&combinated).get(0).unwrap())
-                {
-                    println!("{}", reduced);
-                } else {
-                    println!("{}", parsed);
+            match readline {
+                Ok(line) => {
+                    stmts.push_str(&format!("{}\n", line));
+
+                    // This is an expression, we can parse now
+                    if !matches!(
+                        parser::lexer().parse(line).unwrap()[1],
+                        Spanned(Token::Eq, _)
+                    ) {
+                        let parsed = assert_parse_literal_ok(stmts.as_str());
+                        let combinated = compiler::compile(parsed.clone(), &names);
+
+                        if let Some(reduced) =
+                            compiler::decompile(reduce_dyn(&combinated).get(0).unwrap())
+                        {
+                            println!("{}", reduced);
+                        } else {
+                            println!(
+                                "{}",
+                                parsed.map(|x| x.to_string()).collect::<Vec<_>>().join("\n")
+                            );
+                        }
+
+                        break;
+                    }
                 }
-            }
-            Err(ReadlineError::Interrupted) => {
-                return;
-            }
-            Err(ReadlineError::Eof) => {
-                return;
-            }
-            Err(err) => {
-                eprintln!("Error: {:?}", err);
+                Err(ReadlineError::Interrupted) => {
+                    return;
+                }
+                Err(ReadlineError::Eof) => {
+                    return;
+                }
+                Err(err) => {
+                    eprintln!("Error: {:?}", err);
 
-                return;
+                    return;
+                }
             }
         }
     }
 }
 
-pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
+pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt> + Clone {
     let errs: Vec<Simple<char>> = match parser::lexer()
         .parse(input)
         .map_err(|e| {
@@ -80,7 +97,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
             })
         }) {
         Ok(v) => {
-            return v.0;
+            return v.into_iter().map(|Spanned(x, _)| x);
         }
         Err(e) => e,
     };
@@ -118,7 +135,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> Expr {
     panic!()
 }
 
-pub fn assert_parse_literal_ok(input: &str) -> Expr {
+pub fn assert_parse_literal_ok(input: &str) -> impl Iterator<Item = Stmt> + Clone {
     let errs: Vec<Simple<char>> = match parser::lexer()
         .parse(input)
         .map_err(|e| {
@@ -137,7 +154,7 @@ pub fn assert_parse_literal_ok(input: &str) -> Expr {
             })
         }) {
         Ok(v) => {
-            return v.0;
+            return v.into_iter().map(|Spanned(x, _)| x);
         }
         Err(e) => e,
     };

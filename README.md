@@ -45,6 +45,20 @@ Type `cargo run --bin toyfp dev --sk` to enter the SK combinator -> interaction 
 
 Type `cargo test` to run tests. One which is in-progress will fail in `toyfp`.
 
+## Lambda Calculus Syntax
+
+Compile-time aliases and comments are supported:
+
+```haskell
+-- Returns arg
+id = \x.x
+
+-- Returns first arg
+t  = \a.\b.a
+
+(id)(t)
+```
+
 ## IC IR Syntax
 
 In modified, informal Backus-Naur Form notation:

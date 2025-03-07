@@ -1,5 +1,5 @@
 use super::{
-    parser::Expr,
+    parser::{Expr, Stmt},
     parser_icalc::{
         Abstraction, Application, Definition, Duplication, Expr as IExpr, Stmt as IStmt,
         Superposition, Var as IVar,
@@ -517,7 +517,7 @@ fn mk_sks() -> SkExpr {
     )
 }
 
-pub fn compile(e: Expr, names: &NameIter) -> AstPort {
+pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> AstPort {
     fn precompile(e: Expr) -> SkExpr {
         match e {
             Expr::Id(v) => SkExpr::Var(v),
@@ -544,7 +544,40 @@ pub fn compile(e: Expr, names: &NameIter) -> AstPort {
         }
     }
 
-    let sk = precompile(e);
+    fn inline(e: Expr, def_table: &BTreeMap<String, Expr>) -> Expr {
+        match e {
+            Expr::Abstraction { bind_id, body } => Expr::Abstraction {
+                bind_id,
+                body: Box::new(inline(*body, def_table)),
+            },
+            Expr::Application { lhs, rhs } => Expr::Application {
+                lhs: Box::new(inline(*lhs, def_table)),
+                rhs: Box::new(inline(*rhs, def_table)),
+            },
+            Expr::Id(id) => def_table.get(&id).cloned().unwrap_or(Expr::Id(id)),
+        }
+    }
+
+    let def_table = stmts
+        .clone()
+        .filter_map(|stmt| match stmt {
+            Stmt::Def { bind_name, def: d } => Some((bind_name.clone(), d.clone())),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let expr = stmts
+        .into_iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::Expr(e) => Some(e),
+            _ => None,
+        })
+        .next()
+        .unwrap();
+
+    let inlined = inline(expr, &def_table);
+
+    let sk = precompile(inlined);
     compile_sk(sk, names)
 }
 
