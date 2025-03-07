@@ -9,6 +9,15 @@ pub enum Expr {
     Application { lhs: Box<Expr>, rhs: Box<Expr> },
 }
 
+impl Expr {
+    pub fn as_id(&self) -> Option<&str> {
+        match self {
+            Self::Id(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -517,9 +517,28 @@ pub fn compile(e: Expr, names: &NameIter) -> AstPort {
             Expr::Application { lhs, rhs } => {
                 SkExpr::Call(Box::new(precompile(*lhs)), Box::new(precompile(*rhs)))
             }
-            Expr::Abstraction { bind_id, body } => {
-                todo!()
-            }
+            Expr::Abstraction { bind_id, body } => match *body {
+                Expr::Id(constant) if constant == bind_id => {
+                    return SkExpr::Call(
+                        Box::new(SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))),
+                        Box::new(SkExpr::K),
+                    )
+                }
+                Expr::Application { lhs, rhs } => SkExpr::Call(
+                    Box::new(SkExpr::Call(
+                        Box::new(SkExpr::S),
+                        Box::new(precompile(Expr::Abstraction {
+                            bind_id: bind_id.clone(),
+                            body: lhs,
+                        })),
+                    )),
+                    Box::new(precompile(Expr::Abstraction {
+                        bind_id: bind_id.clone(),
+                        body: rhs,
+                    })),
+                ),
+                cnstnt => SkExpr::Call(Box::new(SkExpr::K), Box::new(precompile(cnstnt))),
+            },
         }
     }
 
@@ -528,7 +547,14 @@ pub fn compile(e: Expr, names: &NameIter) -> AstPort {
 }
 
 pub fn decompile(p: &AstPort) -> Option<Expr> {
-    todo!()
+    let names = Default::default();
+
+    let dec_sk = decode_sk(p, &names);
+
+    match dec_sk {
+        SkExpr::Var(v) => Some(Expr::Id(v)),
+        _ => todo!(),
+    }
 }
 
 #[cfg(test)]
