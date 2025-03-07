@@ -20,6 +20,7 @@ This will drop you into a lambda calculus shell utilizing a compiler from lambda
 - `icc` contains implementations of:
   - various parsers for interaction net and combinator syntaxes
   - various compilers, virtual machines, and interpreters for interaction nets and combinators
+  - most folders in this area of the repo are vestigal from incomplete previous attempts at implementing the VM. The current runtime resides in [`reducers/combinators/buffered/matrix_reducer/reducer.rs`](https://github.com/dowlandaiello/ic-sandbox/blob/master/icc/src/reducers/combinators/buffered/adjacency_matrix/reducer.rs). There is more work that needs to be done to improve performance, and I am working towards a lockless version of the runtime.
 - `toyfp` contains a compiler from the SK combinators to my interaction combinator language and a compiler form lambda calculus to my interaction combinator language
 - `ast-ext` contains some utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
 
