@@ -16,9 +16,11 @@ Home of my self-directed research into the interaction combinators.
 Two notable entrypoints are:
 
 - The `icc` binary, which contains an interaction combinator REPL, interpreter, and syntax checker
-- The `toyfp` binary, which contains a repl for the SK combinators targeting my interaction combinator VM
+- The `toyfp` binary, which contains a repl for the lambda calculus and the SK combinators based on a compiler to my interaction combinator IR language
 
 Type `cargo run --bin icc dev` to enter the interaction combinator REPL. The syntax is relatively obscure and not easily readable, but is documented below.
+
+Type `cargo run --bin toyfp dev` to enter the lambda calculus -> interaction combinator REPL. `(x)(y)` for application, `(\x.x)` for abstraction. **I recommend trying out this command with the `RUST_LOG=trace` environment variable set to demonstrate everything going on under the hood.** Doing so will display a log of the conversion to interaction combinators, all the steps in reduction, all the steps in compilation, and all the steps in decoding.
 
 Type `cargo run --bin toyfp dev --sk` to enter the SK combinator -> interaction combinator REPL. Use S or K for the combinators, respectively and parenthesis for application: `((KS)K) => S`. **I recommend trying out this command with the `RUST_LOG=trace` environment variable set to demonstrate everything going on under the hood.** Doing so will display a log of the conversion to interaction combinators, all the steps in reduction, all the steps in compilation, and all the steps in decoding.
 
