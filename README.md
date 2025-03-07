@@ -7,6 +7,10 @@ Home of my self-directed research into the interaction combinators.
 ```bash
 git clone git@github.com:dowlandaiello/ic-playground.git
 cargo run --bin toyfp dev
+
+>> (\x.x)(a)
+>> (\x.(\a.a)(x))(a)
+>> (\x.(\a.x)(x))(a)
 ```
 
 This will drop you into a lambda calculus shell utilizing a compiler from lambda calculus to the SK combinators to my interaction combinator intermediate representation language. Reduction is powered by my interaction combinator VM. Note that some partially applied functions are not decodeable yet. See *in progress*.
