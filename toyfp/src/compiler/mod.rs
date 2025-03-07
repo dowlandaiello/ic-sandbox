@@ -510,6 +510,13 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
     builder
 }
 
+fn mk_sks() -> SkExpr {
+    SkExpr::Call(
+        Box::new(SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))),
+        Box::new(SkExpr::K),
+    )
+}
+
 pub fn compile(e: Expr, names: &NameIter) -> AstPort {
     fn precompile(e: Expr) -> SkExpr {
         match e {
@@ -518,12 +525,7 @@ pub fn compile(e: Expr, names: &NameIter) -> AstPort {
                 SkExpr::Call(Box::new(precompile(*lhs)), Box::new(precompile(*rhs)))
             }
             Expr::Abstraction { bind_id, body } => match *body {
-                Expr::Id(constant) if constant == bind_id => {
-                    return SkExpr::Call(
-                        Box::new(SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))),
-                        Box::new(SkExpr::K),
-                    )
-                }
+                Expr::Id(constant) if constant == bind_id => mk_sks(),
                 Expr::Application { lhs, rhs } => SkExpr::Call(
                     Box::new(SkExpr::Call(
                         Box::new(SkExpr::S),
@@ -551,10 +553,20 @@ pub fn decompile(p: &AstPort) -> Option<Expr> {
 
     let dec_sk = decode_sk(p, &names);
 
-    match dec_sk {
-        SkExpr::Var(v) => Some(Expr::Id(v)),
-        _ => todo!(),
+    if let SkExpr::Var(v) = dec_sk {
+        return Some(Expr::Id(v));
     }
+
+    if dec_sk == mk_sks() {
+        let bind_name = names.next_var_name();
+
+        return Some(Expr::Abstraction {
+            bind_id: bind_name.clone(),
+            body: Box::new(Expr::Id(bind_name.clone())),
+        });
+    }
+
+    unimplemented!()
 }
 
 #[cfg(test)]

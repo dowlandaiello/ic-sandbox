@@ -3,6 +3,12 @@ use chumsky::prelude::*;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq)]
+pub enum Stmt {
+    Def { bind_name: String, def: Expr },
+    Expr(Expr),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     Id(String),
     Abstraction { bind_id: String, body: Box<Expr> },

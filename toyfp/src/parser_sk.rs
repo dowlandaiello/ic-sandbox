@@ -2,7 +2,7 @@ use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
 use std::fmt;
 
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Expr {
     Call(Box<Expr>, Box<Expr>),
     S,

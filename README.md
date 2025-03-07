@@ -2,14 +2,22 @@
 
 Home of my self-directed research into the interaction combinators.
 
+## Quick Start
+
+```bash
+git clone git@github.com:dowlandaiello/ic-playground.git
+cargo run --bin toyfp dev
+```
+
+This will drop you into a lambda calculus shell utilizing a compiler from lambda calculus to the SK combinators to my interaction combinator intermediate representation language. Reduction is powered by my interaction combinator VM. Note that some partially applied functions are not decodeable yet. See *in progress*.
+
 ## Directory
 
 - `icc` contains implementations of:
   - various parsers for interaction net and combinator syntaxes
   - various compilers, virtual machines, and interpreters for interaction nets and combinators
-- `toyfp` contains a compiler from the SK combinators to my interaction combinator language
-- `formalfp` contains a compiler written in Lean from the BCKW combinators to my interaction combinator language
-- `astext` contains some utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
+- `toyfp` contains a compiler from the SK combinators to my interaction combinator language and a compiler form lambda calculus to my interaction combinator language
+- `ast-ext` contains some utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
 
 ## Usage
 
@@ -61,18 +69,13 @@ Constr[@1](Constr[@2](a, b)#0, Constr[@3](c, d)#0) >< Constr[@4](Constr[@5](e, f
 
 All of these packages are in progress. `icc` has stabilized, and the runtime is working, featuring parallelism. More optimization needs to be done, but it is demonstrated to be correct via unit tests.
 
-`toyfp` contains multiple compilers, the only semi-complete one being the SK combinator compiler. However, some expressions cannot be decoded properly (partially applied expressions that do not reduce to just S or K), and some do not behave as expected. The extent of incompleteness is not clear.
+`toyfp` contains multiple compilers, the only semi-complete ones being the SK combinator and lambda calculus compilers. However, some expressions cannot be decoded properly (partially applied expressions that do not reduce to just S or K, Sxy, Sx, or Kx).
 
 Extensive refactoring needs to be completed across the entire project, as many components were added ad-hoc, with little regard for structure or cleanliness, in an attempt to iterate rapidly.
 
 ## In Progress
 
-I am currently working on a more formal compiler from a high level language to my interaction combinator VM. Specifically, I am working on a compiler in Lean from the BCKW combinators to the interaction combinators. So far, I have prototyped an implementation of the BCKW combinators in the interaction combinator paradigm, pictured in an abbreviated form below. Note that decoder agents are omitted in places where they are obvious.
-
-![pic 1](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_1.png?raw=true)
-![pic 2](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_2.png?raw=true)
-![pic 3](https://github.com/dowlandaiello/ic-sandbox/blob/master/.github/img/BCKW_-_page_3.png?raw=true)
-
+I am currently working on generalizing the readbacking algorithm from interaction combinators to SK combinators. This should enable decoding more kinds of partially applied functions, enabling greater expressivity.
 Furthermore, I have many optimizations in the pipeline for my interaction combinator runtime. I hope to finalize my BCKW compiler before this is completed.
 
 ## References
