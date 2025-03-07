@@ -2,6 +2,10 @@
 
 Home of my self-directed research into the interaction combinators.
 
+## Abstract
+
+**In progress.** This repository is essentially an aggregate of all the technical work I completed over the past four months. I hope to consolidate my relevant theoretical findings, and attach them here in a Pdf.
+
 ## Quick Start
 
 ```bash
