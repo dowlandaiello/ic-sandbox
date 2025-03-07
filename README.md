@@ -28,7 +28,7 @@ This will drop you into a lambda calculus (LC) shell. The shell utilizes a compi
   - various compilers, virtual machines, and interpreters for interaction nets and combinators
   - Most folders in this area of the repo are vestigal from incomplete previous attempts at implementing the VM. The current runtime resides in [`reducers/combinators/buffered/matrix_reducer/reducer.rs`](https://github.com/dowlandaiello/ic-sandbox/blob/master/icc/src/reducers/combinators/buffered/adjacency_matrix/reducer.rs). There is more work that needs to be done to improve performance, and I am working towards a lockless version of the runtime.
 - `toyfp` contains a compiler from the SK combinators to my interaction combinator language and a compiler from the lambda calculus to my interaction combinator language
-- `ast-ext` contains some utilities for debugging tree-like or graphical structures, which are found frequently in the interaction combinator paradigm
+- `ast-ext` contains utilities for debugging graphical structures, which are found frequently in the interaction combinator paradigm
 
 ## Usage
 
@@ -41,7 +41,7 @@ Type `cargo run --bin icc dev` to enter the interaction combinator REPL. The syn
 
 Type `cargo run --bin toyfp dev` to enter the lambda calculus -> interaction combinator REPL. `(x)(y)` for application, `(\x.x)` for abstraction. **I recommend trying out this command with the `RUST_LOG=trace` environment variable set to demonstrate everything going on under the hood.** Doing so will display a log of the conversion to interaction combinators, all the steps in reduction, all the steps in compilation, and all the steps in decoding.
 
-Type `cargo run --bin toyfp dev --sk` to enter the SK combinator -> interaction combinator REPL. Use S or K for the combinators, respectively and parenthesis for application: `((KS)K) => S`. **I recommend trying out this command with the `RUST_LOG=trace` environment variable set to demonstrate everything going on under the hood.** Doing so will display a log of the conversion to interaction combinators, all the steps in reduction, all the steps in compilation, and all the steps in decoding.
+Type `cargo run --bin toyfp dev --sk` to enter the SK combinator -> interaction combinator REPL. Use S or K for the combinators, respectively and parenthesis for application: `((KS)K) => S`.
 
 Type `cargo test` to run tests. One which is in-progress will fail in `toyfp`.
 
@@ -101,4 +101,4 @@ Among others which escape my mind at the moment.
 
 ## Thanks
 
-Thanks for stopping by! :D
+Thanks for stopping by!
