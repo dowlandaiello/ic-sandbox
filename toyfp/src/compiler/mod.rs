@@ -558,6 +558,19 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_eval_var_discard() {
+        let (case, expected) = ("((Ka)b)", "a");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
     fn test_eval_k_simple() {
         let (case, expected) = ("K", "K");
         let names = Default::default();
