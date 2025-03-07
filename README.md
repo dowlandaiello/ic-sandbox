@@ -4,9 +4,11 @@ Home of my self-directed research into the interaction combinators.
 
 ## Abstract
 
-**In progress.** This repository is essentially an aggregate of all the technical work I completed over the past four months. I hope to consolidate my relevant theoretical findings, and attach them here in a Pdf.
+**In progress.** This repository is essentially an aggregate of all the technical work I completed over the past four months. I hope to consolidate my relevant theoretical findings, and attach them in a PDF.
 
 ## Quick Start
+
+Note: this requires installing the Rust toolchain, which provides the `cargo` command.
 
 ```bash
 git clone git@github.com:dowlandaiello/ic-playground.git
@@ -17,7 +19,7 @@ cargo run --bin toyfp dev
 >> (\x.(\a.x)(x))(a)
 ```
 
-This will drop you into a lambda calculus shell utilizing a compiler from lambda calculus to the SK combinators to my interaction combinator intermediate representation language. Reduction is powered by my interaction combinator VM. Note that some partially applied functions are not decodeable yet. See *in progress*.
+This will drop you into a lambda calculus (LC) shell. The shell utilizes a compiler from LC to the SK combinators, and from the SK combinators to my interaction combinator IR language. Reduction is handled by my interaction combinator VM. Note that some partially applied functions are not readbackable yet (though they are functional). See *in progress*.
 
 ## Directory
 
