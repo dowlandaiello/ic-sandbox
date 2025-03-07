@@ -612,6 +612,19 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_eval_return_partial() {
+        let (case, expected) = ("((K(KS))K)", "(KS)");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
     fn test_eval_partial() {
         let (case, expected) = ("(KK)", "(KK)");
         let names = Default::default();
