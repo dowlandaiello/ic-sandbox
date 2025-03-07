@@ -7,10 +7,13 @@ use super::{
     parser_sk::Expr as SkExpr,
 };
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
-use inetlib::parser::{
-    ast_combinators::{Constructor, Duplicator, Expr as CExpr, Port as AstPort, Var},
-    ast_lafont::Ident,
-    naming::NameIter,
+use inetlib::{
+    parser::{
+        ast_combinators::{Constructor, Duplicator, Expr as CExpr, Port as AstPort, Var},
+        ast_lafont::Ident,
+        naming::NameIter,
+    },
+    reducers::combinators::reduce_dyn,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -373,7 +376,46 @@ pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
 
     println!("{}", p.clone().iter_tree_visitor().into_string());
 
-    OwnedNetBuilder::decombinate(p, names).expect("invalid SK expression")
+    // Incomplete calls are:
+    // Kx
+    //
+    // Sx
+    // Sxy
+    let alphabet = [SkExpr::S, SkExpr::K];
+
+    let incompletes = alphabet
+        .iter()
+        .map(|sk_expr| SkExpr::Call(Box::new(SkExpr::K), Box::new(sk_expr.clone())))
+        .chain(
+            alphabet
+                .iter()
+                .map(|sk_expr| SkExpr::Call(Box::new(SkExpr::S), Box::new(sk_expr.clone()))),
+        )
+        .chain(
+            alphabet
+                .iter()
+                .map(|arg_1| alphabet.iter().map(|arg_2| (arg_1.clone(), arg_2.clone())))
+                .flatten()
+                .map(|(arg_1, arg_2)| {
+                    SkExpr::Call(
+                        Box::new(SkExpr::Call(Box::new(SkExpr::S), Box::new(arg_1.clone()))),
+                        Box::new(arg_2.clone()),
+                    )
+                }),
+        );
+
+    OwnedNetBuilder::decombinate(p, names)
+        .or_else(|| {
+            incompletes
+                .filter_map(|expr| {
+                    let cc = compile_sk(expr.clone(), names);
+                    let cmp = reduce_dyn(&cc).remove(0);
+
+                    OwnedNetBuilder::decombinate_expr(p.clone(), cmp).then(|| expr)
+                })
+                .next()
+        })
+        .expect("invalid SK expression")
 }
 
 fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNetBuilder {
@@ -584,7 +626,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_partial_s_arg() {
-        let (case, expected) = ("(KS)", "(KK)");
+        let (case, expected) = ("(KS)", "(KS)");
         let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();

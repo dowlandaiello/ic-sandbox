@@ -187,27 +187,10 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .then(|| SkExpr::S)
         };
 
-        let alphabet = [
-            (CombinatorBuilder::S { primary_port: None }, SkExpr::S),
-            (CombinatorBuilder::K { primary_port: None }, SkExpr::K),
-        ];
-
-        let alphabet_incomplete_s = alphabet.iter().combinations(2).map(|sequence| {
-            [(CombinatorBuilder::S { primary_port: None }, SkExpr::S)]
-                .into_iter()
-                .chain(sequence.into_iter().cloned())
-        });
-        let alphabet_incomplete_k = alphabet.iter().combinations(1).map(|sequence| {
-            [(CombinatorBuilder::K { primary_port: None }, SkExpr::K)]
-                .into_iter()
-                .chain(sequence.into_iter().cloned())
-        });
-
         s(p.clone())
             .or_else(|| k(p.clone()))
             .or_else(|| k_code(p.clone()))
             .or_else(|| s_code(p.clone()))
-            .or_else(|| todo!())
     }
 
     fn combinate(&self) -> Self::CPort {
@@ -865,7 +848,7 @@ impl OwnedNetBuilder {
         Self(Rc::new(RefCell::new(b.to_named(names))))
     }
 
-    fn decombinate_expr(p: AstPort, cmp: AstPort) -> bool {
+    pub(crate) fn decombinate_expr(p: AstPort, cmp: AstPort) -> bool {
         tracing::trace!("found    {}", p);
         tracing::trace!("expected {}", cmp);
 
