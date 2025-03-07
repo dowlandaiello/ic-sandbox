@@ -374,8 +374,6 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
 pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
     tracing::trace!("decoding {}", p);
 
-    println!("{}", p.clone().iter_tree_visitor().into_string());
-
     // Incomplete calls are:
     // Kx
     //
@@ -545,6 +543,19 @@ mod test {
     use inetlib::reducers::combinators::{
         buffered::adjacency_matrix::ReducerBuilder, reduce_dyn, Reducer,
     };
+
+    #[test_log::test]
+    fn test_eval_var_simple() {
+        let (case, expected) = ("((Ka)K)", "a");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
 
     #[test_log::test]
     fn test_eval_k_simple() {

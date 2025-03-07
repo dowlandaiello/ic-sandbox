@@ -174,6 +174,14 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .then(|| SkExpr::S)
         };
 
+        let var = |p: AstPort| {
+            p.iter_tree()
+                .filter_map(|x| x.borrow().as_var().map(|x| x.name.0.clone()))
+                .filter(|name| !name.starts_with("v"))
+                .next()
+                .map(|v| SkExpr::Var(v))
+        };
+
         let s_code = |p| {
             let mut names = Default::default();
 
@@ -191,6 +199,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .or_else(|| k(p.clone()))
             .or_else(|| k_code(p.clone()))
             .or_else(|| s_code(p.clone()))
+            .or_else(|| var(p.clone()))
     }
 
     fn combinate(&self) -> Self::CPort {
