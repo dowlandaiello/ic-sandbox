@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use inetlib::parser::naming::NameIter;
+use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
 use std::path::PathBuf;
 use toyfplib::compiler;
 
@@ -7,12 +7,6 @@ mod cli;
 
 fn main() {
     tracing_subscriber::fmt::init();
-
-    let flag_icalc = Arg::new("icalc")
-        .long("icalc")
-        .short('i')
-        .action(ArgAction::SetTrue)
-        .help("use the interaction calculus as the input mode");
 
     let flag_sk = Arg::new("sk")
         .long("sk")
@@ -89,29 +83,20 @@ fn main() {
                 return;
             }
 
-            if arg_matches.get_flag("icalc") {
-                let res = cli::icalc::eval(input_fname);
+            let names = Default::default();
 
-                res.iter().for_each(|x| println!("{}", x));
+            let prog = cli::lambda::read_program(input_fname);
+            let compiled = compiler::compile(prog, &names);
 
-                return;
-            }
+            let reduced = compiler::decompile(reduce_dyn(&compiled).get(0).unwrap()).unwrap();
 
-            todo!()
+            println!("{}", reduced);
         }
         Some(("compile", arg_matches)) => {
             let input_fname = arg_matches
                 .get_one::<String>("source")
                 .expect("missing source file name");
             let names = Default::default();
-
-            if arg_matches.get_flag("icalc") {
-                let res = cli::icalc::compile(input_fname);
-
-                res.iter().for_each(|x| println!("{}", x));
-
-                return;
-            }
 
             let mut out_fname = PathBuf::from(input_fname);
             out_fname.set_extension("d");
