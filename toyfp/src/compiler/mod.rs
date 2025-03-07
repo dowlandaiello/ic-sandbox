@@ -23,7 +23,7 @@ pub trait CombinatorBuilder: Sized {
 
     fn decombinate(p: &Self::CPort, names: &NameIter) -> Option<Self::EExpr>;
 
-    fn combinate(&self, names: &NameIter) -> Self::CPort;
+    fn combinate(&self) -> Self::CPort;
 
     fn expand_step(&self, names: &NameIter) -> Self;
 }
@@ -350,8 +350,6 @@ pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String
 pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
     let cc = build_compilation_expr(e.clone(), false, &names);
 
-    if !matches!(e, SkExpr::S) && !matches!(e, SkExpr::K) {}
-
     #[cfg(test)]
     cc.checksum();
 
@@ -362,7 +360,7 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
     #[cfg(test)]
     cc.checksum();
 
-    let combinated = cc.combinate(&names);
+    let combinated = cc.combinate();
 
     #[cfg(test)]
     combinated.checksum();

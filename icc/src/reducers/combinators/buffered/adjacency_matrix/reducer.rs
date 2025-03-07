@@ -149,6 +149,126 @@ impl ReducerBuilder {
         }
     }
 
+    pub fn with_init_nets_redexes<'a>(
+        mut self,
+        nets: impl Iterator<Item = &'a Port> + Clone,
+        redexes: impl Iterator<Item = (usize, usize)>,
+    ) -> CapacitiedBufferedMatrixReducerBuilder {
+        let n_nodes = nets.clone().map(|net| net.iter_tree().count()).sum();
+
+        let buff = MatrixBuffer::new_with_capacity_nodes(n_nodes);
+        let mut root_redexes = BTreeSet::new();
+
+        let slots_for_ast_elems: BTreeMap<usize, usize> = nets
+            .clone()
+            .map(|net| {
+                net.iter_tree()
+                    .enumerate()
+                    .map(|(i, elem)| {
+                        self.names.insert(i, elem.id);
+
+                        let discriminant = match &*elem.borrow() {
+                            Expr::Constr(_) => Cell::Constr,
+                            Expr::Dup(_) => Cell::Dup,
+                            Expr::Era(_) => Cell::Era,
+                            Expr::Var(ident) => {
+                                self.idents.insert(i, ident.name.to_string());
+
+                                Cell::Var(i)
+                            }
+                        };
+
+                        let ins_id = buff.push(discriminant);
+
+                        tracing::trace!("expr {:?} -> cell {}", elem, ins_id);
+
+                        (elem.id, ins_id)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .flatten()
+            .collect();
+
+        redexes.for_each(|(a, b)| {
+            let a_slot = slots_for_ast_elems.get(&a).unwrap();
+            let b_slot = slots_for_ast_elems.get(&b).unwrap();
+
+            root_redexes.insert(BTreeSet::from_iter([
+                Conn {
+                    cell: *a_slot,
+                    port: 0,
+                },
+                Conn {
+                    cell: *b_slot,
+                    port: 0,
+                },
+            ]));
+        });
+
+        // Wire nodes
+        nets.for_each(|net| {
+            net.iter_tree().for_each(|elem| {
+                let slot = slots_for_ast_elems.get(&elem.id).unwrap();
+
+                tracing::trace!("walking expr {:?} (cell: {}) for linking", elem, slot);
+
+                elem.iter_ports()
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| Some((i, x?)))
+                    .for_each(|(port_self, (port_other, p))| {
+                        let other_slot = slots_for_ast_elems.get(&p.id).unwrap();
+
+                        tracing::trace!(
+                            "linking (cell: {}, port: {}) <-> (cell: {}, port: {})",
+                            slot,
+                            port_self,
+                            other_slot,
+                            port_other,
+                        );
+
+                        let cell_self = buff.get_cell(*slot);
+
+                        cell_self.lock().unwrap().as_mut().unwrap().set_port_i(
+                            port_self as u8,
+                            Some(Conn {
+                                cell: *other_slot,
+                                port: port_other as u8,
+                            }),
+                        );
+
+                        let cell_other = buff.get_cell(*other_slot);
+
+                        cell_other.lock().unwrap().as_mut().unwrap().set_port_i(
+                            port_other as u8,
+                            Some(Conn {
+                                cell: *slot,
+                                port: port_self as u8,
+                            }),
+                        );
+                    });
+            })
+        });
+
+        CapacitiedBufferedMatrixReducerBuilder {
+            cells: buff,
+            idents: self.idents,
+            names: self.names,
+            root_redexes: root_redexes
+                .into_iter()
+                .map(|x| {
+                    let mut elems = x.into_iter();
+
+                    (elems.next().unwrap(), elems.next().unwrap())
+                })
+                .collect(),
+            locked: (0..(n_nodes * n_nodes))
+                .map(|_| AtomicBool::new(false))
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+
     pub fn with_capacity_nodes(self, capacity: usize) -> CapacitiedBufferedMatrixReducerBuilder {
         CapacitiedBufferedMatrixReducerBuilder {
             cells: MatrixBuffer::new_with_capacity_nodes(capacity),
