@@ -114,10 +114,21 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
     // We can trivially detect S or K.
     // Detecting partial application is more difficult.
-    // However, we can still compare against reductions.
-    // Thus, we can reassmble the expression using an
-    // alphabet of "partial" expressions {S_, S__, K_}
     fn decombinate(p: &AstPort, names: &NameIter) -> Option<SkExpr> {
+        let combinate_encoded_cmp = |cmp: OwnedNetBuilder| {
+            cmp.clone().iter_tree().for_each(|x| {
+                x.expand_step(names);
+            });
+
+            println!("bruh {}", p.iter_tree_visitor().into_string());
+
+            cmp.encode(names)
+                .expand_step(names)
+                .make_root(names)
+                .combinate(names)
+                .orient()
+        };
+
         let combinate_cmp = |cmp: OwnedNetBuilder| {
             cmp.clone().iter_tree().for_each(|x| {
                 x.expand_step(names);
@@ -139,12 +150,38 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             .then(|| SkExpr::K)
         };
 
+        let k_code = |p| {
+            let mut names = Default::default();
+
+            Self::decombinate_expr(
+                p,
+                combinate_encoded_cmp(OwnedNetBuilder::new(
+                    CombinatorBuilder::K { primary_port: None },
+                    &mut names,
+                )),
+            )
+            .then(|| SkExpr::K)
+        };
+
         let s = |p| {
             let mut names = Default::default();
 
             Self::decombinate_expr(
                 p,
                 combinate_cmp(OwnedNetBuilder::new(
+                    CombinatorBuilder::S { primary_port: None },
+                    &mut names,
+                )),
+            )
+            .then(|| SkExpr::S)
+        };
+
+        let s_code = |p| {
+            let mut names = Default::default();
+
+            Self::decombinate_expr(
+                p,
+                combinate_encoded_cmp(OwnedNetBuilder::new(
                     CombinatorBuilder::S { primary_port: None },
                     &mut names,
                 )),
@@ -168,7 +205,11 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 .chain(sequence.into_iter().cloned())
         });
 
-        s(p.clone()).or_else(|| k(p.clone())).or_else(|| todo!())
+        s(p.clone())
+            .or_else(|| k(p.clone()))
+            .or_else(|| k_code(p.clone()))
+            .or_else(|| s_code(p.clone()))
+            .or_else(|| todo!())
     }
 
     fn combinate(&self, names: &NameIter) -> Self::CPort {

@@ -350,40 +350,7 @@ pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String
 pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
     let cc = build_compilation_expr(e.clone(), false, &names);
 
-    if !matches!(e, SkExpr::S) && !matches!(e, SkExpr::K) {
-        let var = OwnedNetBuilder::new(
-            SkCombinatorBuilder::Var {
-                primary_port: None,
-                name: names.next_var_name(),
-            },
-            names,
-        );
-
-        let old_var = cc
-            .clone()
-            .iter_tree()
-            .filter(|elem| matches!(elem.0.borrow().builder, SkCombinatorBuilder::Var { .. }))
-            .next()
-            .unwrap();
-
-        let old_primary_port = old_var.0.borrow().builder.primary_port().unwrap().clone();
-
-        old_var.update_with(|_| {
-            let new_builder = SkCombinatorBuilder::D {
-                primary_port: None,
-                aux_port: None,
-            };
-
-            new_builder
-        });
-
-        OwnedNetBuilder::connect(old_primary_port, (0, old_var.clone()));
-        OwnedNetBuilder::connect((0, var.clone()), (1, old_var.clone()));
-
-        old_var.expand_step(names);
-    }
-
-    println!("{}", cc.clone().iter_tree().into_string());
+    if !matches!(e, SkExpr::S) && !matches!(e, SkExpr::K) {}
 
     #[cfg(test)]
     cc.checksum();
@@ -405,6 +372,8 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
 
 pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
     tracing::trace!("decoding {}", p);
+
+    println!("{}", p.clone().iter_tree_visitor().into_string());
 
     OwnedNetBuilder::decombinate(p, names).expect("invalid SK expression")
 }
@@ -616,6 +585,19 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_eval_partial_s_arg() {
+        let (case, expected) = ("(KS)", "(KK)");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
     fn test_eval_partial_s() {
         let (case, expected) = ("(SK)", "(SK)");
         let names = Default::default();
@@ -630,17 +612,13 @@ mod test {
 
     #[test_log::test]
     fn test_eval_s_arg() {
-        let (case, expected) = ("((K(KS))K)", "(S)");
+        let (case, expected) = ("(((K(KS))K)K)", "S");
         let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
-
-        result
-            .iter()
-            .for_each(|x| println!("bruh {}", x.iter_tree_visitor().into_string()));
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
