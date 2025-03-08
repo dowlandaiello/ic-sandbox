@@ -51,12 +51,12 @@ Compile-time aliases and comments are supported:
 
 ```haskell
 -- Returns arg
-id = (\x.x)
+id = \x.x
 
 -- Returns first arg
-t  = (\a.(\b.a))
+t  = \a.\b.a
 
-(id)(t)
+(id t)
 ```
 
 ## IC IR Syntax

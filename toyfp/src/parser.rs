@@ -158,6 +158,8 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
             .clone()
             .then(
                 span_just(Token::Space)
+                    .repeated()
+                    .at_least(1)
                     .ignore_then(expr.clone())
                     .repeated()
                     .at_least(1),
@@ -182,9 +184,9 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
     let def = select! {
     Spanned(Token::Ident(i), s) => Spanned(i, s)
     }
-    .then_ignore(span_just(Token::Space))
+    .then_ignore(span_just(Token::Space).repeated())
     .then_ignore(span_just(Token::Eq))
-    .then_ignore(span_just(Token::Space))
+    .then_ignore(span_just(Token::Space).repeated())
     .then(expr.clone())
     .map(|(bind, def)| {
         Spanned(
