@@ -77,7 +77,7 @@ pub fn repl() {
 
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt> + Clone {
     let errs: Vec<Simple<char>> = match parser::lexer()
-        .parse(input)
+        .parse(parser::preprocessor().parse(input).unwrap())
         .map_err(|e| {
             e.into_iter()
                 .map(|e| e.with_label("lexing error"))
@@ -139,7 +139,7 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt
 
 pub fn assert_parse_literal_ok(input: &str) -> impl Iterator<Item = Stmt> + Clone {
     let errs: Vec<Simple<char>> = match parser::lexer()
-        .parse(input)
+        .parse(parser::preprocessor().parse(input).unwrap())
         .map_err(|e| {
             e.into_iter()
                 .map(|e| e.with_label("lexing error"))

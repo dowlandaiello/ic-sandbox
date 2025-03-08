@@ -510,7 +510,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
     builder
 }
 
-fn mk_sks() -> SkExpr {
+fn mk_id() -> SkExpr {
     SkExpr::Call(
         Box::new(SkExpr::Call(Box::new(SkExpr::S), Box::new(SkExpr::K))),
         Box::new(SkExpr::K),
@@ -521,26 +521,42 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     fn precompile(e: Expr) -> SkExpr {
         match e {
             Expr::Id(v) => SkExpr::Var(v),
+            // This is an app of vars or consts
             Expr::Application { lhs, rhs } => {
                 SkExpr::Call(Box::new(precompile(*lhs)), Box::new(precompile(*rhs)))
             }
-            Expr::Abstraction { bind_id, body } => match *body {
-                Expr::Id(constant) if constant == bind_id => mk_sks(),
-                Expr::Application { lhs, rhs } => SkExpr::Call(
-                    Box::new(SkExpr::Call(
-                        Box::new(SkExpr::S),
+            Expr::Abstraction { bind_id, body } => {
+                // Var no tused for anything
+                if !body.contains_var(&bind_id) {
+                    return SkExpr::Call(Box::new(SkExpr::K), Box::new(precompile(*body)));
+                }
+
+                match *body {
+                    // I combinator
+                    Expr::Id(id) if id == bind_id => mk_id(),
+                    // S transformation
+                    Expr::Application { lhs, rhs } => SkExpr::Call(
+                        Box::new(SkExpr::Call(
+                            Box::new(SkExpr::S),
+                            Box::new(precompile(Expr::Abstraction {
+                                bind_id: bind_id.clone(),
+                                body: Box::new(*lhs),
+                            })),
+                        )),
                         Box::new(precompile(Expr::Abstraction {
                             bind_id: bind_id.clone(),
-                            body: lhs,
+                            body: Box::new(*rhs),
                         })),
-                    )),
-                    Box::new(precompile(Expr::Abstraction {
-                        bind_id: bind_id.clone(),
-                        body: rhs,
-                    })),
-                ),
-                cnstnt => SkExpr::Call(Box::new(SkExpr::K), Box::new(precompile(cnstnt))),
-            },
+                    ),
+                    _ => SkExpr::Call(
+                        Box::new(SkExpr::S),
+                        Box::new(SkExpr::Call(
+                            Box::new(SkExpr::K),
+                            Box::new(precompile(*body)),
+                        )),
+                    ),
+                }
+            }
         }
     }
 
@@ -577,7 +593,12 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
     let inlined = inline(expr, &def_table);
 
+    println!("{}", inlined);
+
     let sk = precompile(inlined);
+
+    println!("{}", sk);
+
     compile_sk(sk, names)
 }
 
@@ -590,7 +611,7 @@ pub fn decompile(p: &AstPort) -> Option<Expr> {
         return Some(Expr::Id(v));
     }
 
-    if dec_sk == mk_sks() {
+    if dec_sk == mk_id() {
         let bind_name = names.next_var_name();
 
         return Some(Expr::Abstraction {

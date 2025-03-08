@@ -31,6 +31,22 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn contains_var(&self, v: &str) -> bool {
+        match self {
+            Self::Id(c) => c == v,
+            Self::Abstraction { bind_id, body } => bind_id == v || body.contains_var(v),
+            Self::Application { lhs, rhs } => lhs.contains_var(v) || rhs.contains_var(v),
+        }
+    }
+
+    pub fn contains_lambda(&self) -> bool {
+        match self {
+            Self::Id(_) => false,
+            Self::Abstraction { .. } => true,
+            Self::Application { lhs, rhs } => lhs.contains_lambda() || rhs.contains_lambda(),
+        }
+    }
+
     pub fn as_id(&self) -> Option<&str> {
         match self {
             Self::Id(s) => Some(s),
@@ -85,6 +101,12 @@ impl fmt::Display for Token {
             Self::Newline => write!(f, "\n"),
         }
     }
+}
+
+pub fn preprocessor() -> impl Parser<char, Vec<char>, Error = Simple<char>> {
+    let comment = just(COMMENT_STR).then_ignore(text::newline().not().repeated());
+
+    any().padded_by(comment.or_not()).repeated()
 }
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
