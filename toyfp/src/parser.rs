@@ -1,6 +1,7 @@
+use super::parser_sk::Expr as SkExpr;
 use ast_ext::{Span, Spanned};
 use chumsky::prelude::*;
-use std::fmt;
+use std::{collections::BTreeSet, fmt};
 
 const COMMENT_STR: &str = "--";
 
@@ -31,6 +32,24 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn free_vars<'a>(&'a self) -> BTreeSet<&'a str> {
+        match &self {
+            Self::Id(i) => BTreeSet::from_iter([i.as_str()]),
+            Self::Abstraction { bind_id, body } => {
+                let mut all = body.free_vars();
+                all.remove(bind_id.as_str());
+
+                all
+            }
+            Self::Application { lhs, rhs } => {
+                let mut lhs_free = lhs.free_vars();
+                lhs_free.extend(&rhs.free_vars());
+
+                lhs_free
+            }
+        }
+    }
+
     pub fn contains_var(&self, v: &str) -> bool {
         match self {
             Self::Id(c) => c == v,

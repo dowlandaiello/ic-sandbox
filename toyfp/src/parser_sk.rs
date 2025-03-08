@@ -10,6 +10,17 @@ pub enum Expr {
     Var(String),
 }
 
+impl Expr {
+    pub fn contains_var(&self, v: &str) -> bool {
+        match self {
+            Self::Call(lhs, rhs) => lhs.contains_var(v) || rhs.contains_var(v),
+            Self::S => false,
+            Self::K => false,
+            Self::Var(other) => v == other,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum SpannedExpr {
     Call(Box<SpannedExpr>, Box<SpannedExpr>),

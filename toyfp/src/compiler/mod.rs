@@ -15,7 +15,10 @@ use inetlib::{
     },
     reducers::combinators::reduce_dyn,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 mod builder;
 mod icalc;
@@ -518,43 +521,108 @@ fn mk_id() -> SkExpr {
 }
 
 pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> AstPort {
-    fn precompile(e: Expr) -> SkExpr {
-        match e {
-            Expr::Id(v) => SkExpr::Var(v),
-            // This is an app of vars or consts
-            Expr::Application { lhs, rhs } => {
-                SkExpr::Call(Box::new(precompile(*lhs)), Box::new(precompile(*rhs)))
-            }
-            Expr::Abstraction { bind_id, body } => {
-                // Var no tused for anything
-                if !body.contains_var(&bind_id) {
-                    return SkExpr::Call(Box::new(SkExpr::K), Box::new(precompile(*body)));
-                }
+    #[derive(Clone, Debug)]
+    enum MixedExpr {
+        S,
+        K,
+        Id(String),
+        Abstraction {
+            bind_id: String,
+            body: Box<MixedExpr>,
+        },
+        Application(Box<MixedExpr>, Box<MixedExpr>),
+    }
 
-                match *body {
-                    // I combinator
-                    Expr::Id(id) if id == bind_id => mk_id(),
-                    // S transformation
-                    Expr::Application { lhs, rhs } => SkExpr::Call(
-                        Box::new(SkExpr::Call(
-                            Box::new(SkExpr::S),
-                            Box::new(precompile(Expr::Abstraction {
+    impl fmt::Display for MixedExpr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::S => write!(f, "S"),
+                Self::K => write!(f, "K"),
+                Self::Id(id) => write!(f, "{}", id),
+                Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
+                Self::Application(lhs, rhs) => write!(f, "({} {})", lhs, rhs),
+            }
+        }
+    }
+
+    impl From<Expr> for MixedExpr {
+        fn from(e: Expr) -> Self {
+            match e {
+                Expr::Abstraction { bind_id, body } => Self::Abstraction {
+                    bind_id,
+                    body: Box::new((*body).into()),
+                },
+                Expr::Application { lhs, rhs } => {
+                    Self::Application(Box::new((*lhs).into()), Box::new((*rhs).into()))
+                }
+                Expr::Id(id) => Self::Id(id),
+            }
+        }
+    }
+
+    impl From<MixedExpr> for SkExpr {
+        fn from(e: MixedExpr) -> Self {
+            match e {
+                MixedExpr::Abstraction { .. } => unreachable!(),
+                MixedExpr::Application(lhs, rhs) => {
+                    Self::Call(Box::new((*lhs).into()), Box::new((*rhs).into()))
+                }
+                MixedExpr::Id(id) => Self::Var(id),
+                MixedExpr::K => Self::K,
+                MixedExpr::S => Self::S,
+            }
+        }
+    }
+
+    impl MixedExpr {
+        fn eliminate(&mut self) {
+            if let Self::Abstraction { bind_id, body } = self {
+                match &**body {
+                    Self::Application(lhs, rhs) => {
+                        *self = Self::Application(
+                            Box::new(Self::Application(
+                                Box::new(Self::S),
+                                Box::new(Self::Abstraction {
+                                    bind_id: bind_id.clone(),
+                                    body: lhs.clone(),
+                                }),
+                            )),
+                            Box::new(Self::Abstraction {
                                 bind_id: bind_id.clone(),
-                                body: Box::new(*lhs),
-                            })),
-                        )),
-                        Box::new(precompile(Expr::Abstraction {
-                            bind_id: bind_id.clone(),
-                            body: Box::new(*rhs),
-                        })),
-                    ),
-                    _ => SkExpr::Call(
-                        Box::new(SkExpr::S),
-                        Box::new(SkExpr::Call(
-                            Box::new(SkExpr::K),
-                            Box::new(precompile(*body)),
-                        )),
-                    ),
+                                body: rhs.clone(),
+                            }),
+                        );
+                    }
+                    Self::Id(id) if id == bind_id => {
+                        *self = Self::Application(
+                            Box::new(Self::Application(Box::new(Self::S), Box::new(Self::K))),
+                            Box::new(Self::S),
+                        );
+                    }
+                    id @ Self::Id(_) => {
+                        *self = Self::Application(Box::new(Self::K), Box::new(id.clone()));
+                    }
+                    cnst => {
+                        *self = Self::Application(Box::new(Self::K), Box::new(cnst.clone()));
+                    }
+                }
+            }
+        }
+
+        fn eliminate_innermost_abstraction(&mut self) -> bool {
+            match self {
+                Self::S => false,
+                Self::K => false,
+                Self::Id(_) => false,
+                Self::Abstraction { body, .. } => {
+                    if !body.eliminate_innermost_abstraction() {
+                        self.eliminate();
+                    }
+
+                    true
+                }
+                Self::Application(lhs, rhs) => {
+                    lhs.eliminate_innermost_abstraction() || rhs.eliminate_innermost_abstraction()
                 }
             }
         }
@@ -572,6 +640,14 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             },
             Expr::Id(id) => def_table.get(&id).cloned().unwrap_or(Expr::Id(id)),
         }
+    }
+
+    fn precompile(e: Expr) -> SkExpr {
+        let mut buffer: MixedExpr = e.into();
+
+        while buffer.eliminate_innermost_abstraction() {}
+
+        buffer.into()
     }
 
     let def_table = stmts

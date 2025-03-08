@@ -50,13 +50,11 @@ Type `cargo test` to run tests. One which is in-progress will fail in `toyfp`.
 Compile-time aliases and comments are supported:
 
 ```haskell
--- Returns arg
-id = \x.x
+id   = \x.x
+z    = \f.\g.g
+one  = \f.\g.(f g)
 
--- Returns first arg
-t  = \a.\b.a
-
-(id t)
+(one id a)
 ```
 
 ## IC IR Syntax
