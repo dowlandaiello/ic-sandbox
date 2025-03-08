@@ -592,12 +592,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         .unwrap();
 
     let inlined = inline(expr, &def_table);
-
-    println!("{}", inlined);
-
     let sk = precompile(inlined);
-
-    println!("{}", sk);
 
     compile_sk(sk, names)
 }
