@@ -84,8 +84,6 @@ pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt
                 .collect::<Vec<_>>()
         })
         .and_then(|res| {
-            println!("{:?}", res);
-
             parser::parser().parse(res).map_err(|e| {
                 e.into_iter()
                     .map(|e| {

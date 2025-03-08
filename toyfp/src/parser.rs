@@ -61,18 +61,7 @@ impl fmt::Display for Expr {
             Self::Id(s) => write!(f, "{}", s),
             Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
             Self::Application { lhs, rhs } => {
-                let lhs_repr = match lhs.as_ref() {
-                    e @ &Self::Id(_) => format!("({})", e),
-                    e @ &Self::Abstraction { .. } => format!("({})", e),
-                    e @ &Self::Application { .. } => e.to_string(),
-                };
-                let rhs_repr = match rhs.as_ref() {
-                    e @ &Self::Id(_) => format!("({})", e),
-                    e @ &Self::Abstraction { .. } => format!("({})", e),
-                    e @ &Self::Application { .. } => e.to_string(),
-                };
-
-                write!(f, "{}{}", lhs_repr, rhs_repr)
+                write!(f, "({} {})", lhs, rhs)
             }
         }
     }
@@ -87,6 +76,7 @@ pub enum Token {
     Dot,
     Eq,
     Newline,
+    Space,
 }
 
 impl fmt::Display for Token {
@@ -99,6 +89,7 @@ impl fmt::Display for Token {
             Self::Dot => write!(f, "."),
             Self::Eq => write!(f, "="),
             Self::Newline => write!(f, "\n"),
+            Self::Space => write!(f, " "),
         }
     }
 }
@@ -117,11 +108,20 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let dot = just(".").map(|_| Token::Dot);
     let eq = just("=").map(|_| Token::Eq);
     let newline = text::newline().map(|_| Token::Newline);
+    let space = just(" ").map(|_| Token::Space);
 
-    let tok = choice((left_paren, right_paren, lambda, ident, dot, eq, newline));
+    let tok = choice((
+        left_paren,
+        right_paren,
+        lambda,
+        ident,
+        dot,
+        eq,
+        newline,
+        space,
+    ));
 
-    tok.padded_by(just(" ").or_not())
-        .map_with_span(|tok, e: Span| Spanned(tok, e))
+    tok.map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
         .then_ignore(end())
 }
@@ -153,12 +153,16 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
                     bind_id.1,
                 )
             });
-        let app_member = expr
+        let application = span_just(Token::LeftParen)
+            .ignore_then(expr.clone())
             .clone()
-            .delimited_by(span_just(Token::LeftParen), span_just(Token::RightParen));
-        let application = app_member
-            .clone()
-            .then(app_member.clone().repeated().at_least(1))
+            .then(
+                span_just(Token::Space)
+                    .ignore_then(expr.clone())
+                    .repeated()
+                    .at_least(1),
+            )
+            .then_ignore(span_just(Token::RightParen))
             .foldl(|a: Spanned<Expr>, b: Spanned<Expr>| {
                 Spanned(
                     Expr::Application {
@@ -168,14 +172,19 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
                     a.1,
                 )
             });
+        let nested_app = span_just(Token::LeftParen)
+            .ignore_then(application.clone())
+            .then_ignore(span_just(Token::RightParen));
 
-        choice((application, id, abstraction))
+        choice((application, id, abstraction, nested_app))
     });
 
     let def = select! {
     Spanned(Token::Ident(i), s) => Spanned(i, s)
     }
+    .then_ignore(span_just(Token::Space))
     .then_ignore(span_just(Token::Eq))
+    .then_ignore(span_just(Token::Space))
     .then(expr.clone())
     .map(|(bind, def)| {
         Spanned(
@@ -205,16 +214,16 @@ mod test {
     fn test_parse_ok() {
         let cases = [
             ("a", "a"),
-            ("(a)(b)", "(a)(b)"),
+            ("(a b)", "(a b)"),
             ("\\a.a", "\\a.a"),
             ("\\f.x", "\\f.x"),
-            ("(\\a.a)(a)", "(\\a.a)(a)"),
-            ("(\\a.\\b.a)(c)(d)", "(\\a.\\b.a)(c)(d)"),
+            ("(\\a.a a)", "(\\a.a a)"),
+            ("(\\a.\\b.a c d)", "((\\a.\\b.a c) d)"),
             (
                 "id = \\x.x
-(id)(x)",
+(id x)",
                 "id = \\x.x
-(id)(x)",
+(id x)",
             ),
         ];
 
