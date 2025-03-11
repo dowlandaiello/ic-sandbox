@@ -4,7 +4,7 @@ use super::{
 };
 use lockfree::queue::Queue;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     iter::DoubleEndedIterator,
     sync::{
@@ -36,6 +36,26 @@ impl fmt::Debug for MatrixBuffer {
 }
 
 impl MatrixBuffer {
+    pub(crate) fn checksum(&self) {
+        self.iter_cells().for_each(|i| {
+            self.iter_ports(i)
+                .enumerate()
+                .filter_map(|(i, x)| Some((i, x?)))
+                .for_each(|(port_self, conn)| {
+                    assert_eq!(
+                        self.iter_ports(conn.cell)
+                            .nth(conn.port as usize)
+                            .unwrap()
+                            .unwrap(),
+                        Conn {
+                            cell: i,
+                            port: port_self as u8
+                        }
+                    );
+                });
+        });
+    }
+
     pub(crate) fn push_next_free(&self, free: usize) {
         self.next_free.push(free);
     }

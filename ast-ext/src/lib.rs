@@ -44,14 +44,25 @@ pub struct TreeVisitor<TValue, TCursor: TreeCursor<TValue>> {
     bruh: PhantomData<TValue>,
 }
 
-impl<TValue, TCursor> TreeVisitor<TValue, TCursor>
+impl<TValue> TreeVisitor<TValue, TValue>
 where
-    TCursor: TreeCursor<TValue>,
-    TValue: VisualDebug,
+    TValue: TreeCursor<TValue> + VisualDebug,
 {
     pub fn into_string(self) -> String {
         let (nodes, conns): (Vec<String>, Vec<Vec<String>>) = self
+            .collect::<Vec<_>>()
+            .into_iter()
             .map(|x| {
+                let conns = x.children().enumerate().map(|(i, other_node)| {
+                    format!(
+                        "{} -- {} [label=\"{} port {}\"]",
+                        x.node_id(),
+                        other_node.node_id(),
+                        x.node_id(),
+                        i
+                    )
+                });
+
                 (
                     format!(
                         "{} [shape=triangle color={} label=\"{}\"]",
@@ -59,7 +70,7 @@ where
                         x.node_color(),
                         x.node_label()
                     ),
-                    (x.conns().collect::<Vec<_>>()),
+                    conns.collect(),
                 )
             })
             .collect();

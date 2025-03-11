@@ -368,14 +368,19 @@ pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
 
     let combinated = cc.combinate();
 
-    #[cfg(test)]
     combinated.checksum();
+
+    tracing::debug!(
+        "encoded {} -> {}",
+        e,
+        combinated.iter_tree_visitor().into_string()
+    );
 
     combinated
 }
 
 pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
-    tracing::trace!("decoding {}", p);
+    tracing::debug!("decoding {}", p.iter_tree_visitor().into_string());
 
     // Incomplete calls are:
     // Kx
@@ -505,10 +510,11 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
 
     last.make_root(names);
 
-    builder
-        .clone()
-        .iter_tree()
-        .for_each(|x| tracing::debug!("encoding {} -> {:?}", e.clone(), x));
+    tracing::debug!(
+        "encoding {} -> {}",
+        e.clone(),
+        builder.clone().iter_tree().into_string()
+    );
 
     builder
 }
@@ -670,7 +676,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     let inlined = inline(expr, &def_table);
     let sk = precompile(inlined);
 
-    compile_sk(sk, names)
+    let cc = compile_sk(sk, names);
+
+    cc
 }
 
 pub fn decompile(p: &AstPort) -> Option<Expr> {
@@ -859,6 +867,28 @@ mod test {
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_id() {
+        let (case, expected) = ("((SK)S)", "((SK)S)");
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        println!(
+            "{}",
+            result
+                .iter()
+                .map(|x| x.iter_tree_visitor().into_string())
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }

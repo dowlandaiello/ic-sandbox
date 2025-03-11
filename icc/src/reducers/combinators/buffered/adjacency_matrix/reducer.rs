@@ -375,8 +375,6 @@ impl ReductionWorker {
         let a_id = redex.0.cell;
         let b_id = redex.1.cell;
 
-        tracing::debug!("reducing {} >< {}", a_id, b_id);
-
         let mut maybe_to_lock = None;
         let mut maybe_locks: Option<BTreeMap<usize, _>> = None;
 
@@ -445,6 +443,14 @@ impl ReductionWorker {
 
         let mut b_lock = locks.get_mut(&b_id);
         let b_cell = *b_lock.as_mut().unwrap().deref_mut().as_ref().unwrap();
+
+        tracing::debug!(
+            "reducing {} ({}) >< {} ({})",
+            a_cell.discriminant,
+            a_id,
+            b_cell.discriminant,
+            b_id
+        );
 
         let transformations = {
             fn map_conn<'a>(
@@ -729,7 +735,7 @@ impl Reducer for BufferedMatrixReducer {
     fn readback(&self) -> Vec<Port> {
         tracing::debug!("reading back");
 
-        let new_names = NameIter::starting_from(self.names.len());
+        let new_names = NameIter::default();
 
         // Make ports before linking, link later
         let mut ports_for_cells: BTreeMap<Ptr, Port> = self
@@ -740,11 +746,7 @@ impl Reducer for BufferedMatrixReducer {
                 let cell = locked_cell.lock().unwrap().unwrap();
                 let discriminant = cell.discriminant;
 
-                let name = self
-                    .names
-                    .get(&i)
-                    .map(|x| *x)
-                    .unwrap_or_else(|| new_names.next_id());
+                let name = new_names.next_id();
 
                 let expr = match discriminant {
                     Cell::Constr => Expr::Constr(Constructor::new()).into_port_named(name),
@@ -758,7 +760,7 @@ impl Reducer for BufferedMatrixReducer {
                             port: None,
                         })
                     }
-                    .into_port_named(name),
+                    .into_port_named(self.names.get(&i).map(|x| *x).unwrap_or_else(|| name)),
                 };
 
                 tracing::trace!("cell {} -> expr {}", i, expr);
@@ -844,24 +846,30 @@ impl Reducer for BufferedMatrixReducer {
         }
 
         #[cfg(not(feature = "threadpool"))]
-        fn reduce_redexes(
-            buffer: MatrixBuffer,
-            locked: Arc<[AtomicBool]>,
-            r: impl IntoIterator<Item = (Conn, Conn)>,
-        ) {
+        fn reduce_redexes(slf: &BufferedMatrixReducer, r: impl IntoIterator<Item = (Conn, Conn)>) {
             r.into_iter().for_each(move |x| {
+                let res = slf.readback();
+
+                tracing::debug!(
+                    "reduction frame: {}",
+                    res.into_iter()
+                        .map(|graph| graph.iter_tree_visitor().into_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+
                 let worker = ReductionWorker {
-                    buffer: buffer.clone(),
-                    locked: locked.clone(),
+                    buffer: slf.buffer.clone(),
+                    locked: slf.locked.clone(),
                 };
 
                 let redexes = worker.reduce_step(x);
 
-                reduce_redexes(buffer.clone(), locked.clone(), redexes);
+                slf.buffer.checksum();
+
+                reduce_redexes(slf, redexes);
             });
         }
-
-        tracing::trace!("reduction frame: {:#?}", self.buffer);
 
         // Push all redexes
         #[cfg(feature = "threadpool")]
@@ -872,11 +880,11 @@ impl Reducer for BufferedMatrixReducer {
         );
 
         #[cfg(not(feature = "threadpool"))]
-        reduce_redexes(
-            self.buffer.clone(),
-            self.locked.clone(),
-            self.root_redexes.drain(..),
-        );
+        {
+            let redexes = self.root_redexes.drain(..).collect::<Vec<_>>();
+
+            reduce_redexes(self, redexes);
+        }
 
         self.readback()
     }

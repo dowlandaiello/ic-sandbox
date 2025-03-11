@@ -27,8 +27,6 @@ impl OwnedCell {
     }
 
     fn merge(&mut self, other: &Self) {
-        tracing::trace!("merging cells {:?} + {:?}", self, other);
-
         other
             .iter_ports()
             .enumerate()
