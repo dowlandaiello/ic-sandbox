@@ -417,6 +417,8 @@ pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
                     let cc = compile_sk(expr.clone(), names);
                     let cmp = reduce_dyn(&cc).remove(0);
 
+                    tracing::debug!("attempting incomplete expr: {}", expr);
+
                     OwnedNetBuilder::decombinate_expr(p.clone(), cmp).then(|| expr)
                 })
                 .next()
@@ -873,22 +875,24 @@ mod test {
 
     #[test_log::test]
     fn test_eval_id() {
-        let (case, expected) = ("((SK)S)", "((SK)S)");
+        let case = "((SK)S)";
+        let names = Default::default();
+
+        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let compiled = compile_sk(parsed.into(), &names);
+
+        let _ = reduce_dyn(&compiled);
+    }
+
+    #[test_log::test]
+    fn test_eval_id_app_id() {
+        let (case, expected) = ("((((SK)S)((SK)S))K)", "K");
         let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
-
-        println!(
-            "{}",
-            result
-                .iter()
-                .map(|x| x.iter_tree_visitor().into_string())
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
     }
@@ -941,8 +945,6 @@ def S = \\n \\s \\z (s n)
         let mut reducer = ReducerBuilder::default()
             .with_init_nets(cc.0.iter())
             .finish();
-        let result = reducer.reduce();
-
-        result.iter().for_each(|x| println!("{}", x));
+        let _ = reducer.reduce();
     }
 }
