@@ -596,6 +596,16 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     }
 
     impl MixedExpr {
+        fn is_all_sk(&self) -> bool {
+            match self {
+                Self::Abstraction { .. } => false,
+                Self::Application { callee, params } => {
+                    callee.is_all_sk() && params.iter().all(|param| param.is_all_sk())
+                }
+                Self::Id(_) | Self::S | Self::K => true,
+            }
+        }
+
         fn flatten(self) -> Self {
             match self {
                 Self::Application { callee, mut params } => {
@@ -617,8 +627,6 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             if let Self::Abstraction { bind_id, body } = self {
                 match body.as_mut() {
                     Self::Application { callee, params } => {
-                        assert!(params.len() <= 1);
-
                         let lhs = callee;
                         let rhs = params.remove(0);
 
@@ -635,14 +643,12 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                                 },
                             ],
                         }
-                        .flatten();
                     }
                     Self::Id(id) if id == bind_id => {
                         *self = Self::Application {
                             callee: Box::new(Self::S),
                             params: vec![Self::K, Self::S],
                         }
-                        .flatten();
                     }
                     id @ Self::Id(_) => {
                         *self = Self::Application {
@@ -661,6 +667,10 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         }
 
         fn eliminate_innermost_abstraction(&mut self) -> bool {
+            if self.is_all_sk() {
+                return false;
+            }
+
             match self {
                 Self::S => false,
                 Self::K => false,
@@ -754,7 +764,7 @@ pub fn decompile(p: &AstPort) -> Option<Expr> {
 mod test {
     use super::*;
     use crate::{
-        parser_icalc,
+        parser as lc_parser, parser_icalc,
         parser_sk::{lexer, parser},
     };
     use ast_ext::Spanned;
@@ -800,6 +810,38 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_id_lc() {
+        let (case, expected) = ("(\\x.x a)", "a");
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_id_nested_lc() {
+        let (case, expected) = ("(\\x.(\\b.b x) a)", "a");
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient()).unwrap().to_string(),
+            expected
+        );
     }
 
     #[test_log::test]
