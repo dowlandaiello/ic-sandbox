@@ -4,7 +4,10 @@ use std::fmt;
 
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum Expr {
-    Call(Box<Expr>, Box<Expr>),
+    Call {
+        callee: Box<Expr>,
+        params: Vec<Expr>,
+    },
     S,
     K,
     Var(String),
@@ -13,7 +16,9 @@ pub enum Expr {
 impl Expr {
     pub fn contains_var(&self, v: &str) -> bool {
         match self {
-            Self::Call(lhs, rhs) => lhs.contains_var(v) || rhs.contains_var(v),
+            Self::Call { callee, params } => {
+                callee.contains_var(v) || params.iter().any(|x| x.contains_var(v))
+            }
             Self::S => false,
             Self::K => false,
             Self::Var(other) => v == other,
@@ -23,7 +28,10 @@ impl Expr {
 
 #[derive(Debug)]
 pub enum SpannedExpr {
-    Call(Box<SpannedExpr>, Box<SpannedExpr>),
+    Call {
+        callee: Box<SpannedExpr>,
+        params: Vec<SpannedExpr>,
+    },
     S(Span),
     K(Span),
     Var(Spanned<String>),
@@ -32,7 +40,7 @@ pub enum SpannedExpr {
 impl SpannedExpr {
     pub fn span(&self) -> &Span {
         match self {
-            Self::Call(lhs, _) => lhs.span(),
+            Self::Call { callee, .. } => callee.span(),
             Self::S(span) => span,
             Self::K(span) => span,
             Self::Var(Spanned(_, span)) => span,
@@ -43,12 +51,18 @@ impl SpannedExpr {
 impl From<SpannedExpr> for Spanned<Expr> {
     fn from(s: SpannedExpr) -> Self {
         match s {
-            SpannedExpr::Call(a, b) => {
-                let span = a.span().clone();
-                let a_e: Expr = (*a).into();
-                let b_e: Expr = (*b).into();
+            SpannedExpr::Call { callee, params } => {
+                let span = callee.span().clone();
+                let callee: Expr = (*callee).into();
+                let params: Vec<Expr> = params.into_iter().map(|param| param.into()).collect();
 
-                Self(Expr::Call(Box::new(a_e), Box::new(b_e)), span)
+                Self(
+                    Expr::Call {
+                        callee: Box::new(callee),
+                        params,
+                    },
+                    span,
+                )
             }
             SpannedExpr::S(span) => Self(Expr::S, span),
             SpannedExpr::K(span) => Self(Expr::K, span),
@@ -60,7 +74,10 @@ impl From<SpannedExpr> for Spanned<Expr> {
 impl From<SpannedExpr> for Expr {
     fn from(s: SpannedExpr) -> Self {
         match s {
-            SpannedExpr::Call(a, b) => Self::Call(Box::new((*a).into()), Box::new((*b).into())),
+            SpannedExpr::Call { callee, params } => Self::Call {
+                callee: Box::new((*callee).into()),
+                params: params.into_iter().map(|param| param.into()).collect(),
+            },
             SpannedExpr::S(_) => Self::S,
             SpannedExpr::K(_) => Self::K,
             SpannedExpr::Var(v) => Self::Var(v.0),
@@ -74,7 +91,16 @@ impl fmt::Display for Expr {
             Self::S => write!(f, "S"),
             Self::K => write!(f, "K"),
             Self::Var(v) => write!(f, "{}", v),
-            Self::Call(a, b) => write!(f, "({}{})", a, b),
+            Self::Call { callee, params } => write!(
+                f,
+                "({}{})",
+                callee,
+                params
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join("")
+            ),
         }
     }
 }
@@ -139,8 +165,11 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
         let call = left_paren
             .ignore_then(
                 expr.clone()
-                    .then(expr)
-                    .map(|(a, b)| SpannedExpr::Call(Box::new(a), Box::new(b))),
+                    .then(expr.repeated().at_least(1))
+                    .map(|(a, b)| SpannedExpr::Call {
+                        callee: Box::new(a),
+                        params: b,
+                    }),
             )
             .then_ignore(right_paren);
 

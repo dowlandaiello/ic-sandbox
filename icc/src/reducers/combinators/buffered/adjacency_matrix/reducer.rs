@@ -760,7 +760,7 @@ impl Reducer for BufferedMatrixReducer {
                             port: None,
                         })
                     }
-                    .into_port_named(self.names.get(&i).map(|x| *x).unwrap_or_else(|| name)),
+                    .into_port_named(name),
                 };
 
                 tracing::trace!("cell {} -> expr {}", i, expr);

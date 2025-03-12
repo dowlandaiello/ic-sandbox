@@ -991,6 +991,13 @@ impl std::fmt::Debug for CombinatorBuilder {
 }
 
 impl CombinatorBuilder {
+    pub(crate) fn as_var(&self) -> Option<&str> {
+        match self {
+            Self::Var { name: v, .. } => Some(v),
+            _ => None,
+        }
+    }
+
     pub(crate) fn mk_z_n(n: usize) -> Self {
         Self::ZN {
             primary_port: None,
