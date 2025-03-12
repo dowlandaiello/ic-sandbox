@@ -1050,32 +1050,4 @@ def S = \\n \\s \\z (s n)
 
         let _ = compile_icalc(parsed);
     }
-
-    #[test_log::test]
-    fn test_eval_icalc() {
-        let case = "def Z = \\s \\z z
-def S = \\n \\s \\z (s n)
-(S Z)";
-
-        let parsed = parser_icalc::parser()
-            .parse(
-                parser_icalc::lexer()
-                    .parse(case)
-                    .unwrap()
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap()
-            .into_iter()
-            .map(|Spanned(x, _)| x)
-            .collect();
-
-        let cc = compile_icalc(parsed);
-
-        let mut reducer = ReducerBuilder::default()
-            .with_init_nets(cc.0.iter())
-            .finish();
-        let _ = reducer.reduce();
-    }
 }

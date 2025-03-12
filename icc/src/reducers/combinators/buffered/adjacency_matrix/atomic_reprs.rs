@@ -9,6 +9,15 @@ pub(crate) struct ConnRepr {
     cell: AtomicUsize,
 }
 
+impl From<Option<Conn>> for ConnRepr {
+    fn from(c: Option<Conn>) -> Self {
+        let repr = Self::default();
+        repr.store(c);
+
+        repr
+    }
+}
+
 impl Default for ConnRepr {
     fn default() -> Self {
         Self {
