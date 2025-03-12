@@ -828,6 +828,23 @@ mod test {
     }
 
     #[test_log::test]
+    fn test_eval_bool_lc() {
+        let (case, expected) = ("(\\a.\\b.a x y)", "x");
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient()).unwrap().to_string(),
+            expected
+        );
+    }
+
+    #[test_log::test]
     fn test_eval_id_nested_lc() {
         let (case, expected) = ("(\\x.(\\b.b x) a)", "a");
         let names = Default::default();

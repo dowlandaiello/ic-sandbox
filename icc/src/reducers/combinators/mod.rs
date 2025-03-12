@@ -3,6 +3,7 @@ pub use buffered::adjacency_matrix::reduce_dyn;
 use std::fmt;
 
 pub mod buffered;
+pub mod crossbeam;
 
 pub type Ptr = usize;
 

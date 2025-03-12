@@ -1,6 +1,6 @@
 use super::{
-    buffered::adjacency_matrix::atomic_reprs::{load_optional_usize, store_optional_usize},
-    Cell, Conn, Ptr, Reducer as TraitReducer,
+    buffered::adjacency_matrix::atomic_reprs::store_optional_usize, Cell, Conn, Ptr,
+    Reducer as TraitReducer,
 };
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
@@ -16,7 +16,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{ordering::Ordering, AtomicUsize},
+        atomic::{AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -25,7 +25,20 @@ const N_MAX_AUX_PORTS_PER_NODE: usize = 2;
 
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let mut reducer = Reducer::new([e].into_iter());
-    reducer.reduce()
+
+    let mut results = reducer.reduce();
+    results.sort_by(|a, b| {
+        b.iter_tree()
+            .filter(|x| x.borrow().as_var().is_some())
+            .count()
+            .cmp(
+                &a.iter_tree()
+                    .filter(|x| x.borrow().as_var().is_some())
+                    .count(),
+            )
+    });
+
+    results
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
