@@ -577,6 +577,13 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 tracing::trace!("expanding K @ 0x{}", self.0.borrow().name);
 
                 let e = OwnedNetBuilder::new(CombinatorBuilder::Era { primary_port: None }, names);
+                let dec = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
                 let root = CombinatorBuilder::Z3 {
                     primary_port: primary_port.clone(),
                     aux_ports: [const { None }; 3],
@@ -585,8 +592,11 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 self.update_with(|_| root);
 
-                Self::connect((1, self.clone()), (3, self.clone()));
                 Self::connect((2, self.clone()), (0, e.clone()));
+                Self::connect((1, self.clone()), (1, dec.clone()));
+                Self::connect((0, dec.clone()), (3, self.clone()));
+
+                dec.expand_step(names);
 
                 root_ref.expand_step(names);
 
@@ -797,14 +807,14 @@ impl OwnedNetBuilder {
         );
 
         let empty_port = self
-            .0
-            .borrow()
-            .builder
-            .iter_ports()
-            .position(|x| x.is_none())
-            .unwrap_or(0);
+            .clone()
+            .iter_tree()
+            .filter(|x| x.0.borrow().builder.as_var().is_some())
+            .filter_map(|x| x.0.borrow().builder.iter_ports().next().flatten().cloned())
+            .next()
+            .unwrap();
 
-        Self::connect((empty_port, self.clone()), (4, new_root.clone()));
+        Self::connect(empty_port, (4, new_root.clone()));
 
         let z_combs: [OwnedNetBuilder; 3] = (0..3)
             .map(|i| {

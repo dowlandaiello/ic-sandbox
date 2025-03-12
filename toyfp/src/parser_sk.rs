@@ -26,7 +26,7 @@ impl Expr {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SpannedExpr {
     Call {
         callee: Box<SpannedExpr>,
@@ -163,15 +163,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
         ));
 
         let call = left_paren
-            .ignore_then(
-                expr.clone()
-                    .then(expr.repeated().at_least(1))
-                    .map(|(a, b)| SpannedExpr::Call {
-                        callee: Box::new(a),
-                        params: b,
-                    }),
-            )
-            .then_ignore(right_paren);
+            .ignore_then(expr.clone().then(expr.clone().repeated().at_least(1)))
+            .then_ignore(right_paren)
+            .map(|(a, b)| SpannedExpr::Call {
+                callee: Box::new(a),
+                params: b,
+            });
 
         choice((call, leaf))
     })
@@ -183,7 +180,7 @@ mod test {
 
     #[test]
     fn test_parse() {
-        let cases = ["S", "K", "((SK)K)"];
+        let cases = ["S", "K", "((SK)K)", "(SKK)"];
 
         for case in cases {
             let lexed = lexer().parse(case).unwrap();
