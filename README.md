@@ -21,6 +21,10 @@ cargo run --bin toyfp dev
 
 This will drop you into a lambda calculus (LC) shell. The shell utilizes a compiler from LC to the SK combinators, and from the SK combinators to my interaction combinator IR language. Reduction is handled by my interaction combinator VM. Note that some partially applied functions are not readbackable yet (though they are functional). See *in progress*.
 
+As a demonstrative example, here is the compilation of `((true id b) a)` to interaction combinators targeting the SK combinators as an intermediate representation:
+
+![compilation tree](.github/img/bool_sk.png)
+
 ## Directory
 
 - `icc` contains implementations of:
