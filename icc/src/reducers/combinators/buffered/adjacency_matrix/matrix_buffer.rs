@@ -3,13 +3,14 @@ use super::{
     Cell, NetBuffer, OwnedCell,
 };
 use lockfree::queue::Queue;
+use parking_lot::Mutex;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeSet, VecDeque},
     fmt,
     iter::DoubleEndedIterator,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc,
     },
 };
 
@@ -25,7 +26,7 @@ impl fmt::Debug for MatrixBuffer {
         let cell_debugs = self
             .cells
             .iter()
-            .filter_map(|x| x.lock().unwrap().clone())
+            .filter_map(|x| x.lock().clone())
             .collect::<Vec<_>>();
 
         f.debug_struct("MatrixBuffer")
@@ -81,7 +82,7 @@ impl NetBuffer for MatrixBuffer {
     fn push(&self, cell: Cell) -> Ptr {
         let next_free = self.next_free.pop().unwrap();
 
-        *self.cells[next_free].lock().unwrap() = Some(OwnedCell::new(cell));
+        *self.cells[next_free].lock() = Some(OwnedCell::new(cell));
 
         next_free
     }
@@ -133,23 +134,25 @@ impl NetBuffer for MatrixBuffer {
     }
 
     fn iter_cells(&self) -> impl Iterator<Item = Ptr> {
-        self.cells.iter().enumerate().filter_map(|(i, x)| {
-            if x.lock().unwrap().is_none() {
-                None
-            } else {
-                Some(i)
-            }
-        })
+        self.cells.iter().enumerate().filter_map(
+            |(i, x)| {
+                if x.lock().is_none() {
+                    None
+                } else {
+                    Some(i)
+                }
+            },
+        )
     }
 
     fn iter_aux_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
-        let cell_guard = &self.cells[cell].lock().unwrap();
+        let cell_guard = &self.cells[cell].lock();
 
         cell_guard.unwrap().aux_ports.into_iter()
     }
 
     fn iter_ports(&self, cell: usize) -> impl DoubleEndedIterator<Item = Option<Conn>> {
-        let cell_guard = &self.cells[cell].lock().unwrap();
+        let cell_guard = &self.cells[cell].lock();
         let cell = cell_guard.unwrap();
 
         [cell.primary_port].into_iter().chain(cell.aux_ports)

@@ -8,13 +8,14 @@ use crate::parser::{
     ast_lafont::Ident,
     naming::NameIter,
 };
+use parking_lot::MutexGuard;
 #[cfg(feature = "threadpool")]
 use rayon::iter::{IntoParallelIterator, ParallelDrainRange, ParallelIterator};
 use std::{
     collections::{BTreeMap, BTreeSet},
     iter::{self, DoubleEndedIterator},
     ops::DerefMut,
-    sync::{atomic::AtomicBool, MutexGuard},
+    sync::atomic::AtomicBool,
     sync::{atomic::Ordering, Arc},
 };
 
@@ -92,7 +93,7 @@ impl ReducerBuilder {
 
                         let cell_self = buff.get_cell(*slot);
 
-                        cell_self.lock().unwrap().as_mut().unwrap().set_port_i(
+                        cell_self.lock().as_mut().unwrap().set_port_i(
                             port_self as u8,
                             Some(Conn {
                                 cell: *other_slot,
@@ -102,7 +103,7 @@ impl ReducerBuilder {
 
                         let cell_other = buff.get_cell(*other_slot);
 
-                        cell_other.lock().unwrap().as_mut().unwrap().set_port_i(
+                        cell_other.lock().as_mut().unwrap().set_port_i(
                             port_other as u8,
                             Some(Conn {
                                 cell: *slot,
@@ -229,7 +230,7 @@ impl ReducerBuilder {
 
                         let cell_self = buff.get_cell(*slot);
 
-                        cell_self.lock().unwrap().as_mut().unwrap().set_port_i(
+                        cell_self.lock().as_mut().unwrap().set_port_i(
                             port_self as u8,
                             Some(Conn {
                                 cell: *other_slot,
@@ -239,7 +240,7 @@ impl ReducerBuilder {
 
                         let cell_other = buff.get_cell(*other_slot);
 
-                        cell_other.lock().unwrap().as_mut().unwrap().set_port_i(
+                        cell_other.lock().as_mut().unwrap().set_port_i(
                             port_other as u8,
                             Some(Conn {
                                 cell: *slot,
@@ -381,13 +382,13 @@ impl ReductionWorker {
         while maybe_locks.is_none() {
             // Thi is to ensure consistent lock ordering
             let pair = if a_id < b_id {
-                let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
-                let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
+                let lock_a = self.buffer.get_cell(a_id).lock().unwrap();
+                let lock_b = self.buffer.get_cell(b_id).lock().unwrap();
 
                 (lock_a, lock_b)
             } else {
-                let lock_b = self.buffer.get_cell(b_id).lock().unwrap().unwrap();
-                let lock_a = self.buffer.get_cell(a_id).lock().unwrap().unwrap();
+                let lock_b = self.buffer.get_cell(b_id).lock().unwrap();
+                let lock_a = self.buffer.get_cell(a_id).lock().unwrap();
 
                 (lock_a, lock_b)
             };
@@ -424,7 +425,7 @@ impl ReductionWorker {
                 .unwrap()
                 .iter()
                 .map(|cell_id| {
-                    let lock = self.buffer.get_cell(*cell_id).try_lock().ok()?;
+                    let lock = self.buffer.get_cell(*cell_id).try_lock()?;
 
                     Some((*cell_id, lock))
                 })
@@ -628,7 +629,6 @@ impl ReductionWorker {
                 self.buffer
                     .get_cell(id)
                     .lock()
-                    .unwrap()
                     .as_mut()
                     .unwrap()
                     .merge(&cell);
@@ -673,7 +673,7 @@ impl ReductionWorker {
             .zip(eras.into_iter().map(|ptr| {
                 (
                     (ptr, 0).into(),
-                    (*self.buffer.get_cell(ptr).lock().unwrap()).unwrap(),
+                    (*self.buffer.get_cell(ptr).lock()).unwrap(),
                 )
             }))
             .map(|(a, b)| self.conn_maybe_redex(a, (b.0, b.1)))
@@ -708,7 +708,7 @@ impl ReductionWorker {
         top_ports
             .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
             .map(|(a, b)| {
-                let b_cell = self.buffer.get_cell(b.cell).lock().unwrap().unwrap();
+                let b_cell = self.buffer.get_cell(b.cell).lock().unwrap();
 
                 self.conn_maybe_redex(a, (b, b_cell))
             })
@@ -717,13 +717,13 @@ impl ReductionWorker {
                     .rev()
                     .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
                     .map(|(a, b)| {
-                        let b_cell = self.buffer.get_cell(b.cell).lock().unwrap().unwrap();
+                        let b_cell = self.buffer.get_cell(b.cell).lock().unwrap();
 
                         self.conn_maybe_redex(a, (b, b_cell))
                     })
                     .chain(conns.into_iter().map(|(a, b)| {
-                        let a_cell = self.buffer.get_cell(a.0).lock().unwrap().unwrap();
-                        let b_cell = self.buffer.get_cell(a.0).lock().unwrap().unwrap();
+                        let a_cell = self.buffer.get_cell(a.0).lock().unwrap();
+                        let b_cell = self.buffer.get_cell(a.0).lock().unwrap();
 
                         self.conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
                     })),
@@ -743,7 +743,7 @@ impl Reducer for BufferedMatrixReducer {
             .iter_cells()
             .map(|i| (i, self.buffer.get_cell(i)))
             .map(|(i, locked_cell)| {
-                let cell = locked_cell.lock().unwrap().unwrap();
+                let cell = locked_cell.lock().unwrap();
                 let discriminant = cell.discriminant;
 
                 let name = new_names.next_id();

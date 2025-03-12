@@ -1,0 +1,5 @@
+id   = \x.x
+z    = \f.\g.g
+succ = \n.\f.\g.(n (f g))
+
+(succ z id a)
