@@ -812,6 +812,20 @@ impl OwnedNetBuilder {
             .filter(|x| x.0.borrow().builder.as_var().is_some())
             .filter_map(|x| x.0.borrow().builder.iter_ports().next().flatten().cloned())
             .next()
+            .or_else(|| {
+                self.clone()
+                    .iter_tree()
+                    .filter_map(|x| {
+                        Some((
+                            x.0.borrow()
+                                .builder
+                                .iter_ports()
+                                .position(|x| x.is_none())?,
+                            x.clone(),
+                        ))
+                    })
+                    .next()
+            })
             .unwrap();
 
         Self::connect(empty_port, (4, new_root.clone()));

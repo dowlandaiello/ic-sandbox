@@ -791,7 +791,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_bool() {
-        let (case, expected) = ("(SKKKS)", "S");
+        let (case, expected) = ("(SKKKS)", "(KS)");
         let names = Default::default();
 
         let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
