@@ -1,0 +1,14 @@
+name = "vm"
+version = "0.1.0"
+defaultTargets = ["vm"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+
+[[lean_lib]]
+name = "Vm"
+
+[[lean_exe]]
+name = "vm"
+root = "Main"

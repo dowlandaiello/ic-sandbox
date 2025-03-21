@@ -709,7 +709,11 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     fn precompile(e: Expr) -> SkExpr {
         let mut buffer: MixedExpr = e.into();
 
-        while buffer.eliminate_innermost_abstraction() {}
+        tracing::debug!("eliminating abstraction in {}", buffer);
+
+        while buffer.eliminate_innermost_abstraction() {
+            tracing::debug!("eliminating abstraction in {}", buffer);
+        }
 
         buffer.into()
     }
@@ -830,6 +834,30 @@ mod test {
     #[test_log::test]
     fn test_eval_bool_lc() {
         let (case, expected) = ("(\\a.\\b.a x y)", "x");
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient()).unwrap().to_string(),
+            expected
+        );
+    }
+
+    #[test_log::test]
+    fn test_eval_church_lc() {
+        let (case, expected) = (
+            "id   = \\x.x
+z    = \\f.\\g.g
+succ = \\n.\\f.\\x.(f (n f x))
+
+(succ z id a)",
+            "a",
+        );
         let names = Default::default();
 
         let parsed = lc_parser::parser()
