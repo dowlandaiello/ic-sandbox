@@ -67,8 +67,7 @@ def mkCommutationEra {n : Nat} (buff : AdjacencyMatrix n) (port : Port n) (h1 : 
     unfold buff'
     unfold idBuff'
     unfold push
-    match buff.nextFree with
-    | List.nil => sorry
+    cases buff.nextFree with
   }
 
   connect buff' (eraId, 0) (port.id, port.port) hasEra hasOther (by sorry) (by sorry)

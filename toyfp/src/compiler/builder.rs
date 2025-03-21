@@ -342,13 +342,145 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
         let new_root = match &builder {
             CombinatorBuilder::B { primary_port } => {
-                todo!()
+                let root_ref = self.update_with(|_| CombinatorBuilder::Z4 {
+                    primary_port: None,
+                    aux_ports: [const { None }; 4],
+                });
+                let constr_left = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [None, None],
+                    },
+                    names,
+                );
+                let constr_right = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [None, None],
+                    },
+                    names,
+                );
+                let dec_middle = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let dec_right = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+
+                // Root conns
+                if let Some(p) = primary_port {
+                    Self::connect((0, root_ref.clone()), p.clone());
+                }
+
+                Self::connect((0, dec_right.clone()), (4, root_ref.clone()));
+                Self::connect((0, dec_middle.clone()), (3, root_ref.clone()));
+                Self::connect((2, constr_right.clone()), (2, root_ref.clone()));
+                Self::connect((1, constr_left.clone()), (1, root_ref.clone()));
+
+                // Inner constr <-> constr
+                Self::connect((2, constr_left.clone()), (1, constr_right.clone()));
+
+                // Dec inner conns
+                Self::connect((1, dec_middle.clone()), (0, constr_right.clone()));
+                Self::connect((1, dec_right.clone()), (0, constr_left.clone()));
+
+                dec_middle.expand_step(names);
+                dec_right.expand_step(names);
+
+                root_ref.clone()
             }
             CombinatorBuilder::W { primary_port } => {
-                todo!()
+                let root_ref = self.update_with(|_| CombinatorBuilder::Z3 {
+                    primary_port: None,
+                    aux_ports: [const { None }; 3],
+                });
+
+                let dec = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let z3 = OwnedNetBuilder::new(
+                    CombinatorBuilder::Z3 {
+                        primary_port: None,
+                        aux_ports: [const { None }; 3],
+                    },
+                    names,
+                );
+                let dup = OwnedNetBuilder::new(
+                    CombinatorBuilder::Dup {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+
+                if let Some(p) = primary_port {
+                    Self::connect((0, root_ref.clone()), p.clone());
+                }
+
+                Self::connect((1, root_ref.clone()), (1, z3.clone()));
+                Self::connect((2, root_ref.clone()), (0, dup.clone()));
+                Self::connect((0, dec.clone()), (3, z3.clone()));
+
+                // Inner dec conn
+                Self::connect((1, dec.clone()), (0, z3.clone()));
+
+                // Inner z3 conns
+                Self::connect((2, z3.clone()), (2, dup.clone()));
+                Self::connect((3, z3.clone()), (1, dup.clone()));
+
+                z3.expand_step(names);
+                dec.expand_step(names);
+
+                root_ref.clone()
             }
             CombinatorBuilder::C { primary_port } => {
-                todo!()
+                let root_ref = self.update_with(|_| CombinatorBuilder::Z4 {
+                    primary_port: None,
+                    aux_ports: [const { None }; 4],
+                });
+                let dec = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let z3 = OwnedNetBuilder::new(
+                    CombinatorBuilder::Z3 {
+                        primary_port: None,
+                        aux_ports: [const { None }; 3],
+                    },
+                    names,
+                );
+
+                if let Some(p) = primary_port {
+                    Self::connect((0, root_ref.clone()), p.clone());
+                }
+
+                // Root conns
+                Self::connect((1, root_ref.clone()), (1, z3.clone()));
+                Self::connect((2, root_ref.clone()), (2, z3.clone()));
+                Self::connect((3, root_ref.clone()), (3, z3.clone()));
+                Self::connect((4, root_ref.clone()), (0, dec.clone()));
+
+                Self::connect((0, z3.clone()), (1, dec.clone()));
+
+                z3.expand_step(names);
+                dec.expand_step(names);
+
+                root_ref.clone()
             }
             CombinatorBuilder::Z4 {
                 primary_port,
