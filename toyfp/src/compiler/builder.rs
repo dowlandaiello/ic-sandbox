@@ -174,14 +174,12 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
         tests
             .iter()
-            .map(|test| mk_cmp(test.0.clone(), test.1.clone())(p.clone()))
-            .flatten()
+            .filter_map(|test| mk_cmp(test.0.clone(), test.1.clone())(p.clone()))
             .next()
             .or_else(|| {
                 tests
                     .iter()
-                    .map(|test| mk_cmp_code(test.0.clone(), test.1.clone())(p.clone()))
-                    .flatten()
+                    .filter_map(|test| mk_cmp_code(test.0.clone(), test.1.clone())(p.clone()))
                     .next()
             })
             .or_else(|| var(p.clone()))

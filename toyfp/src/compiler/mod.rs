@@ -1093,7 +1093,7 @@ def S = \\n \\s \\z (s n)
 
     #[test_log::test]
     fn test_eval_bckw() {
-        let cases = [("(CKKK)", "K"), ("(C(BW)K)", "W")];
+        let cases = [("(CKKK)", "K"), ("(B(KC)KK)", "C"), ("(WKC)", "C")];
 
         for (case, expected) in cases {
             let names = NameIter::default();
