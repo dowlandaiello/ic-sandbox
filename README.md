@@ -17,6 +17,10 @@ cargo run --bin toyfp dev
 >> (\x.x)(a)
 >> (\x.(\a.a)(x))(a)
 >> (\x.(\a.x)(x))(a)
+>> id   = \x.x
+>> z    = \f.\g.g
+>> succ = \n.\f.\g.(f (n f g))
+>> (succ z id x)
 ```
 
 This will drop you into a lambda calculus (LC) shell. The shell utilizes a compiler from LC to the SK/BCW combinators, and from the SK combinators to my interaction combinator IR language. Reduction is handled by my interaction combinator VM. Note that some partially applied functions are not readbackable yet (though they are functional). See *in progress*.

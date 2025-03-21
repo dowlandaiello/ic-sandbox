@@ -225,6 +225,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
 
             defs
         })
+        .then_ignore(end())
 }
 
 #[cfg(test)]
@@ -245,6 +246,23 @@ mod test {
 (id x)",
                 "id = \\x.x
 (id x)",
+            ),
+            (
+                "nil = \\c.\\n.n
+z = \\f.\\g.g
+one = \\f.\\g.(f g)
+cons = \\h.\\t.\\c.\\n.(c h (t c n))
+nth = \\n.\\l.(l \\x.\\r.(n \\z.x r) \\z.z)
+my_list = \\c.\\n.(c x (c y (c z n)))
+
+(nth one my_list)",
+                "nil = \\c.\\n.n
+z = \\f.\\g.g
+one = \\f.\\g.(f g)
+cons = \\h.\\t.\\c.\\n.((c h) ((t c) n))
+nth = \\n.\\l.((l \\x.\\r.((n \\z.x) r)) \\z.z)
+my_list = \\c.\\n.((c x) ((c y) ((c z) n)))
+((nth one) my_list)",
             ),
         ];
 
