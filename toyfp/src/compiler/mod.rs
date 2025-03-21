@@ -21,6 +21,7 @@ use std::{
 };
 
 mod builder;
+pub mod graphical;
 mod icalc;
 
 pub trait CombinatorBuilder: Sized {
@@ -864,9 +865,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         .unwrap();
 
     let inlined = inline(expr, &def_table);
-    let sk = precompile(inlined);
-
-    let cc = compile_sk(sk, names);
+    let cc = graphical::compile(inlined);
 
     cc
 }
