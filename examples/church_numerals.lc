@@ -2,4 +2,4 @@ id   = \x.x
 z    = \f.\g.g
 succ = \n.\f.\g.(f (n f g))
 
-(succ z)
+(succ z id x)
