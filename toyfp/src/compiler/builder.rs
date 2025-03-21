@@ -790,11 +790,17 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 // Internal D conns
                 Self::connect((1, dec_left.clone()), (0, constr_left.clone()));
                 Self::connect((1, dec_middle.clone()), (0, constr_right.clone()));
-                Self::connect((0, dec_right.clone()), (0, z3.clone()));
+                Self::connect((1, dec_right.clone()), (0, z3.clone()));
 
                 // Z3 conns
                 Self::connect((2, z3.clone()), (1, constr_left.clone()));
                 Self::connect((3, z3.clone()), (1, constr_right.clone()));
+
+                dec_left.expand_step(names);
+                dec_middle.expand_step(names);
+                dec_right.expand_step(names);
+                z3.expand_step(names);
+                self.expand_step(names);
 
                 self.clone()
             }

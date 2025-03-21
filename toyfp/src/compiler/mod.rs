@@ -467,6 +467,10 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
                 names,
             );
         }
+        SkExpr::SPrime => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::SPrime { primary_port: None }, names),
+            Vec::new(),
+        ),
         SkExpr::B => (
             OwnedNetBuilder::new(SkCombinatorBuilder::B { primary_port: None }, names),
             Vec::new(),
@@ -611,7 +615,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 MixedExpr::Id(id) => Self::Var(id),
                 MixedExpr::K => Self::K,
                 MixedExpr::S => Self::S,
-                MixedExpr::SPrime => unreachable!(),
+                MixedExpr::SPrime => Self::SPrime,
                 MixedExpr::B => Self::B,
                 MixedExpr::C => Self::C,
                 MixedExpr::W => Self::W,
@@ -722,6 +726,26 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                                     callee: inner_call,
                                     params: inner_params,
                                 }, x],
+                            ) if matches!(**inner_call, Self::B)
+                                && matches!(&**inner_params, [_, _]) =>
+                            {
+                                *self = Self::Application {
+                                    callee: Box::new(Self::SPrime),
+                                    params: vec![
+                                        inner_params[0].clone(),
+                                        inner_params[1].clone(),
+                                        x.clone(),
+                                    ],
+                                };
+
+                                true
+                            }
+                            (
+                                Self::S,
+                                [Self::Application {
+                                    callee: inner_call,
+                                    params: inner_params,
+                                }, x],
                             ) if matches!(**inner_call, Self::K) => {
                                 *self = Self::Application {
                                     callee: Box::new(Self::B),
@@ -774,7 +798,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
         fn eliminate_innermost_abstraction(&mut self) {
             match self {
-                Self::S | Self::K | Self::B | Self::C | Self::W | Self::Id(_) => {}
+                Self::SPrime | Self::S | Self::K | Self::B | Self::C | Self::W | Self::Id(_) => {}
                 Self::Abstraction { body, .. } => {
                     body.eliminate_innermost_abstraction();
 
