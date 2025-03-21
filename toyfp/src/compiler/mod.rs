@@ -544,6 +544,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     enum MixedExpr {
         S,
         K,
+        B,
+        C,
+        W,
         Id(String),
         Abstraction {
             bind_id: String,
@@ -560,6 +563,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             match self {
                 Self::S => write!(f, "S"),
                 Self::K => write!(f, "K"),
+                Self::B => write!(f, "B"),
+                Self::C => write!(f, "C"),
+                Self::W => write!(f, "W"),
                 Self::Id(id) => write!(f, "{}", id),
                 Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
                 Self::Application { callee, params } => write!(
@@ -603,6 +609,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 MixedExpr::Id(id) => Self::Var(id),
                 MixedExpr::K => Self::K,
                 MixedExpr::S => Self::S,
+                MixedExpr::B => Self::B,
+                MixedExpr::C => Self::C,
+                MixedExpr::W => Self::W,
             }
         }
     }
@@ -614,7 +623,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 Self::Application { callee, params } => {
                     callee.is_all_sk() && params.iter().all(|param| param.is_all_sk())
                 }
-                Self::Id(_) | Self::S | Self::K => true,
+                Self::Id(_) | Self::S | Self::K | Self::B | Self::C | Self::W => true,
             }
         }
 
@@ -678,6 +687,82 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             }
         }
 
+        fn optimize(&mut self) -> bool {
+            match self {
+                Self::S => false,
+                Self::K => false,
+                Self::B => false,
+                Self::C => false,
+                Self::W => false,
+                Self::Id(_) => false,
+                Self::Abstraction { .. } => unreachable!(),
+                Self::Application { callee, params } => {
+                    callee.optimize()
+                        || params.iter_mut().any(|x| x.optimize())
+                        || match (&**callee, params.as_slice()) {
+                            (
+                                Self::S,
+                                [Self::Application {
+                                    callee: inner_call_lhs,
+                                    params: inner_params_lhs,
+                                }, Self::Application {
+                                    callee: inner_call_rhs,
+                                    params: inner_params_rhs,
+                                }],
+                            ) => match (&**inner_call_lhs, &**inner_call_rhs) {
+                                (Self::K, Self::K) => {
+                                    *self = Self::Application {
+                                        callee: Box::new(Self::K),
+                                        params: vec![Self::Application {
+                                            callee: Box::new(inner_params_lhs[0].clone()),
+                                            params: vec![inner_params_rhs[0].clone()],
+                                        }],
+                                    };
+
+                                    true
+                                }
+                                _ => false,
+                            },
+                            (
+                                Self::S,
+                                [Self::Application {
+                                    callee: inner_call,
+                                    params: inner_params,
+                                }, x],
+                            ) => match **inner_call {
+                                Self::K => {
+                                    *self = Self::Application {
+                                        callee: Box::new(Self::B),
+                                        params: vec![inner_params[0].clone(), x.clone()],
+                                    };
+
+                                    true
+                                }
+                                _ => false,
+                            },
+                            (
+                                Self::S,
+                                [x, Self::Application {
+                                    callee: inner_call,
+                                    params: inner_params,
+                                }],
+                            ) => match &**inner_call {
+                                Self::K => {
+                                    *self = Self::Application {
+                                        callee: Box::new(Self::C),
+                                        params: vec![x.clone(), inner_params[0].clone()],
+                                    };
+
+                                    true
+                                }
+                                _ => false,
+                            },
+                            _ => false,
+                        }
+                }
+            }
+        }
+
         fn eliminate_innermost_abstraction(&mut self) -> bool {
             if self.is_all_sk() {
                 return false;
@@ -686,6 +771,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             match self {
                 Self::S => false,
                 Self::K => false,
+                Self::B => false,
+                Self::C => false,
+                Self::W => false,
                 Self::Id(_) => false,
                 Self::Abstraction { body, .. } => {
                     if !body.eliminate_innermost_abstraction() {
@@ -725,6 +813,10 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
         while buffer.eliminate_innermost_abstraction() {
             tracing::debug!("eliminating abstraction in {}", buffer);
+        }
+
+        while buffer.optimize() {
+            tracing::debug!("optimizing in {}", buffer);
         }
 
         buffer.into()
@@ -1094,6 +1186,22 @@ def S = \\n \\s \\z (s n)
     #[test_log::test]
     fn test_eval_bckw() {
         let cases = [("(CKKK)", "K"), ("(B(KC)KK)", "C"), ("(WKC)", "C")];
+
+        for (case, expected) in cases {
+            let names = NameIter::default();
+
+            let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+            let compiled = compile_sk(parsed.into(), &names);
+
+            let result = reduce_dyn(&compiled);
+
+            assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+        }
+    }
+
+    #[test_log::test]
+    fn test_eval_bckw_nested() {
+        let cases = [("(WK(CKKK))", "K")];
 
         for (case, expected) in cases {
             let names = NameIter::default();
