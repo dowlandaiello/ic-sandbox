@@ -13,6 +13,7 @@ pub enum Expr {
     B,
     C,
     W,
+    SPrime,
     Var(String),
 }
 
@@ -22,7 +23,7 @@ impl Expr {
             Self::Call { callee, params } => {
                 callee.contains_var(v) || params.iter().any(|x| x.contains_var(v))
             }
-            Self::S | Self::K | Self::B | Self::C | Self::W => false,
+            Self::SPrime | Self::S | Self::K | Self::B | Self::C | Self::W => false,
             Self::Var(other) => v == other,
         }
     }
@@ -34,6 +35,7 @@ pub enum SpannedExpr {
         callee: Box<SpannedExpr>,
         params: Vec<SpannedExpr>,
     },
+    SPrime(Span),
     S(Span),
     K(Span),
     B(Span),
@@ -46,6 +48,7 @@ impl SpannedExpr {
     pub fn span(&self) -> &Span {
         match self {
             Self::Call { callee, .. } => callee.span(),
+            Self::SPrime(span) => span,
             Self::S(span) => span,
             Self::K(span) => span,
             Self::B(span) => span,
@@ -72,6 +75,7 @@ impl From<SpannedExpr> for Spanned<Expr> {
                     span,
                 )
             }
+            SpannedExpr::SPrime(span) => Self(Expr::SPrime, span),
             SpannedExpr::S(span) => Self(Expr::S, span),
             SpannedExpr::K(span) => Self(Expr::K, span),
             SpannedExpr::B(span) => Self(Expr::B, span),
@@ -89,6 +93,7 @@ impl From<SpannedExpr> for Expr {
                 callee: Box::new((*callee).into()),
                 params: params.into_iter().map(|param| param.into()).collect(),
             },
+            SpannedExpr::SPrime(_) => Self::SPrime,
             SpannedExpr::S(_) => Self::S,
             SpannedExpr::K(_) => Self::K,
             SpannedExpr::B(_) => Self::B,
@@ -102,6 +107,7 @@ impl From<SpannedExpr> for Expr {
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SPrime => write!(f, "S'"),
             Self::S => write!(f, "S"),
             Self::K => write!(f, "K"),
             Self::B => write!(f, "B"),
@@ -125,6 +131,7 @@ impl fmt::Display for Expr {
 #[derive(Hash, Clone, Debug, Eq, PartialEq)]
 pub enum Token {
     S,
+    SPrime,
     K,
     B,
     C,
@@ -137,6 +144,7 @@ pub enum Token {
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SPrime => write!(f, "S'"),
             Self::S => write!(f, "S"),
             Self::K => write!(f, "K"),
             Self::B => write!(f, "B"),
@@ -150,6 +158,7 @@ impl fmt::Display for Token {
 }
 
 pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+    let sprime = just("S'").map(|_| Token::SPrime);
     let s = just("S").map(|_| Token::S);
     let k = just("K").map(|_| Token::K);
     let b = just("B").map(|_| Token::B);
@@ -159,7 +168,7 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let right_paren = just(")").map(|_| Token::RightParen);
     let ident = text::ident().map(|ident| Token::Ident(ident));
 
-    choice((s, k, b, c, w, left_paren, right_paren, ident))
+    choice((sprime, s, k, b, c, w, left_paren, right_paren, ident))
         .padded_by(text::whitespace())
         .map_with_span(|tok, e: Span| Spanned(tok, e))
         .repeated()
@@ -175,6 +184,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
 
     recursive(|expr| {
         let k = span_just(Token::K).map(|Spanned(_, span)| SpannedExpr::K(span));
+        let sprime = span_just(Token::SPrime).map(|Spanned(_, span)| SpannedExpr::SPrime(span));
         let s = span_just(Token::S).map(|Spanned(_, span)| SpannedExpr::S(span));
         let b = span_just(Token::B).map(|Spanned(_, span)| SpannedExpr::B(span));
         let c = span_just(Token::C).map(|Spanned(_, span)| SpannedExpr::C(span));
@@ -186,6 +196,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
         };
 
         let leaf = choice((
+            sprime,
             k,
             s,
             b,

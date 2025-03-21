@@ -577,18 +577,25 @@ impl Reducer for BufferedMatrixReducer {
         fn reduce_redexes(
             buffer: MatrixBuffer,
             locked: Arc<[AtomicBool]>,
-            r: impl IntoParallelIterator<Item = (Conn, Conn)>,
+            mut r: Vec<(Conn, Conn)>,
         ) {
-            r.into_par_iter().for_each(move |x| {
-                let worker = ReductionWorker {
-                    buffer: buffer.clone(),
-                    locked: locked.clone(),
-                };
+            while !r.is_empty() {
+                let buff = buffer.clone();
+                let lock = locked.clone();
 
-                let redexes = worker.reduce_step(x);
+                r = r
+                    .into_par_iter()
+                    .map(move |x| {
+                        let worker = ReductionWorker {
+                            buffer: buff.clone(),
+                            locked: lock.clone(),
+                        };
 
-                reduce_redexes(buffer.clone(), locked.clone(), redexes);
-            });
+                        worker.reduce_step(x)
+                    })
+                    .flatten()
+                    .collect();
+            }
         }
 
         #[cfg(not(feature = "threadpool"))]
@@ -622,7 +629,7 @@ impl Reducer for BufferedMatrixReducer {
         reduce_redexes(
             self.buffer.clone(),
             self.locked.clone(),
-            self.root_redexes.par_drain(..),
+            self.root_redexes.par_drain(..).collect(),
         );
 
         #[cfg(not(feature = "threadpool"))]

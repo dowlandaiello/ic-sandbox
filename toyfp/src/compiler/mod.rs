@@ -427,7 +427,7 @@ pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
 }
 
 fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNetBuilder {
-    tracing::trace!("compiling {:?}", e);
+    tracing::trace!("compiling {}", e);
 
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
         p.clone()
@@ -546,6 +546,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         K,
         B,
         C,
+        SPrime,
         W,
         Id(String),
         Abstraction {
@@ -562,6 +563,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::S => write!(f, "S"),
+                Self::SPrime => write!(f, "S'"),
                 Self::K => write!(f, "K"),
                 Self::B => write!(f, "B"),
                 Self::C => write!(f, "C"),
@@ -609,6 +611,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 MixedExpr::Id(id) => Self::Var(id),
                 MixedExpr::K => Self::K,
                 MixedExpr::S => Self::S,
+                MixedExpr::SPrime => unreachable!(),
                 MixedExpr::B => Self::B,
                 MixedExpr::C => Self::C,
                 MixedExpr::W => Self::W,
@@ -623,24 +626,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 Self::Application { callee, params } => {
                     callee.is_all_sk() && params.iter().all(|param| param.is_all_sk())
                 }
-                Self::Id(_) | Self::S | Self::K | Self::B | Self::C | Self::W => true,
-            }
-        }
-
-        fn flatten(self) -> Self {
-            match self {
-                Self::Application { callee, mut params } => {
-                    let inner_param = params.remove(0);
-
-                    Self::Application {
-                        callee: Box::new(Self::Application {
-                            callee,
-                            params: vec![inner_param],
-                        }),
-                        params,
-                    }
+                Self::Id(_) | Self::S | Self::K | Self::B | Self::C | Self::W | Self::SPrime => {
+                    true
                 }
-                x => x,
             }
         }
 
@@ -649,7 +637,34 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 match body.as_mut() {
                     Self::Application { callee, params } => {
                         let lhs = callee;
-                        let rhs = params.remove(0);
+
+                        let mut fst = params
+                            .iter()
+                            .take(usize::max(params.len() - 1, 1))
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        let last = params.iter().skip(usize::max(params.len() - 1, 1)).next();
+
+                        if let Some(last) = last {
+                            *self = Self::Application {
+                                callee: Box::new(Self::S),
+                                params: vec![
+                                    Self::Abstraction {
+                                        bind_id: bind_id.clone(),
+                                        body: Box::new(Self::Application {
+                                            callee: lhs.clone(),
+                                            params: fst,
+                                        }),
+                                    },
+                                    Self::Abstraction {
+                                        bind_id: bind_id.clone(),
+                                        body: Box::new(last.clone()),
+                                    },
+                                ],
+                            };
+
+                            return;
+                        }
 
                         *self = Self::Application {
                             callee: Box::new(Self::S),
@@ -660,16 +675,16 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                                 },
                                 Self::Abstraction {
                                     bind_id: bind_id.clone(),
-                                    body: Box::new(rhs),
+                                    body: Box::new(fst.remove(0)),
                                 },
                             ],
-                        }
+                        };
                     }
                     Self::Id(id) if id == bind_id => {
                         *self = Self::Application {
                             callee: Box::new(Self::S),
                             params: vec![Self::K, Self::S],
-                        }
+                        };
                     }
                     id @ Self::Id(_) => {
                         *self = Self::Application {
@@ -694,6 +709,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                 Self::B => false,
                 Self::C => false,
                 Self::W => false,
+                Self::SPrime => false,
                 Self::Id(_) => false,
                 Self::Abstraction { .. } => unreachable!(),
                 Self::Application { callee, params } => {
@@ -703,90 +719,72 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
                             (
                                 Self::S,
                                 [Self::Application {
+                                    callee: inner_call,
+                                    params: inner_params,
+                                }, x],
+                            ) if matches!(**inner_call, Self::K) => {
+                                *self = Self::Application {
+                                    callee: Box::new(Self::B),
+                                    params: vec![inner_params[0].clone(), x.clone()],
+                                };
+
+                                true
+                            }
+                            (
+                                Self::S,
+                                [Self::Application {
                                     callee: inner_call_lhs,
                                     params: inner_params_lhs,
                                 }, Self::Application {
                                     callee: inner_call_rhs,
                                     params: inner_params_rhs,
                                 }],
-                            ) => match (&**inner_call_lhs, &**inner_call_rhs) {
-                                (Self::K, Self::K) => {
-                                    *self = Self::Application {
-                                        callee: Box::new(Self::K),
-                                        params: vec![Self::Application {
-                                            callee: Box::new(inner_params_lhs[0].clone()),
-                                            params: vec![inner_params_rhs[0].clone()],
-                                        }],
-                                    };
+                            ) if matches!(&**inner_call_lhs, Self::K)
+                                && matches!(&**inner_call_rhs, Self::K) =>
+                            {
+                                *self = Self::Application {
+                                    callee: Box::new(Self::K),
+                                    params: vec![Self::Application {
+                                        callee: Box::new(inner_params_lhs[0].clone()),
+                                        params: vec![inner_params_rhs[0].clone()],
+                                    }],
+                                };
 
-                                    true
-                                }
-                                _ => false,
-                            },
-                            (
-                                Self::S,
-                                [Self::Application {
-                                    callee: inner_call,
-                                    params: inner_params,
-                                }, x],
-                            ) => match **inner_call {
-                                Self::K => {
-                                    *self = Self::Application {
-                                        callee: Box::new(Self::B),
-                                        params: vec![inner_params[0].clone(), x.clone()],
-                                    };
-
-                                    true
-                                }
-                                _ => false,
-                            },
+                                true
+                            }
                             (
                                 Self::S,
                                 [x, Self::Application {
                                     callee: inner_call,
                                     params: inner_params,
                                 }],
-                            ) => match &**inner_call {
-                                Self::K => {
-                                    *self = Self::Application {
-                                        callee: Box::new(Self::C),
-                                        params: vec![x.clone(), inner_params[0].clone()],
-                                    };
+                            ) if matches!(&**inner_call, Self::K) => {
+                                *self = Self::Application {
+                                    callee: Box::new(Self::C),
+                                    params: vec![x.clone(), inner_params[0].clone()],
+                                };
 
-                                    true
-                                }
-                                _ => false,
-                            },
+                                true
+                            }
                             _ => false,
                         }
                 }
             }
         }
 
-        fn eliminate_innermost_abstraction(&mut self) -> bool {
-            if self.is_all_sk() {
-                return false;
-            }
-
+        fn eliminate_innermost_abstraction(&mut self) {
             match self {
-                Self::S => false,
-                Self::K => false,
-                Self::B => false,
-                Self::C => false,
-                Self::W => false,
-                Self::Id(_) => false,
+                Self::S | Self::K | Self::B | Self::C | Self::W | Self::Id(_) => {}
                 Self::Abstraction { body, .. } => {
-                    if !body.eliminate_innermost_abstraction() {
-                        self.eliminate();
-                    }
+                    body.eliminate_innermost_abstraction();
 
-                    true
+                    self.eliminate();
                 }
                 Self::Application { callee, params } => {
-                    callee.eliminate_innermost_abstraction()
-                        || params
-                            .iter_mut()
-                            .any(|x| x.eliminate_innermost_abstraction())
+                    callee.eliminate_innermost_abstraction();
+                    params
+                        .iter_mut()
+                        .for_each(|x| x.eliminate_innermost_abstraction());
                 }
             }
         }
@@ -811,8 +809,10 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
         tracing::debug!("eliminating abstraction in {}", buffer);
 
-        while buffer.eliminate_innermost_abstraction() {
+        while !buffer.is_all_sk() {
             tracing::debug!("eliminating abstraction in {}", buffer);
+
+            buffer.eliminate_innermost_abstraction();
         }
 
         while buffer.optimize() {

@@ -721,6 +721,83 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 self.clone()
             }
+            CombinatorBuilder::SPrime { primary_port } => {
+                self.update_with(|_| CombinatorBuilder::ZN {
+                    primary_port: primary_port.clone(),
+                    aux_ports: vec![None; 5],
+                });
+                let dup = OwnedNetBuilder::new(
+                    CombinatorBuilder::Dup {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+                let dec_left = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let dec_middle = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let dec_right = OwnedNetBuilder::new(
+                    CombinatorBuilder::D {
+                        primary_port: None,
+                        aux_port: None,
+                    },
+                    names,
+                );
+                let constr_left = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+                let constr_right = OwnedNetBuilder::new(
+                    CombinatorBuilder::Constr {
+                        primary_port: None,
+                        aux_ports: [const { None }; 2],
+                    },
+                    names,
+                );
+                let z3 = OwnedNetBuilder::new(
+                    CombinatorBuilder::Z3 {
+                        primary_port: None,
+                        aux_ports: [const { None }; 3],
+                    },
+                    names,
+                );
+
+                // Root conns
+                Self::connect((1, self.clone()), (1, z3.clone()));
+                Self::connect((2, self.clone()), (0, dup.clone()));
+                Self::connect((3, self.clone()), (0, dec_left.clone()));
+                Self::connect((4, self.clone()), (0, dec_middle.clone()));
+                Self::connect((5, self.clone()), (0, dec_right.clone()));
+
+                // Internal dup conns
+                Self::connect((1, dup.clone()), (2, constr_left.clone()));
+                Self::connect((2, dup.clone()), (2, constr_right.clone()));
+
+                // Internal D conns
+                Self::connect((1, dec_left.clone()), (0, constr_left.clone()));
+                Self::connect((1, dec_middle.clone()), (0, constr_right.clone()));
+                Self::connect((0, dec_right.clone()), (0, z3.clone()));
+
+                // Z3 conns
+                Self::connect((2, z3.clone()), (1, constr_left.clone()));
+                Self::connect((3, z3.clone()), (1, constr_right.clone()));
+
+                self.clone()
+            }
             CombinatorBuilder::S { primary_port } => {
                 tracing::trace!("expanding S");
 
@@ -1079,6 +1156,9 @@ pub(crate) enum CombinatorBuilder {
     S {
         primary_port: Option<Port>,
     },
+    SPrime {
+        primary_port: Option<Port>,
+    },
     Var {
         name: String,
         primary_port: Option<Port>,
@@ -1159,6 +1239,7 @@ impl CombinatorBuilder {
             Self::D { .. } => "D".to_owned(),
             Self::K { .. } => "K".to_owned(),
             Self::S { .. } => "S".to_owned(),
+            Self::SPrime { .. } => "S'".to_owned(),
             Self::Var { name, .. } => name.to_owned(),
             Self::Constr { .. } => "Constr".to_owned(),
             Self::Dup { .. } => "Dup".to_owned(),
@@ -1198,6 +1279,7 @@ impl CombinatorBuilder {
             Self::Era { .. } => Self::Era { primary_port },
             Self::K { .. } => Self::K { primary_port },
             Self::S { .. } => Self::S { primary_port },
+            Self::SPrime { .. } => Self::SPrime { primary_port },
             Self::Var { name, .. } => Self::Var { name, primary_port },
         }
     }
@@ -1270,6 +1352,7 @@ impl CombinatorBuilder {
             }
             k @ Self::K { .. } => k,
             s @ Self::S { .. } => s,
+            s @ Self::SPrime { .. } => s,
             v @ Self::Var { .. } => v,
             b @ Self::B { .. } => b,
             w @ Self::W { .. } => w,
@@ -1357,6 +1440,7 @@ impl CombinatorBuilder {
             | Self::Era { primary_port }
             | Self::K { primary_port }
             | Self::S { primary_port }
+            | Self::SPrime { primary_port }
             | Self::Var { primary_port, .. } => Box::new(iter::once(primary_port.as_mut())),
         }
     }
@@ -1413,6 +1497,7 @@ impl CombinatorBuilder {
             | Self::Era { primary_port }
             | Self::K { primary_port }
             | Self::S { primary_port }
+            | Self::SPrime { primary_port }
             | Self::Var { primary_port, .. } => Box::new(iter::once(primary_port.as_ref())),
         }
     }
@@ -1428,6 +1513,7 @@ impl CombinatorBuilder {
             | Self::Era { primary_port }
             | Self::K { primary_port }
             | Self::S { primary_port }
+            | Self::SPrime { primary_port }
             | Self::B { primary_port }
             | Self::C { primary_port }
             | Self::W { primary_port }
@@ -1450,6 +1536,7 @@ impl CombinatorBuilder {
             | Self::Era { .. }
             | Self::K { .. }
             | Self::S { .. }
+            | Self::SPrime { .. }
             | Self::Var { .. } => Box::new(iter::empty()),
         }
     }
