@@ -1090,4 +1090,20 @@ def S = \\n \\s \\z (s n)
 
         let _ = compile_icalc(parsed);
     }
+
+    #[test_log::test]
+    fn test_eval_bckw() {
+        let cases = [("(CKKK)", "K"), ("(C(BW)K)", "W")];
+
+        for (case, expected) in cases {
+            let names = NameIter::default();
+
+            let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+            let compiled = compile_sk(parsed.into(), &names);
+
+            let result = reduce_dyn(&compiled);
+
+            assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+        }
+    }
 }

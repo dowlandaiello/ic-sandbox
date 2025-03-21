@@ -135,44 +135,34 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
             cmp.make_root(names).combinate().orient()
         };
 
-        let k = |p| {
-            let mut names = Default::default();
+        let mk_cmp = |expr, builder| {
+            |p| {
+                let mut names = Default::default();
 
-            Self::decombinate_expr(
-                p,
-                combinate_cmp(OwnedNetBuilder::new(
-                    CombinatorBuilder::K { primary_port: None },
-                    &mut names,
-                )),
-            )
-            .then(|| SkExpr::K)
+                Self::decombinate_expr(p, combinate_cmp(OwnedNetBuilder::new(builder, &mut names)))
+                    .then(|| expr)
+            }
         };
 
-        let k_code = |p| {
-            let mut names = Default::default();
+        let mk_cmp_code = |expr: SkExpr, builder| {
+            |p| {
+                let mut names = Default::default();
 
-            Self::decombinate_expr(
-                p,
-                combinate_encoded_cmp(OwnedNetBuilder::new(
-                    CombinatorBuilder::K { primary_port: None },
-                    &mut names,
-                )),
-            )
-            .then(|| SkExpr::K)
+                Self::decombinate_expr(
+                    p,
+                    combinate_encoded_cmp(OwnedNetBuilder::new(builder, &mut names)),
+                )
+                .then(|| expr)
+            }
         };
 
-        let s = |p| {
-            let mut names = Default::default();
-
-            Self::decombinate_expr(
-                p,
-                combinate_cmp(OwnedNetBuilder::new(
-                    CombinatorBuilder::S { primary_port: None },
-                    &mut names,
-                )),
-            )
-            .then(|| SkExpr::S)
-        };
+        let tests = [
+            (SkExpr::K, CombinatorBuilder::K { primary_port: None }),
+            (SkExpr::S, CombinatorBuilder::S { primary_port: None }),
+            (SkExpr::B, CombinatorBuilder::B { primary_port: None }),
+            (SkExpr::C, CombinatorBuilder::C { primary_port: None }),
+            (SkExpr::W, CombinatorBuilder::W { primary_port: None }),
+        ];
 
         let var = |p: AstPort| {
             p.iter_tree()
@@ -182,23 +172,18 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 .map(|v| SkExpr::Var(v))
         };
 
-        let s_code = |p| {
-            let mut names = Default::default();
-
-            Self::decombinate_expr(
-                p,
-                combinate_encoded_cmp(OwnedNetBuilder::new(
-                    CombinatorBuilder::S { primary_port: None },
-                    &mut names,
-                )),
-            )
-            .then(|| SkExpr::S)
-        };
-
-        s(p.clone())
-            .or_else(|| k(p.clone()))
-            .or_else(|| k_code(p.clone()))
-            .or_else(|| s_code(p.clone()))
+        tests
+            .iter()
+            .map(|test| mk_cmp(test.0.clone(), test.1.clone())(p.clone()))
+            .flatten()
+            .next()
+            .or_else(|| {
+                tests
+                    .iter()
+                    .map(|test| mk_cmp_code(test.0.clone(), test.1.clone())(p.clone()))
+                    .flatten()
+                    .next()
+            })
             .or_else(|| var(p.clone()))
     }
 
@@ -394,6 +379,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 dec_middle.expand_step(names);
                 dec_right.expand_step(names);
+                root_ref.expand_step(names);
 
                 root_ref.clone()
             }
@@ -431,7 +417,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 Self::connect((1, root_ref.clone()), (1, z3.clone()));
                 Self::connect((2, root_ref.clone()), (0, dup.clone()));
-                Self::connect((0, dec.clone()), (3, z3.clone()));
+                Self::connect((0, dec.clone()), (3, root_ref.clone()));
 
                 // Inner dec conn
                 Self::connect((1, dec.clone()), (0, z3.clone()));
@@ -440,8 +426,9 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 Self::connect((2, z3.clone()), (2, dup.clone()));
                 Self::connect((3, z3.clone()), (1, dup.clone()));
 
-                z3.expand_step(names);
                 dec.expand_step(names);
+                z3.expand_step(names);
+                root_ref.expand_step(names);
 
                 root_ref.clone()
             }
@@ -479,6 +466,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
                 z3.expand_step(names);
                 dec.expand_step(names);
+                root_ref.expand_step(names);
 
                 root_ref.clone()
             }
@@ -684,16 +672,18 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     },
                     names,
                 );
-                let root = CombinatorBuilder::ZN {
-                    primary_port: primary_port.clone(),
-                    aux_ports: vec![None; 4],
-                };
+                self.update_with(|_| CombinatorBuilder::Z4 {
+                    primary_port: None,
+                    aux_ports: [const { None }; 4],
+                });
 
-                self.update_with(|_| root);
+                if let Some(p) = primary_port {
+                    Self::connect(p.clone(), (0, self.clone()));
+                }
 
                 // Aux <-> root
-                if let Some((port, aux)) = aux_port {
-                    Self::connect((*port, aux.clone()), (4, self.clone()));
+                if let Some(aux) = aux_port {
+                    Self::connect(aux.clone(), (4, self.clone()));
                 }
 
                 // Dup <-> root
@@ -729,7 +719,6 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                 Self::connect((0, dec.clone()), (3, self.clone()));
 
                 dec.expand_step(names);
-
                 root_ref.expand_step(names);
 
                 self.clone()
