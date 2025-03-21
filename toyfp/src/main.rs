@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use inetlib::{parser::naming::NameIter, reducers::combinators::reduce_dyn};
+use inetlib::reducers::combinators::reduce_dyn;
 use std::path::PathBuf;
 use toyfplib::compiler;
 
@@ -8,11 +8,11 @@ mod cli;
 fn main() {
     tracing_subscriber::fmt::init();
 
-    let flag_sk = Arg::new("sk")
-        .long("sk")
-        .short('s')
+    let flag_combinator = Arg::new("comb")
+        .long("combinator")
+        .short('c')
         .action(ArgAction::SetTrue)
-        .help("use SK combinators as the input mode");
+        .help("use SKBCW combinators as the input mode");
 
     let cmd = clap::Command::new("toyfp")
         .bin_name("toyfp")
@@ -24,28 +24,28 @@ fn main() {
                 )
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file_default("STDOUT".into()))
-                .arg(flag_sk.clone()),
+                .arg(flag_combinator.clone()),
         )
         .subcommand(
             Command::new("compile")
                 .about("Compiles a program from the input .fp file")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(flag_sk.clone()),
+                .arg(flag_combinator.clone()),
         )
         .subcommand(
             Command::new("eval")
                 .about("Evaluates a DVM interaction combinator program from the input .fp file")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(flag_sk.clone()),
+                .arg(flag_combinator.clone()),
         )
         .subcommand(
             Command::new("dev")
                 .about("Initiates an interactive REPL prototyping environment")
                 .arg(cli::arg_in_file())
                 .arg(cli::arg_out_file())
-                .arg(flag_sk.clone()),
+                .arg(flag_combinator.clone()),
         );
 
     let arg_matches = cmd.get_matches();
@@ -55,14 +55,14 @@ fn main() {
                 .get_one::<String>("source")
                 .expect("missing source file name");
 
-            if arg_matches.get_flag("sk") {
+            if arg_matches.get_flag("comb") {
                 let _ = cli::sk::read_program(input_fname);
             }
 
             let _ = cli::lambda::read_program(input_fname);
         }
         Some(("dev", arg_matches)) => {
-            if arg_matches.get_flag("sk") {
+            if arg_matches.get_flag("comb") {
                 let _ = cli::sk::repl();
 
                 return;
@@ -75,7 +75,7 @@ fn main() {
                 .get_one::<String>("source")
                 .expect("missing source file name");
 
-            if arg_matches.get_flag("sk") {
+            if arg_matches.get_flag("comb") {
                 let res = cli::sk::eval(input_fname);
 
                 println!("{}", res);
@@ -101,7 +101,7 @@ fn main() {
             let mut out_fname = PathBuf::from(input_fname);
             out_fname.set_extension("d");
 
-            if arg_matches.get_flag("sk") {
+            if arg_matches.get_flag("comb") {
                 let program = cli::sk::read_program(input_fname);
                 let compiled = compiler::compile_sk(program, &names);
 

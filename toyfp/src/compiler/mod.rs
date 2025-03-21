@@ -467,6 +467,18 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
                 names,
             );
         }
+        SkExpr::B => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::B { primary_port: None }, names),
+            Vec::new(),
+        ),
+        SkExpr::C => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::C { primary_port: None }, names),
+            Vec::new(),
+        ),
+        SkExpr::W => (
+            OwnedNetBuilder::new(SkCombinatorBuilder::W { primary_port: None }, names),
+            Vec::new(),
+        ),
         SkExpr::K => (
             OwnedNetBuilder::new(SkCombinatorBuilder::K { primary_port: None }, names),
             Vec::new(),
