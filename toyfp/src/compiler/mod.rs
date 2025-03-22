@@ -545,6 +545,15 @@ fn mk_id() -> SkExpr {
 }
 
 pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> AstPort {
+    tracing::trace!(
+        "compiling stmts: {}",
+        stmts
+            .clone()
+            .map(|stmt| stmt.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
     #[derive(Clone, Debug)]
     enum MixedExpr {
         S,
@@ -912,7 +921,14 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         .unwrap();
 
     let mut inlined = inline(expr, &def_table);
+
+    while def_table.keys().any(|k| inlined.contains_var(k)) {
+        inlined = inline(inlined, &def_table);
+    }
+
     inlined = deduplicate_lc(inlined, &mut Default::default(), &mut Default::default());
+
+    tracing::trace!("inlined: {}", inlined);
 
     let cc = graphical::compile(inlined);
 

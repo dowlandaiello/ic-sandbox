@@ -1,0 +1,8 @@
+#include ../toyfp/stdlib/func.lc
+#include ../toyfp/stdlib/num.lc
+#include ../toyfp/stdlib/bool.lc
+
+factgen = \f.\n.((iszero n) one (mult n (f (pred n))))
+fact    = (Y factgen)
+
+(fact two)

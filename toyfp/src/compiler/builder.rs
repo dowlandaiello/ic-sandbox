@@ -979,11 +979,11 @@ impl OwnedNetBuilder {
     }
 
     pub(crate) fn encode(self, names: &NameIter) -> Self {
-        tracing::trace!("encoding {:?}", self);
-
         self.clone().iter_tree().for_each(|x| {
             x.expand_step(names);
         });
+
+        tracing::trace!("encoding {}", self.clone().iter_tree().into_string());
 
         let dup_refs = self
             .clone()
@@ -1076,6 +1076,8 @@ impl OwnedNetBuilder {
         for comb in z_combs {
             comb.expand_step(names);
         }
+
+        new_root.expand_step(names);
 
         new_root.checksum();
 

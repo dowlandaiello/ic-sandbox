@@ -44,10 +44,12 @@ pub fn decompile(
                         bind_id.clone(),
                     );
 
-                    if let Some(bind_id) = bind_ids_for_ports.get(&inner_aux[1].as_ref().unwrap()) {
+                    if let Some(inner_bind_id) =
+                        bind_ids_for_ports.get(&inner_aux[1].as_ref().unwrap())
+                    {
                         Some(Expr::Abstraction {
                             bind_id: bind_id.clone(),
-                            body: Box::new(Expr::Id(bind_id.to_owned())),
+                            body: Box::new(Expr::Id(inner_bind_id.to_owned())),
                         })
                     } else {
                         Some(Expr::Abstraction {

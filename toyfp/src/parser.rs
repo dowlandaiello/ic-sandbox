@@ -220,6 +220,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
     def.then_ignore(span_just(Token::Newline).repeated().at_least(1))
         .repeated()
         .then(expr.map_with_span(|e, span: Span| Spanned(Stmt::Expr(e.0), span)))
+        .then_ignore(span_just(Token::Newline).repeated().ignore_then(end()))
         .map(|(mut defs, entry)| {
             defs.push(entry);
 
