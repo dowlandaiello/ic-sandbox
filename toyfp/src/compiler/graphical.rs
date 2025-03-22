@@ -99,14 +99,6 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
                 names,
             );
 
-            let dec = OwnedNetBuilder::new(
-                RawCombinatorBuilder::D {
-                    primary_port: None,
-                    aux_port: None,
-                },
-                names,
-            );
-
             let var = OwnedNetBuilder::new(
                 RawCombinatorBuilder::Var {
                     name: names.next_var_name(),
@@ -116,7 +108,6 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
             );
 
             OwnedNetBuilder::connect((2, constr.clone()), best_port(&body_cc));
-            OwnedNetBuilder::connect((1, constr.clone()), (0, dec.clone()));
 
             // TODO: Need to handle multiple occurrences of bind_id
 
@@ -132,7 +123,7 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
                     OwnedNetBuilder::connect((0, era.clone()), (1, constr.clone()));
                 }
                 [x] => {
-                    OwnedNetBuilder::connect((1, dec.clone()), x.clone());
+                    OwnedNetBuilder::connect((1, constr.clone()), x.clone());
                 }
                 xs => {
                     xs.iter()
@@ -155,22 +146,29 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
                             OwnedNetBuilder::connect((0, dup.clone()), acc);
                             OwnedNetBuilder::connect((1, dup.clone()), x.clone());
 
-                            (1, dup)
+                            (2, dup)
                         });
                 }
             }
             OwnedNetBuilder::connect((0, var.clone()), (0, constr.clone()));
 
-            constr
+            constr.encode(names)
         }
         Expr::Application { lhs, rhs } => {
             let lhs_cc = build_compilation_expr(*lhs, names);
-            let rhs_cc = build_compilation_expr(*rhs, names).encode(names);
+            let rhs_cc = build_compilation_expr(*rhs, names);
 
             let constr_app = OwnedNetBuilder::new(
                 RawCombinatorBuilder::Constr {
                     primary_port: None,
                     aux_ports: [const { None }; 2],
+                },
+                names,
+            );
+            let dec = OwnedNetBuilder::new(
+                RawCombinatorBuilder::D {
+                    primary_port: None,
+                    aux_port: None,
                 },
                 names,
             );
@@ -183,7 +181,8 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
                 names,
             );
 
-            OwnedNetBuilder::connect((0, constr_app.clone()), best_port(&lhs_cc));
+            OwnedNetBuilder::connect((0, constr_app.clone()), (1, dec.clone()));
+            OwnedNetBuilder::connect((0, dec.clone()), best_port(&lhs_cc));
             OwnedNetBuilder::connect((1, constr_app.clone()), best_port(&rhs_cc));
             OwnedNetBuilder::connect((2, constr_app.clone()), (0, var.clone()));
 
