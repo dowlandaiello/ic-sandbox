@@ -1,0 +1,7 @@
+#include ./bool.lc
+
+zero   = \f.\x.x
+one    = \f.\x.(f x)
+iszero = \n.(n \x.false true)
+pred   = \n.\f.\x.(n \g.\h.(h (g f)) \u.x \u.u)
+mult   = \m.\n.\f.(m (n f))
