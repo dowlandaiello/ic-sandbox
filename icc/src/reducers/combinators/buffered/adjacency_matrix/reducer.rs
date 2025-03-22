@@ -247,6 +247,28 @@ impl ReductionWorker {
         None
     }
 
+    fn conn_maybe_circular<'a>(
+        top_id: Ptr,
+        bot_id: Ptr,
+        mut top_ports: impl Iterator<Item = Conn>,
+        mut bot_ports: impl Iterator<Item = Conn>,
+    ) -> Option<(Conn, Conn)> {
+        let top_left = top_ports.next()?;
+        let top_right = top_ports.next()?;
+        let bot_left = bot_ports.next()?;
+        let bot_right = bot_ports.next()?;
+
+        if top_left.cell == top_right.cell && top_left.cell == top_id {
+            return Some((bot_left, bot_right));
+        }
+
+        if bot_left.cell == bot_right.cell && bot_right.cell == bot_id {
+            return Some((top_left, top_right));
+        }
+
+        None
+    }
+
     #[tracing::instrument(skip(self))]
     fn reduce_step(&self, redex: (Conn, Conn)) -> Vec<(Conn, Conn)> {
         let a_id = redex.0.cell;
@@ -345,33 +367,11 @@ impl ReductionWorker {
 
         let map_conn = |c: Conn| (c, self.buffer.get_cell(c.cell));
 
-        fn conn_maybe_circular<'a>(
-            top_id: Ptr,
-            bot_id: Ptr,
-            mut top_ports: impl Iterator<Item = Conn>,
-            mut bot_ports: impl Iterator<Item = Conn>,
-        ) -> Option<(Conn, Conn)> {
-            let top_left = top_ports.next()?;
-            let top_right = top_ports.next()?;
-            let bot_left = bot_ports.next()?;
-            let bot_right = bot_ports.next()?;
-
-            if top_left.cell == top_right.cell && top_left.cell == top_id {
-                return Some((bot_left, bot_right));
-            }
-
-            if bot_left.cell == bot_right.cell && bot_right.cell == bot_id {
-                return Some((top_left, top_right));
-            }
-
-            None
-        }
-
         let new_redexes = match (a_discriminant, b_discriminant) {
             // Annihilation of alpha-alpha
             (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
                 // Handle circular conn
-                if let Some((a, b)) = conn_maybe_circular(
+                if let Some((a, b)) = Self::conn_maybe_circular(
                     a_id,
                     b_id,
                     a_cell.iter_aux_ports().map(|x| x.unwrap()),
@@ -406,7 +406,7 @@ impl ReductionWorker {
                     b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
                 );
 
-                self.make_commutation(top_ports, bottom_ports)
+                self.make_commutation(a_id, b_id, a_cell, b_cell, top_ports, bottom_ports)
             }
             // Commutation of dup constr
             (Cell::Dup, Cell::Constr) => {
@@ -415,18 +415,68 @@ impl ReductionWorker {
                     a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
                 );
 
-                self.make_commutation(top_ports, bottom_ports)
+                self.make_commutation(b_id, a_id, b_cell, a_cell, top_ports, bottom_ports)
             }
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
                 let top_ports = a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
+                let mut ports_2 = a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
 
-                self.make_era_commutation(top_ports)
+                // Circular elim
+                if ports_2.next().unwrap().0.cell == a_id && ports_2.next().unwrap().0.cell == a_id
+                {
+                    let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
+                    self.conn_maybe_redex(
+                        (
+                            Conn {
+                                port: 0,
+                                cell: eras[0],
+                            },
+                            self.buffer.get_cell(eras[0]),
+                        ),
+                        (
+                            Conn {
+                                port: 0,
+                                cell: eras[1],
+                            },
+                            self.buffer.get_cell(eras[1]),
+                        ),
+                    )
+                    .map(|redex| vec![redex])
+                    .unwrap_or_default()
+                } else {
+                    self.make_era_commutation(top_ports)
+                }
             }
             (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
                 let top_ports = b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
+                let mut ports_2 = b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
 
-                self.make_era_commutation(top_ports)
+                // Circular elim
+                if ports_2.next().unwrap().0.cell == b_id && ports_2.next().unwrap().0.cell == b_id
+                {
+                    let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
+                    self.conn_maybe_redex(
+                        (
+                            Conn {
+                                port: 0,
+                                cell: eras[0],
+                            },
+                            self.buffer.get_cell(eras[0]),
+                        ),
+                        (
+                            Conn {
+                                port: 0,
+                                cell: eras[1],
+                            },
+                            self.buffer.get_cell(eras[1]),
+                        ),
+                    )
+                    .map(|redex| vec![redex])
+                    .unwrap_or_default()
+                } else {
+                    self.make_era_commutation(top_ports)
+                }
             }
             _ => {
                 panic!("invalid redex")
@@ -467,9 +517,15 @@ impl ReductionWorker {
 
     fn make_commutation<'a>(
         &'a self,
+        a_id: Ptr,
+        b_id: Ptr,
+        a_cell: &'a CellRepr,
+        b_cell: &'a CellRepr,
         top_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + 'a,
         bottom_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + 'a,
     ) -> Vec<(Conn, Conn)> {
+        let map_conn = |c: Conn| (c, self.buffer.get_cell(c.cell));
+
         // left to right
         let dups = [self.buffer.push(Cell::Dup), self.buffer.push(Cell::Dup)];
 
@@ -486,14 +542,55 @@ impl ReductionWorker {
 
         let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
 
-        top_ports
-            .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
-            .map(|(a, b)| {
-                let b_cell = self.buffer.get_cell(b.cell);
+        fn conn_maybe_circular_horizontal<'a>(
+            cell_id: Ptr,
+            mut ports: impl Iterator<Item = Conn>,
+            mut dests: impl Iterator<Item = Conn>,
+        ) -> Option<(Conn, Conn)> {
+            let left = ports.next()?;
+            let right = ports.next()?;
 
-                self.conn_maybe_redex(a, (b, b_cell))
-            })
-            .chain(
+            if left.cell == right.cell && left.cell == cell_id {
+                return Some((dests.next()?, dests.next()?));
+            }
+
+            None
+        }
+
+        let mut redexes = Vec::new();
+
+        if let Some((a, b)) = conn_maybe_circular_horizontal(
+            a_id,
+            a_cell.iter_aux_ports().map(|x| x.unwrap()),
+            dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }),
+        ) {
+            if let Some(conn) = self.conn_maybe_redex(map_conn(a), map_conn(b)) {
+                redexes.push(conn);
+            }
+        } else {
+            redexes.extend::<Vec<(Conn, Conn)>>(
+                top_ports
+                    .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                    .map(|(a, b)| {
+                        let b_cell = self.buffer.get_cell(b.cell);
+
+                        self.conn_maybe_redex(a, (b, b_cell))
+                    })
+                    .filter_map(|x| x)
+                    .collect(),
+            );
+        }
+
+        if let Some((a, b)) = conn_maybe_circular_horizontal(
+            b_id,
+            b_cell.iter_aux_ports().map(|x| x.unwrap()).rev(),
+            constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }),
+        ) {
+            if let Some(conn) = self.conn_maybe_redex(map_conn(a), map_conn(b)) {
+                redexes.push(conn);
+            }
+        } else {
+            redexes.extend::<Vec<(Conn, Conn)>>(
                 bottom_ports
                     .rev()
                     .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
@@ -502,15 +599,25 @@ impl ReductionWorker {
 
                         self.conn_maybe_redex(a, (b, b_cell))
                     })
-                    .chain(conns.into_iter().map(|(a, b)| {
-                        let a_cell = self.buffer.get_cell(a.0);
-                        let b_cell = self.buffer.get_cell(b.0);
+                    .filter_map(|x| x)
+                    .collect(),
+            );
+        }
 
-                        self.conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
-                    })),
-            )
-            .filter_map(|x| x)
-            .collect()
+        redexes.extend::<Vec<(Conn, Conn)>>(
+            conns
+                .into_iter()
+                .map(|(a, b)| {
+                    let a_cell = self.buffer.get_cell(a.0);
+                    let b_cell = self.buffer.get_cell(b.0);
+
+                    self.conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
+                })
+                .filter_map(|x| x)
+                .collect(),
+        );
+
+        redexes
     }
 }
 

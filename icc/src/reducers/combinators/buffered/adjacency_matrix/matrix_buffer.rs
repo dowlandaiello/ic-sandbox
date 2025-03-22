@@ -31,6 +31,23 @@ impl MatrixBuffer {
                 .enumerate()
                 .filter_map(|(i, x)| Some((i, x?)))
                 .for_each(|(port_self, conn)| {
+                    tracing::trace!(
+                        "checksum context: (cell: {}, port: {}), {}",
+                        i,
+                        port_self,
+                        conn
+                    );
+                    tracing::trace!(
+                        "checksum context: {}",
+                        self.get_cell(i).load_discriminant_uninit_var().unwrap(),
+                    );
+                    tracing::trace!(
+                        "checksum context: {}",
+                        self.get_cell(conn.cell)
+                            .load_discriminant_uninit_var()
+                            .unwrap(),
+                    );
+
                     assert_eq!(
                         self.iter_ports(conn.cell)
                             .nth(conn.port as usize)
