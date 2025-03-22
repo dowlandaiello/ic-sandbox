@@ -1,0 +1,5 @@
+pair = \a.\b.\f.((f a) b)
+fst  = \a.\b.a
+snd  = \a.\b.b
+
+(pair x y first)
