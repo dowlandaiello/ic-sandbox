@@ -2,4 +2,4 @@ id = \x.x
 c  = \y.z
 t  = \a.\b.a
 
-((t id b) a)
+(t x y)

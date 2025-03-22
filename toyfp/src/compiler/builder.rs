@@ -166,9 +166,11 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
 
         let var = |p: AstPort| {
             p.iter_tree()
-                .filter_map(|x| x.borrow().as_var().map(|x| x.name.0.clone()))
-                .filter(|name| !name.starts_with("v"))
+                .filter_map(|x| x.borrow().as_var().cloned())
+                .filter(|var| var.name.0.starts_with("v"))
                 .next()
+                .and_then(|var| var.port)
+                .and_then(|(_, cell)| cell.borrow().as_var().map(|v| v.name.0.clone()))
                 .map(|v| SkExpr::Var(v))
         };
 
