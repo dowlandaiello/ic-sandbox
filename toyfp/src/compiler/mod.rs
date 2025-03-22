@@ -78,7 +78,7 @@ fn next_dedup(
 ) -> String {
     let mut valid_var = var.clone();
 
-    while used_names.contains(&valid_var) && !available_names.remove(&valid_var) {
+    while used_names.contains(&valid_var) {
         valid_var = format!("{}{}", &valid_var, &var);
     }
 
@@ -829,6 +829,53 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         }
     }
 
+    fn replace_occurrences_lc(e: Expr, old: &str, new: String) -> Expr {
+        match e {
+            Expr::Abstraction { bind_id, body } => {
+                if bind_id == old {
+                    return Expr::Abstraction {
+                        bind_id,
+                        body: Box::new(replace_occurrences_lc(*body, old, new)),
+                    };
+                }
+
+                Expr::Abstraction {
+                    bind_id,
+                    body: Box::new(replace_occurrences_lc(*body, old, new)),
+                }
+            }
+            Expr::Application { lhs, rhs } => Expr::Application {
+                lhs: Box::new(replace_occurrences_lc(*lhs, old, new.clone())),
+                rhs: Box::new(replace_occurrences_lc(*rhs, old, new.clone())),
+            },
+            Expr::Id(v) => Expr::Id(if v == old { new } else { v }),
+        }
+    }
+
+    fn deduplicate_lc(
+        e: Expr,
+        used_names: &mut BTreeSet<String>,
+        available_names: &mut BTreeSet<String>,
+    ) -> Expr {
+        match e {
+            Expr::Abstraction { bind_id, body } => {
+                let new_var = next_dedup(bind_id.clone(), used_names, available_names);
+
+                let replaced = replace_occurrences_lc(*body, &bind_id, new_var.clone());
+
+                Expr::Abstraction {
+                    bind_id: new_var,
+                    body: Box::new(deduplicate_lc(replaced, used_names, available_names)),
+                }
+            }
+            Expr::Application { lhs, rhs } => Expr::Application {
+                lhs: Box::new(deduplicate_lc(*lhs, used_names, available_names)),
+                rhs: Box::new(deduplicate_lc(*rhs, used_names, available_names)),
+            },
+            v => v,
+        }
+    }
+
     fn precompile(e: Expr) -> SkExpr {
         let mut buffer: MixedExpr = e.into();
 
@@ -864,7 +911,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         .next()
         .unwrap();
 
-    let inlined = inline(expr, &def_table);
+    let mut inlined = inline(expr, &def_table);
+    inlined = deduplicate_lc(inlined, &mut Default::default(), &mut Default::default());
+
     let cc = graphical::compile(inlined);
 
     cc

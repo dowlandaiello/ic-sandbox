@@ -25,8 +25,8 @@ pub fn compile(e: Expr) -> Port {
     combinated
 }
 
-pub fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuilder {
-    let id_port = |p: OwnedNetBuilder, id: &str| -> (usize, OwnedNetBuilder) {
+pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuilder {
+    let id_ports = |p: OwnedNetBuilder, id: &str| -> Vec<(usize, OwnedNetBuilder)> {
         p.clone()
             .iter_tree()
             .map(|x| {
@@ -47,8 +47,7 @@ pub fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuilder {
                     .next()
             })
             .flatten()
-            .next()
-            .unwrap_or((1, p.clone()))
+            .collect()
     };
 
     let best_port = |p: OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
@@ -106,7 +105,48 @@ pub fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuilder {
             );
 
             OwnedNetBuilder::connect((2, constr.clone()), (0, body_cc.clone()));
-            OwnedNetBuilder::connect((1, constr.clone()), id_port(body_cc.clone(), &bind_id));
+
+            // TODO: Need to handle multiple occurrences of bind_id
+
+            let bind_id_ports = id_ports(body_cc.clone(), &bind_id);
+
+            match bind_id_ports.as_slice() {
+                [] => {
+                    let era = OwnedNetBuilder::new(
+                        RawCombinatorBuilder::Era { primary_port: None },
+                        names,
+                    );
+
+                    OwnedNetBuilder::connect((0, era.clone()), (1, constr.clone()));
+                }
+                [x] => {
+                    OwnedNetBuilder::connect((1, constr.clone()), x.clone());
+                }
+                xs => {
+                    xs.iter()
+                        .enumerate()
+                        .fold((1, constr.clone()), |acc, (i, x)| {
+                            if i == xs.len() - 1 {
+                                OwnedNetBuilder::connect(x.clone(), acc.clone());
+
+                                return acc;
+                            }
+
+                            let dup = OwnedNetBuilder::new(
+                                RawCombinatorBuilder::Dup {
+                                    primary_port: None,
+                                    aux_ports: [const { None }; 2],
+                                },
+                                names,
+                            );
+
+                            OwnedNetBuilder::connect((0, dup.clone()), acc);
+                            OwnedNetBuilder::connect((1, dup.clone()), x.clone());
+
+                            (2, dup)
+                        });
+                }
+            }
             OwnedNetBuilder::connect((0, var.clone()), (0, constr.clone()));
 
             body_cc
