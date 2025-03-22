@@ -115,7 +115,7 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
                 names,
             );
 
-            OwnedNetBuilder::connect((2, constr.clone()), (0, body_cc.clone()));
+            OwnedNetBuilder::connect((2, constr.clone()), best_port(&body_cc));
             OwnedNetBuilder::connect((1, constr.clone()), (0, dec.clone()));
 
             // TODO: Need to handle multiple occurrences of bind_id
@@ -187,7 +187,7 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
             OwnedNetBuilder::connect((1, constr_app.clone()), best_port(&rhs_cc));
             OwnedNetBuilder::connect((2, constr_app.clone()), (0, var.clone()));
 
-            best_port(&constr_app).1
+            constr_app
         }
     };
 
