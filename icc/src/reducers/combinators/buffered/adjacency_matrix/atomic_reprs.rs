@@ -224,7 +224,9 @@ impl CellRepr {
         self.aux_ports[i].load()
     }
 
-    pub(crate) fn iter_ports<'a>(&'a self) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
+    pub(crate) fn iter_ports<'a>(
+        &'a self,
+    ) -> impl DoubleEndedIterator<Item = Option<Conn>> + Clone + 'a {
         [
             self.load_primary_port(),
             self.load_aux_port(0),
@@ -235,7 +237,7 @@ impl CellRepr {
 
     pub(crate) fn iter_aux_ports<'a>(
         &'a self,
-    ) -> impl DoubleEndedIterator<Item = Option<Conn>> + 'a {
+    ) -> impl DoubleEndedIterator<Item = Option<Conn>> + Clone + 'a {
         [self.load_aux_port(0), self.load_aux_port(1)].into_iter()
     }
 

@@ -345,21 +345,56 @@ impl ReductionWorker {
 
         let map_conn = |c: Conn| (c, self.buffer.get_cell(c.cell));
 
+        fn conn_maybe_circular<'a>(
+            top_id: Ptr,
+            bot_id: Ptr,
+            mut top_ports: impl Iterator<Item = Conn>,
+            mut bot_ports: impl Iterator<Item = Conn>,
+        ) -> Option<(Conn, Conn)> {
+            let top_left = top_ports.next()?;
+            let top_right = top_ports.next()?;
+            let bot_left = bot_ports.next()?;
+            let bot_right = bot_ports.next()?;
+
+            if top_left.cell == top_right.cell && top_left.cell == top_id {
+                return Some((bot_left, bot_right));
+            }
+
+            if bot_left.cell == bot_right.cell && bot_right.cell == bot_id {
+                return Some((top_left, top_right));
+            }
+
+            None
+        }
+
         let new_redexes = match (a_discriminant, b_discriminant) {
             // Annihilation of alpha-alpha
             (Cell::Constr, Cell::Constr) | (Cell::Dup, Cell::Dup) => {
-                let (top_ports, bottom_ports) = (
-                    a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
-                    b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
-                );
+                // Handle circular conn
+                if let Some((a, b)) = conn_maybe_circular(
+                    a_id,
+                    b_id,
+                    a_cell.iter_aux_ports().map(|x| x.unwrap()),
+                    b_cell.iter_aux_ports().map(|x| x.unwrap()),
+                ) {
+                    [self.conn_maybe_redex(map_conn(a), map_conn(b))]
+                        .into_iter()
+                        .filter_map(|x| x)
+                        .collect()
+                } else {
+                    let (top_ports, bottom_ports) = (
+                        a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
+                        b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
+                    );
 
-                // Remember, bottom ports is flipped due to orientation
-                top_ports
-                    .into_iter()
-                    .zip(bottom_ports)
-                    .map(|(a, b)| self.conn_maybe_redex(a, b))
-                    .filter_map(|x| x)
-                    .collect()
+                    // Remember, bottom ports is flipped due to orientation
+                    top_ports
+                        .into_iter()
+                        .zip(bottom_ports)
+                        .map(|(a, b)| self.conn_maybe_redex(a, b))
+                        .filter_map(|x| x)
+                        .collect()
+                }
             }
             // Annihilation of Era
             (Cell::Era, Cell::Era) => Default::default(),
