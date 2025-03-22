@@ -925,22 +925,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 pub fn decompile(p: &AstPort) -> Option<Expr> {
     let names = Default::default();
 
-    let dec_sk = decode_sk(p, &names);
-
-    if let SkExpr::Var(v) = dec_sk {
-        return Some(Expr::Id(v));
-    }
-
-    if dec_sk == mk_id() {
-        let bind_name = names.next_var_name();
-
-        return Some(Expr::Abstraction {
-            bind_id: bind_name.clone(),
-            body: Box::new(Expr::Id(bind_name.clone())),
-        });
-    }
-
-    unimplemented!()
+    graphical::decompile(p, &names, &mut Default::default())
 }
 
 #[cfg(test)]
@@ -1008,6 +993,24 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
+    }
+
+    #[test_log::test]
+    fn test_eval_partial_lc() {
+        let (case, expected) = ("(\\x.x \\x.x)", "\\v0.v0");
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient()).unwrap().to_string(),
+            expected
+        );
     }
 
     #[test_log::test]

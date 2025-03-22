@@ -45,16 +45,10 @@ pub fn repl() {
                         let parsed = assert_parse_literal_ok(stmts.as_str());
                         let combinated = compiler::compile(parsed.clone(), &names);
 
-                        if let Some(reduced) =
-                            compiler::decompile(reduce_dyn(&combinated).get(0).unwrap())
-                        {
-                            println!("{}", reduced);
-                        } else {
-                            println!(
-                                "{}",
-                                parsed.map(|x| x.to_string()).collect::<Vec<_>>().join("\n")
-                            );
-                        }
+                        let reduced =
+                            compiler::decompile(reduce_dyn(&combinated).get(0).unwrap()).unwrap();
+
+                        println!("{}", reduced);
 
                         break;
                     }

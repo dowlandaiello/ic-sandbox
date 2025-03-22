@@ -3,7 +3,78 @@ use super::{
     CombinatorBuilder,
 };
 use crate::parser::Expr;
-use inetlib::parser::{ast_combinators::Port, naming::NameIter};
+use inetlib::parser::{
+    ast_combinators::{Constructor, Expr as CExpr, IndexedPort, Port},
+    naming::NameIter,
+};
+use std::collections::BTreeMap;
+
+pub fn decompile(
+    p: &Port,
+    names: &NameIter,
+    bind_ids_for_ports: &mut BTreeMap<IndexedPort, String>,
+) -> Option<Expr> {
+    tracing::debug!("decoding {}", p.iter_tree_visitor().into_string());
+
+    // A constr can indicate an abstraction
+    // or an application.
+    // We can differentiate the two since an abstraction will always be encodced.
+    // That is, its root is a Z_4 node.
+    // We will want to start our decompilation at the root of the expression, however.
+    // This is indicated by the position of v
+    // Let us start with application
+
+    // This is ian abstraction
+    match &*p.borrow() {
+        CExpr::Constr(Constructor { aux_ports, .. })
+            if matches!(
+                &*aux_ports[0].as_ref().unwrap().1.borrow(),
+                CExpr::Constr(_)
+            ) =>
+        {
+            println!("here");
+
+            match &*aux_ports[1].as_ref().unwrap().1.borrow() {
+                CExpr::Constr(Constructor {
+                    aux_ports: inner_aux,
+                    ..
+                }) => {
+                    let bind_id = names.next_var_name();
+
+                    bind_ids_for_ports.insert(
+                        (1, aux_ports[1].as_ref().unwrap().1.clone()),
+                        bind_id.clone(),
+                    );
+
+                    if let Some(bind_id) = bind_ids_for_ports.get(&inner_aux[1].as_ref().unwrap()) {
+                        Some(Expr::Abstraction {
+                            bind_id: bind_id.clone(),
+                            body: Box::new(Expr::Id(bind_id.to_owned())),
+                        })
+                    } else {
+                        Some(Expr::Abstraction {
+                            bind_id: bind_id.clone(),
+                            body: Box::new(decompile(
+                                &inner_aux[1].as_ref().unwrap().1,
+                                names,
+                                bind_ids_for_ports,
+                            )?),
+                        })
+                    }
+                }
+                _ => None,
+            }
+        }
+        CExpr::Var(v) => {
+            if v.name.0.starts_with("v") {
+                decompile(&v.port.as_ref().unwrap().1, names, bind_ids_for_ports)
+            } else {
+                Some(Expr::Id(v.name.0.clone()))
+            }
+        }
+        _ => None,
+    }
+}
 
 pub fn compile(e: Expr) -> Port {
     let names = NameIter::default();

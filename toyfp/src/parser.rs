@@ -225,7 +225,6 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Stmt>>, Error = Simpl
 
             defs
         })
-        .then_ignore(end())
 }
 
 #[cfg(test)]
