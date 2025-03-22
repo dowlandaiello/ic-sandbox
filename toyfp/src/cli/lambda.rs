@@ -70,8 +70,14 @@ pub fn repl() {
 }
 
 pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt> + Clone {
+    let parent_dir = fpath.parent().clone().unwrap();
+
     let errs: Vec<Simple<char>> = match parser::lexer()
-        .parse(parser::preprocessor().parse(input).unwrap())
+        .parse(
+            parser::preprocessor()
+                .parse(ast_ext::preprocess(input, parent_dir.into()))
+                .unwrap(),
+        )
         .map_err(|e| {
             e.into_iter()
                 .map(|e| e.with_label("lexing error"))

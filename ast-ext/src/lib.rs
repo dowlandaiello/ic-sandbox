@@ -1,10 +1,15 @@
 use std::{
     collections::{BTreeSet, VecDeque},
     fmt,
+    fs::OpenOptions,
+    io::Read,
     iter::Iterator,
     marker::PhantomData,
     ops::{Deref, Range},
+    path::PathBuf,
 };
+
+const INCLUDE_DIRECTIVE: &str = "#include ";
 
 pub type Span = Range<usize>;
 
@@ -35,6 +40,29 @@ pub trait VisualDebug {
     fn node_color(&self) -> String;
 
     fn conns(&self) -> impl Iterator<Item = String>;
+}
+
+pub fn preprocess(s: &str, in_dir: PathBuf) -> String {
+    s.split("\n")
+        .map(|line| {
+            if !line.starts_with(INCLUDE_DIRECTIVE) {
+                return line.to_owned();
+            }
+
+            let path = &line[INCLUDE_DIRECTIVE.len()..];
+
+            let mut full_path = in_dir.clone();
+            full_path.push(<&str as Into<PathBuf>>::into(path));
+
+            let mut cts = String::new();
+
+            let mut f = OpenOptions::new().read(true).open(&full_path).unwrap();
+            f.read_to_string(&mut cts).unwrap();
+
+            preprocess(&cts, full_path.parent().unwrap().into())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub struct TreeVisitor<TValue, TCursor: TreeCursor<TValue>> {
