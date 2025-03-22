@@ -948,6 +948,11 @@ impl OwnedNetBuilder {
 
     /// Finds all mismatched ports in the tree (i.e., one agent connected to another agent that is not connected to its parent)
     pub(crate) fn checksum(&self) {
+        tracing::trace!(
+            "checksum context: {}",
+            self.clone().iter_tree().into_string()
+        );
+
         self.clone().iter_tree().for_each(|x| {
             x.0.borrow()
                 .builder

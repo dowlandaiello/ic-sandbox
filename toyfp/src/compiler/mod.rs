@@ -916,6 +916,9 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
     let cc = graphical::compile(inlined);
 
+    #[cfg(test)]
+    cc.checksum();
+
     cc
 }
 
