@@ -79,7 +79,12 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let mut results = builder.with_init_net(e).finish().reduce();
     results.sort_by(|a, b| {
         b.iter_tree()
-            .filter(|x| x.borrow().as_var().is_some())
+            .filter(|x| {
+                x.borrow()
+                    .as_var()
+                    .map(|v| v.name.0.starts_with("v"))
+                    .unwrap_or_default()
+            })
             .count()
             .cmp(
                 &a.iter_tree()

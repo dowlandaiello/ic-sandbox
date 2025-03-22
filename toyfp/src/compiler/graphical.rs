@@ -32,8 +32,6 @@ pub fn decompile(
                 CExpr::Constr(_)
             ) =>
         {
-            println!("here");
-
             match &*aux_ports[1].as_ref().unwrap().1.borrow() {
                 CExpr::Constr(Constructor {
                     aux_ports: inner_aux,
