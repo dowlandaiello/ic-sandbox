@@ -354,6 +354,8 @@ impl ReductionWorker {
         let a_cell = self.buffer.get_cell(a_id);
         let b_cell = self.buffer.get_cell(b_id);
 
+        tracing::debug!("reducing {} >< {}", a_id, b_id);
+
         let a_discriminant = a_cell.load_discriminant_uninit_var().unwrap();
         let b_discriminant = b_cell.load_discriminant_uninit_var().unwrap();
 
@@ -406,7 +408,7 @@ impl ReductionWorker {
                     b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
                 );
 
-                self.make_commutation(a_id, b_id, a_cell, b_cell, top_ports, bottom_ports)
+                self.make_commutation(a_id, b_id, top_ports, bottom_ports)
             }
             // Commutation of dup constr
             (Cell::Dup, Cell::Constr) => {
@@ -415,7 +417,7 @@ impl ReductionWorker {
                     a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn),
                 );
 
-                self.make_commutation(b_id, a_id, b_cell, a_cell, top_ports, bottom_ports)
+                self.make_commutation(b_id, a_id, top_ports, bottom_ports)
             }
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
@@ -497,6 +499,12 @@ impl ReductionWorker {
         });
 
         new_redexes
+            .into_iter()
+            .map(|(a, b)| BTreeSet::from_iter([a, b]))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .map(|mut x| (x.pop_first().unwrap(), x.pop_first().unwrap()))
+            .collect::<Vec<_>>()
     }
 
     fn make_era_commutation<'a>(
@@ -519,13 +527,9 @@ impl ReductionWorker {
         &'a self,
         a_id: Ptr,
         b_id: Ptr,
-        a_cell: &'a CellRepr,
-        b_cell: &'a CellRepr,
-        top_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + 'a,
-        bottom_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + 'a,
+        top_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + Clone + 'a,
+        bottom_ports: impl DoubleEndedIterator<Item = (Conn, &'a CellRepr)> + Clone + 'a,
     ) -> Vec<(Conn, Conn)> {
-        let map_conn = |c: Conn| (c, self.buffer.get_cell(c.cell));
-
         // left to right
         let dups = [self.buffer.push(Cell::Dup), self.buffer.push(Cell::Dup)];
 
@@ -542,67 +546,64 @@ impl ReductionWorker {
 
         let conns = [conn_left, conn_right, conn_middle_left, conn_middle_right];
 
-        fn conn_maybe_circular_horizontal<'a>(
-            cell_id: Ptr,
-            mut ports: impl Iterator<Item = Conn>,
-            mut dests: impl Iterator<Item = Conn>,
-        ) -> Option<(Conn, Conn)> {
-            let left = ports.next()?;
-            let right = ports.next()?;
-
-            if left.cell == right.cell && left.cell == cell_id {
-                return Some((dests.next()?, dests.next()?));
-            }
-
-            None
-        }
-
         let mut redexes = Vec::new();
 
-        if let Some((a, b)) = conn_maybe_circular_horizontal(
-            a_id,
-            a_cell.iter_aux_ports().map(|x| x.unwrap()),
-            dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }),
-        ) {
-            if let Some(conn) = self.conn_maybe_redex(map_conn(a), map_conn(b)) {
-                redexes.push(conn);
-            }
-        } else {
-            redexes.extend::<Vec<(Conn, Conn)>>(
-                top_ports
-                    .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
-                    .map(|(a, b)| {
-                        let b_cell = self.buffer.get_cell(b.cell);
+        let conn_map: BTreeMap<Conn, Conn> = [
+            Conn {
+                cell: a_id,
+                port: 1,
+            },
+            Conn {
+                cell: a_id,
+                port: 2,
+            },
+        ]
+        .into_iter()
+        .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+        .chain(
+            [
+                Conn {
+                    cell: b_id,
+                    port: 1,
+                },
+                Conn {
+                    cell: b_id,
+                    port: 2,
+                },
+            ]
+            .into_iter()
+            .rev()
+            .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 })),
+        )
+        .collect();
 
-                        self.conn_maybe_redex(a, (b, b_cell))
-                    })
-                    .filter_map(|x| x)
-                    .collect(),
-            );
-        }
+        redexes.extend::<Vec<(Conn, Conn)>>(
+            top_ports
+                .map(|conn| conn_map.get(&conn.0).cloned().unwrap_or(conn.0))
+                .zip(dups.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                .map(|(a, b)| {
+                    let a_cell = self.buffer.get_cell(a.cell);
+                    let b_cell = self.buffer.get_cell(b.cell);
 
-        if let Some((a, b)) = conn_maybe_circular_horizontal(
-            b_id,
-            b_cell.iter_aux_ports().map(|x| x.unwrap()).rev(),
-            constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }),
-        ) {
-            if let Some(conn) = self.conn_maybe_redex(map_conn(a), map_conn(b)) {
-                redexes.push(conn);
-            }
-        } else {
-            redexes.extend::<Vec<(Conn, Conn)>>(
-                bottom_ports
-                    .rev()
-                    .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
-                    .map(|(a, b)| {
-                        let b_cell = self.buffer.get_cell(b.cell);
+                    self.conn_maybe_redex((a, a_cell), (b, b_cell))
+                })
+                .filter_map(|x| x)
+                .collect(),
+        );
+        redexes.extend::<Vec<(Conn, Conn)>>(
+            bottom_ports
+                .map(|conn| conn_map.get(&conn.0).cloned().unwrap_or(conn.0))
+                .rev()
+                .zip(constrs.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                .map(|(a, b)| {
+                    let a_cell = self.buffer.get_cell(a.cell);
+                    let b_cell = self.buffer.get_cell(b.cell);
 
-                        self.conn_maybe_redex(a, (b, b_cell))
-                    })
-                    .filter_map(|x| x)
-                    .collect(),
-            );
-        }
+                    self.conn_maybe_redex((a, a_cell), (b, b_cell))
+                })
+                .filter_map(|x| x)
+                .collect(),
+        );
 
         redexes.extend::<Vec<(Conn, Conn)>>(
             conns
@@ -830,25 +831,25 @@ mod test {
         let cases = [
             (
                 "Constr[@1](a, b) >< Constr[@2](c, d)",
-                BTreeSet::from_iter(["c ~ a", "d ~ b"]),
+                BTreeSet::from_iter(["a ~ c", "b ~ d"]),
             ),
-            ("Dup[@1](a, b) >< Dup[@2](c, d)", BTreeSet::from_iter(["c ~ a", "d ~ b"])),
+            ("Dup[@1](a, b) >< Dup[@2](c, d)", BTreeSet::from_iter(["a ~ c", "b ~ d"])),
             ("Era[@1]() >< Era[@2]()", BTreeSet::from_iter([])),
             (
                 "Constr[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+                BTreeSet::from_iter(["a >< Era[@2]()", "b >< Era[@3]()"]),
             ),
             (
                 "Dup[@1](a, b) >< Era[@2]()",
-                BTreeSet::from_iter(["Era[@2](a)", "Era[@3](b)"]),
+                BTreeSet::from_iter(["a >< Era[@2]()", "b >< Era[@3]()"]),
             ),
             (
                 "Constr[@1](a, b) >< Dup[@2](d, c)",
-                BTreeSet::from_iter(["Dup[@4](a, Constr[@7](d, @4#1, Dup[@5](b, @7#2, Constr[@6](c, @4#2, @5#2)#2)#1)#1, @6#1)"]),
+                BTreeSet::from_iter(["a >< Dup[@4](Constr[@7](d, @4#1, Dup[@5](b, @7#2, Constr[@6](c, @4#2, @5#2)#2)#1)#1, @6#1)"]),
             ),
             (
                 "Dup[@1](a, b) >< Constr[@2](d, c)",
-                BTreeSet::from_iter(["Constr[@7](a, Dup[@4](d, @7#1, Constr[@6](b, @4#2, Dup[@5](c, @7#2, @6#2)#2)#1)#1, @5#1)"]),
+                BTreeSet::from_iter(["a >< Constr[@7](Dup[@4](d, @7#1, Constr[@6](b, @4#2, Dup[@5](c, @7#2, @6#2)#2)#1)#1, @5#1)"]),
             ),
         ];
 
@@ -863,9 +864,7 @@ mod test {
             let res = reducer.reduce();
 
             assert_eq!(
-                res.iter()
-                    .map(|x| x.orient().to_string())
-                    .collect::<BTreeSet<_>>(),
+                res.iter().map(|x| x.to_string()).collect::<BTreeSet<_>>(),
                 expected
                     .iter()
                     .map(|x| x.to_string())
