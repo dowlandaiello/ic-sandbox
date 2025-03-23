@@ -27,6 +27,15 @@ impl Default for ConnRepr {
     }
 }
 
+impl Clone for ConnRepr {
+    fn clone(&self) -> Self {
+        Self {
+            port: AtomicU8::new(self.port.load(DEFAULT_ORDERING_STORE)),
+            cell: AtomicUsize::new(self.cell.load(DEFAULT_ORDERING_STORE)),
+        }
+    }
+}
+
 impl ConnRepr {
     fn store(&self, c: Option<Conn>) {
         if let Some(c) = c {
@@ -179,6 +188,16 @@ impl CellBuilder {
                 ConnBuilder::new(self.aux_ports[0]).finish(),
                 ConnBuilder::new(self.aux_ports[1]).finish(),
             ],
+        }
+    }
+}
+
+impl Clone for CellRepr {
+    fn clone(&self) -> Self {
+        Self {
+            discriminant: AtomicU8::new(self.discriminant.load(DEFAULT_ORDERING_STORE)),
+            primary_port: self.primary_port.clone(),
+            aux_ports: self.aux_ports.clone(),
         }
     }
 }

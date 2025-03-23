@@ -1018,7 +1018,13 @@ impl OwnedNetBuilder {
         let empty_port = self
             .clone()
             .iter_tree()
-            .filter(|x| x.0.borrow().builder.as_var().is_some())
+            .filter(|x| {
+                x.0.borrow()
+                    .builder
+                    .as_var()
+                    .map(|x| x.starts_with("v"))
+                    .unwrap_or_default()
+            })
             .filter_map(|x| x.0.borrow().builder.iter_ports().next().flatten().cloned())
             .next()
             .or_else(|| {
@@ -1051,25 +1057,42 @@ impl OwnedNetBuilder {
             .try_into()
             .unwrap();
 
-        for ports in dup_ref_ports.iter_mut() {
+        let conn_map: BTreeMap<Port, Port> = dup_refs
+            .iter()
+            .enumerate()
+            .map(|(i, dup)| {
+                [
+                    ((1, dup.clone()), (1 + i, z_combs[0].clone())),
+                    ((2, dup.clone()), (1 + i, z_combs[1].clone())),
+                    ((0, dup.clone()), (1 + i, z_combs[2].clone())),
+                ]
+                .into_iter()
+            })
+            .flatten()
+            .collect();
+
+        for (i, ports) in dup_ref_ports.iter_mut().enumerate() {
             let (p1, p2, p3) = (ports.remove(0), ports.remove(0), ports.remove(0));
 
-            let ins_port_1 = z_combs[0].0.borrow().builder.next_empty_port().unwrap();
-
             if let Some(p) = p1 {
-                Self::connect(p, (ins_port_1, z_combs[0].clone()));
+                Self::connect(
+                    conn_map.get(&p).cloned().unwrap_or(p),
+                    (1 + i, z_combs[0].clone()),
+                );
             }
-
-            let ins_port_2 = z_combs[1].0.borrow().builder.next_empty_port().unwrap();
 
             if let Some(p) = p2 {
-                Self::connect(p, (ins_port_2, z_combs[1].clone()));
+                Self::connect(
+                    conn_map.get(&p).cloned().unwrap_or(p),
+                    (1 + i, z_combs[1].clone()),
+                );
             }
 
-            let ins_port_3 = z_combs[2].0.borrow().builder.next_empty_port().unwrap();
-
             if let Some(p) = p3 {
-                Self::connect(p, (ins_port_3, z_combs[2].clone()));
+                Self::connect(
+                    conn_map.get(&p).cloned().unwrap_or(p),
+                    (1 + i, z_combs[2].clone()),
+                );
             }
         }
 

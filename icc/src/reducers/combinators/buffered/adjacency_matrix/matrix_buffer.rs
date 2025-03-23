@@ -12,12 +12,31 @@ use std::{
 
 #[derive(Clone)]
 pub struct MatrixBuffer {
-    cells: Arc<[CellRepr]>,
-    len: Arc<AtomicUsize>,
-    next_free: Arc<Queue<usize>>,
+    pub(crate) cells: Arc<[CellRepr]>,
+    pub(crate) len: Arc<AtomicUsize>,
+    pub(crate) next_free: Arc<Queue<usize>>,
 }
 
 impl MatrixBuffer {
+    pub(crate) fn grow(&mut self, by_n_cells: usize) {
+        (*self).next_free = Arc::new(
+            self.iter_pop_next_free()
+                .chain(self.cells.len()..(self.cells.len() + by_n_cells))
+                .collect(),
+        );
+        (*self).cells = self
+            .cells
+            .iter()
+            .map(|x| x.clone())
+            .chain((0..by_n_cells).map(|_| CellRepr::default()))
+            .collect::<Vec<CellRepr>>()
+            .into();
+    }
+
+    pub(crate) fn iter_pop_next_free<'a>(&'a self) -> impl Iterator<Item = usize> + 'a {
+        self.next_free.pop_iter()
+    }
+
     pub(crate) fn iter_cells_discriminants<'a>(&'a self) -> impl Iterator<Item = (Ptr, Cell)> + 'a {
         self.cells
             .iter()

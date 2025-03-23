@@ -491,12 +491,12 @@ impl ReductionWorker {
         a_cell.wipe();
         b_cell.wipe();
 
-        self.buffer.push_next_free(a_id);
-        self.buffer.push_next_free(b_id);
-
         to_lock.iter().for_each(|cell_id| {
             self.mark_unlocked(*cell_id);
         });
+
+        self.buffer.push_next_free(a_id);
+        self.buffer.push_next_free(b_id);
 
         new_redexes
             .into_iter()
@@ -717,14 +717,43 @@ impl Reducer for BufferedMatrixReducer {
 
     fn reduce(&mut self) -> Vec<Port> {
         #[cfg(feature = "threadpool")]
-        fn reduce_redexes(
-            buffer: MatrixBuffer,
-            locked: Arc<[AtomicBool]>,
-            mut r: Vec<(Conn, Conn)>,
-        ) {
+        fn reduce_redexes(slf: &mut BufferedMatrixReducer, mut r: Vec<(Conn, Conn)>) {
             while !r.is_empty() {
-                let buff = buffer.clone();
-                let lock = locked.clone();
+                let res = slf.readback();
+
+                tracing::debug!(
+                    "reduction frame: {}",
+                    res.into_iter()
+                        .map(|graph| graph.iter_tree_visitor().into_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+
+                let lock = slf.locked.clone();
+
+                let n_empty_cells_required = r.len() * 4;
+
+                let free_cells_reduction = slf
+                    .buffer
+                    .iter_pop_next_free()
+                    .take(n_empty_cells_required)
+                    .collect::<Vec<_>>();
+
+                free_cells_reduction
+                    .iter()
+                    .for_each(|x| slf.buffer.push_next_free(*x));
+
+                if free_cells_reduction.len() < n_empty_cells_required {
+                    slf.buffer.grow(n_empty_cells_required);
+                    slf.locked = slf
+                        .locked
+                        .iter()
+                        .map(|x| AtomicBool::new(x.load(Ordering::SeqCst)))
+                        .chain((0..n_empty_cells_required).map(|_| AtomicBool::default()))
+                        .collect();
+                }
+
+                let buff = slf.buffer.clone();
 
                 r = r
                     .into_par_iter()
@@ -769,11 +798,11 @@ impl Reducer for BufferedMatrixReducer {
 
         // Push all redexes
         #[cfg(feature = "threadpool")]
-        reduce_redexes(
-            self.buffer.clone(),
-            self.locked.clone(),
-            self.root_redexes.par_drain(..).collect(),
-        );
+        {
+            let redexes = self.root_redexes.par_drain(..).collect();
+
+            reduce_redexes(self, redexes);
+        }
 
         #[cfg(not(feature = "threadpool"))]
         {
