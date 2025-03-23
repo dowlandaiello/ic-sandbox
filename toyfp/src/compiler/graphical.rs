@@ -3,9 +3,12 @@ use super::{
     CombinatorBuilder,
 };
 use crate::parser::Expr;
-use inetlib::parser::{
-    ast_combinators::{Constructor, Expr as CExpr, IndexedPort, Port},
-    naming::NameIter,
+use inetlib::{
+    parser::{
+        ast_combinators::{Constructor, Expr as CExpr, IndexedPort, Port},
+        naming::NameIter,
+    },
+    reducers::combinators::reduce_dyn,
 };
 use std::collections::BTreeMap;
 
@@ -13,7 +16,9 @@ pub fn decompile(
     p: &Port,
     names: &NameIter,
     bind_ids_for_ports: &mut BTreeMap<IndexedPort, String>,
-) -> Option<Expr> {
+) -> Expr {
+    let p = p.orient();
+
     tracing::debug!("decoding {}", p.iter_tree_visitor().into_string());
 
     // A constr can indicate an abstraction
@@ -24,61 +29,104 @@ pub fn decompile(
     // This is indicated by the position of v
     // Let us start with application
 
-    // This is ian abstraction
-    match &*p.borrow() {
-        CExpr::Constr(Constructor { aux_ports, .. })
-            if matches!(
-                &*aux_ports[0].as_ref().unwrap().1.borrow(),
-                CExpr::Constr(_)
-            ) =>
-        {
-            match &*aux_ports[1].as_ref().unwrap().1.borrow() {
-                CExpr::Constr(Constructor {
-                    aux_ports: inner_aux,
-                    ..
-                }) => {
-                    let bind_id = names.next_var_name();
+    let p_combinator = { p.borrow().clone() };
 
-                    bind_ids_for_ports.insert(
-                        (1, aux_ports[1].as_ref().unwrap().1.clone()),
-                        bind_id.clone(),
+    match p_combinator {
+        CExpr::Constr(Constructor { aux_ports, .. }) => {
+            let mut p_aux = aux_ports
+                .iter()
+                .filter_map(|x| Some(x.as_ref()?.1.borrow().clone()));
+
+            // This is an abstraction
+            match (p_aux.next().unwrap(), p_aux.next().unwrap()) {
+                (CExpr::Constr(_), CExpr::Constr(_)) => {
+                    let decoder = OwnedNetBuilder::new(
+                        RawCombinatorBuilder::D {
+                            primary_port: None,
+                            aux_port: None,
+                        },
+                        names,
                     );
 
-                    if let Some(inner_bind_id) =
-                        bind_ids_for_ports.get(&inner_aux[1].as_ref().unwrap())
+                    let v = OwnedNetBuilder::new(
+                        RawCombinatorBuilder::Var {
+                            name: names.next_var_name(),
+                            primary_port: None,
+                        },
+                        names,
+                    );
+
+                    OwnedNetBuilder::connect((0, v.clone()), (1, decoder.clone()));
+
+                    let decoder = decoder.expand_step(names).combinate();
+
                     {
-                        Some(Expr::Abstraction {
+                        decoder.borrow_mut().set_primary_port(Some((0, p.clone())));
+                        p.borrow_mut().set_primary_port(Some((0, decoder.clone())));
+                    }
+
+                    tracing::trace!(
+                        "decoding abstraction with decoder: {} {}",
+                        p.iter_tree_visitor().into_string(),
+                        decoder.iter_tree_visitor().into_string(),
+                    );
+
+                    // X: aux_ports[0]
+                    // body: aux_ports[1]
+
+                    let decoded_abstr_root = reduce_dyn(&p).remove(0);
+
+                    tracing::trace!(
+                        "decoded abstraction: {}",
+                        decoded_abstr_root.iter_tree_visitor().into_string()
+                    );
+
+                    let abstr_aux = {
+                        decoded_abstr_root
+                            .borrow()
+                            .aux_ports()
+                            .into_iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    };
+
+                    let bind_id = names.next_var_name();
+
+                    bind_ids_for_ports.insert((1, decoded_abstr_root), bind_id.clone());
+
+                    if let Some(inner_bind_id) =
+                        bind_ids_for_ports.get(&abstr_aux[1].as_ref().unwrap())
+                    {
+                        Expr::Abstraction {
                             bind_id: bind_id.clone(),
                             body: Box::new(Expr::Id(inner_bind_id.to_owned())),
-                        })
+                        }
                     } else {
-                        Some(Expr::Abstraction {
+                        Expr::Abstraction {
                             bind_id: bind_id.clone(),
                             body: Box::new(decompile(
-                                &inner_aux[1].as_ref().unwrap().1,
+                                &abstr_aux[1].as_ref().unwrap().1,
                                 names,
                                 bind_ids_for_ports,
-                            )?),
-                        })
+                            )),
+                        }
                     }
                 }
-                _ => None,
+                _ => unreachable!(),
             }
         }
         CExpr::Var(v) => {
             if v.name.0.starts_with("v") {
                 decompile(&v.port.as_ref().unwrap().1, names, bind_ids_for_ports)
             } else {
-                Some(Expr::Id(v.name.0.clone()))
+                Expr::Id(v.name.0.clone())
             }
         }
-        _ => None,
+        _ => unreachable!(),
     }
 }
 
-pub fn compile(e: Expr) -> Port {
-    let names = NameIter::default();
-
+pub fn compile(e: Expr, names: &NameIter) -> Port {
     let cc = build_compilation_expr(e.clone(), &names);
 
     cc.clone().iter_tree().for_each(|x| {

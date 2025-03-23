@@ -930,7 +930,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
 
     tracing::trace!("inlined: {}", inlined);
 
-    let cc = graphical::compile(inlined);
+    let cc = graphical::compile(inlined, names);
 
     #[cfg(test)]
     cc.checksum();
@@ -938,10 +938,8 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     cc
 }
 
-pub fn decompile(p: &AstPort) -> Option<Expr> {
-    let names = Default::default();
-
-    graphical::decompile(p, &names, &mut Default::default())
+pub fn decompile(p: &AstPort, names: &NameIter) -> Option<Expr> {
+    Some(graphical::decompile(p, names, &mut Default::default()))
 }
 
 #[cfg(test)]
@@ -1013,7 +1011,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_partial_lc() {
-        let (case, expected) = ("(\\x.x \\x.x)", "\\v0.v0");
+        let (case, expected) = ("(\\x.x \\x.x)", "\\v4.v4");
         let names = Default::default();
 
         let parsed = lc_parser::parser()
@@ -1024,7 +1022,7 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
-            decompile(&result[0].orient()).unwrap().to_string(),
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
             expected
         );
     }
@@ -1041,7 +1039,7 @@ mod test {
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
-            decompile(&result[0].orient()).unwrap().to_string(),
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
             expected
         );
     }
@@ -1065,7 +1063,7 @@ succ = \\n.\\f.\\x.(f (n f x))
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
-            decompile(&result[0].orient()).unwrap().to_string(),
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
             expected
         );
     }
@@ -1082,7 +1080,7 @@ succ = \\n.\\f.\\x.(f (n f x))
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
-            decompile(&result[0].orient()).unwrap().to_string(),
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
             expected
         );
     }

@@ -1,4 +1,2 @@
 true  = \t.\f.t
 false = \t.\f.f
-
-if    = \b.\x.\y.(b x y)

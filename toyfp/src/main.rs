@@ -88,7 +88,8 @@ fn main() {
             let prog = cli::lambda::read_program(input_fname);
             let compiled = compiler::compile(prog, &names);
 
-            let reduced = compiler::decompile(reduce_dyn(&compiled).get(0).unwrap()).unwrap();
+            let reduced =
+                compiler::decompile(reduce_dyn(&compiled).get(0).unwrap(), &names).unwrap();
 
             println!("{}", reduced);
         }

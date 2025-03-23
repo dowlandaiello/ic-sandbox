@@ -186,7 +186,12 @@ impl Port {
 
         let mut roots = self
             .iter_tree()
-            .filter(|x| x.borrow().is_var())
+            .filter(|x| {
+                x.borrow()
+                    .as_var()
+                    .map(|v| v.name.0.starts_with("v"))
+                    .unwrap_or_default()
+            })
             .collect::<Vec<_>>();
         roots.sort_by(|a, b| {
             let (a_bor, b_bor) = (a.borrow(), b.borrow());

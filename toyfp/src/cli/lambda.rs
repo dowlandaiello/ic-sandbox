@@ -46,7 +46,8 @@ pub fn repl() {
                         let combinated = compiler::compile(parsed.clone(), &names);
 
                         let reduced =
-                            compiler::decompile(reduce_dyn(&combinated).get(0).unwrap()).unwrap();
+                            compiler::decompile(reduce_dyn(&combinated).get(0).unwrap(), &names)
+                                .unwrap();
 
                         println!("{}", reduced);
 

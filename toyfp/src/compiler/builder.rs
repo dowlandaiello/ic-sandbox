@@ -1747,7 +1747,7 @@ mod test {
         coder.expand_step(&mut names);
         let var = OwnedNetBuilder::new(
             CombinatorBuilder::Var {
-                name: "Bruh".to_owned(),
+                name: names.next_var_name(),
                 primary_port: None,
             },
             &mut names,
@@ -1767,7 +1767,6 @@ mod test {
         OwnedNetBuilder::connect((0, coder.clone()), (0, decoder.clone()));
 
         let comb_coder = coder.combinate();
-        let _ = decoder.combinate();
 
         let res = reduce_dyn(&comb_coder).remove(0);
         let dec = OwnedNetBuilder::decombinate(&res.orient(), &names);
@@ -1788,7 +1787,7 @@ mod test {
 
         let var = OwnedNetBuilder::new(
             CombinatorBuilder::Var {
-                name: "Bruh".to_owned(),
+                name: names.next_var_name(),
                 primary_port: None,
             },
             &mut names,
