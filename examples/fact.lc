@@ -2,7 +2,7 @@
 #include ../toyfp/stdlib/num.lc
 #include ../toyfp/stdlib/bool.lc
 
-factgen = \f.\n.x
+factgen = \f.\b.(b \x.x (f true))
 fact    = (Y factgen)
 
-(fact zero)
+(fact false)

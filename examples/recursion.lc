@@ -1,0 +1,7 @@
+#include ../toyfp/stdlib/func.lc
+#include ../toyfp/stdlib/bool.lc
+
+boolthingg = \f.\b.(b \x.x (f true))
+boolthing  = (Y boolthingg)
+
+(boolthing false)

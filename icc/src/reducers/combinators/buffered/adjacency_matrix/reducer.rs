@@ -673,16 +673,6 @@ impl Reducer for BufferedMatrixReducer {
         #[cfg(feature = "threadpool")]
         fn reduce_redexes(slf: &mut BufferedMatrixReducer, mut r: Vec<(Conn, Conn)>) {
             while !r.is_empty() {
-                let res = slf.readback();
-
-                tracing::debug!(
-                    "reduction frame: {}",
-                    res.into_iter()
-                        .map(|graph| graph.iter_tree_visitor().into_string())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-
                 let lock = slf.locked.clone();
 
                 let n_empty_cells_required = r.len() * 4;
