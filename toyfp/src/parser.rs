@@ -51,11 +51,7 @@ impl Expr {
     }
 
     pub fn contains_var(&self, v: &str) -> bool {
-        match self {
-            Self::Id(c) => c == v,
-            Self::Abstraction { bind_id, body } => bind_id == v || body.contains_var(v),
-            Self::Application { lhs, rhs } => lhs.contains_var(v) || rhs.contains_var(v),
-        }
+        self.free_vars().iter().any(|x| x == &v)
     }
 
     pub fn contains_lambda(&self) -> bool {

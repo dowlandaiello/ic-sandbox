@@ -91,42 +91,25 @@ impl ReducerBuilder {
                         );
 
                         let cell_self = buff.get_cell(*slot);
-
-                        cell_self.store_port_i(
-                            port_self as u8,
-                            Some(Conn {
-                                cell: *other_slot,
-                                port: port_other as u8,
-                            })
-                            .into(),
-                        );
-
                         let cell_other = buff.get_cell(*other_slot);
 
-                        cell_other.store_port_i(
-                            port_other as u8,
-                            Some(Conn {
-                                cell: *slot,
-                                port: port_self as u8,
-                            })
-                            .into(),
-                        );
-
-                        if port_self == 0
-                            && port_other == 0
-                            && !matches!(*elem.borrow(), Expr::Var(_))
-                            && !matches!(*p.borrow(), Expr::Var(_))
-                        {
-                            root_redexes.insert(BTreeSet::from_iter([
-                                Conn {
-                                    cell: *other_slot,
-                                    port: port_other as u8,
-                                },
+                        if let Some((a, b)) = conn_maybe_redex(
+                            (
                                 Conn {
                                     cell: *slot,
                                     port: port_self as u8,
                                 },
-                            ]));
+                                cell_self,
+                            ),
+                            (
+                                Conn {
+                                    cell: *other_slot,
+                                    port: port_other as u8,
+                                },
+                                cell_other,
+                            ),
+                        ) {
+                            root_redexes.insert(BTreeSet::from_iter([a, b]));
                         }
                     });
             })
@@ -136,14 +119,7 @@ impl ReducerBuilder {
             cells: buff,
             idents: self.idents,
             names: self.names,
-            root_redexes: root_redexes
-                .into_iter()
-                .map(|x| {
-                    let mut elems = x.into_iter();
-
-                    (elems.next().unwrap(), elems.next().unwrap())
-                })
-                .collect(),
+            root_redexes,
             locked: (0..(n_nodes * n_nodes))
                 .map(|_| AtomicBool::new(false))
                 .collect::<Vec<_>>()
@@ -169,7 +145,7 @@ pub struct CapacitiedBufferedMatrixReducerBuilder {
     cells: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
-    root_redexes: Vec<(Conn, Conn)>,
+    root_redexes: BTreeSet<BTreeSet<Conn>>,
     locked: Arc<[AtomicBool]>,
 }
 
@@ -189,7 +165,7 @@ pub struct BufferedMatrixReducer {
     buffer: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
     names: BTreeMap<Ptr, usize>,
-    root_redexes: Vec<(Conn, Conn)>,
+    root_redexes: BTreeSet<BTreeSet<Conn>>,
     locked: Arc<[AtomicBool]>,
 }
 
@@ -219,32 +195,6 @@ impl ReductionWorker {
 
     fn try_lock(&self, cell: Ptr) -> Option<()> {
         self.mark_locked(cell)
-    }
-
-    fn conn_maybe_redex(&self, a: (Conn, &CellRepr), b: (Conn, &CellRepr)) -> Option<(Conn, Conn)> {
-        tracing::trace!("linking {} ~ {}", a.0, b.0);
-
-        let (a_conn, a_cell) = a;
-        let (b_conn, b_cell) = b;
-
-        a_cell.store_port_i(a_conn.port, Some(b_conn));
-        b_cell.store_port_i(b_conn.port, Some(a_conn));
-
-        if a_conn.port == 0
-            && b_conn.port == 0
-            && !matches!(a_cell.load_discriminant_uninit_var().unwrap(), Cell::Var(_))
-            && !matches!(b_cell.load_discriminant_uninit_var().unwrap(), Cell::Var(_))
-        {
-            tracing::trace!(
-                "found new redex cell {} >< cell {}",
-                a_conn.cell,
-                b_conn.cell
-            );
-
-            return Some((a_conn, b_conn));
-        }
-
-        None
     }
 
     fn conn_maybe_circular<'a>(
@@ -379,7 +329,7 @@ impl ReductionWorker {
                     a_cell.iter_aux_ports().map(|x| x.unwrap()),
                     b_cell.iter_aux_ports().map(|x| x.unwrap()),
                 ) {
-                    [self.conn_maybe_redex(map_conn(a), map_conn(b))]
+                    [conn_maybe_redex(map_conn(a), map_conn(b))]
                         .into_iter()
                         .filter_map(|x| x)
                         .collect()
@@ -393,7 +343,7 @@ impl ReductionWorker {
                     top_ports
                         .into_iter()
                         .zip(bottom_ports)
-                        .map(|(a, b)| self.conn_maybe_redex(a, b))
+                        .map(|(a, b)| conn_maybe_redex(a, b))
                         .filter_map(|x| x)
                         .collect()
                 }
@@ -428,7 +378,7 @@ impl ReductionWorker {
                 if ports_2.next().unwrap().0.cell == a_id && ports_2.next().unwrap().0.cell == a_id
                 {
                     let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
-                    self.conn_maybe_redex(
+                    conn_maybe_redex(
                         (
                             Conn {
                                 port: 0,
@@ -458,7 +408,7 @@ impl ReductionWorker {
                 if ports_2.next().unwrap().0.cell == b_id && ports_2.next().unwrap().0.cell == b_id
                 {
                     let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
-                    self.conn_maybe_redex(
+                    conn_maybe_redex(
                         (
                             Conn {
                                 port: 0,
@@ -518,7 +468,7 @@ impl ReductionWorker {
                 eras.into_iter()
                     .map(|ptr| ((ptr, 0).into(), self.buffer.get_cell(ptr))),
             )
-            .map(|(a, b)| self.conn_maybe_redex(a, (b.0, b.1)))
+            .map(|(a, b)| conn_maybe_redex(a, (b.0, b.1)))
             .filter_map(|x| x)
             .collect()
     }
@@ -585,7 +535,7 @@ impl ReductionWorker {
                     let a_cell = self.buffer.get_cell(a.cell);
                     let b_cell = self.buffer.get_cell(b.cell);
 
-                    self.conn_maybe_redex((a, a_cell), (b, b_cell))
+                    conn_maybe_redex((a, a_cell), (b, b_cell))
                 })
                 .filter_map(|x| x)
                 .collect(),
@@ -599,7 +549,7 @@ impl ReductionWorker {
                     let a_cell = self.buffer.get_cell(a.cell);
                     let b_cell = self.buffer.get_cell(b.cell);
 
-                    self.conn_maybe_redex((a, a_cell), (b, b_cell))
+                    conn_maybe_redex((a, a_cell), (b, b_cell))
                 })
                 .filter_map(|x| x)
                 .collect(),
@@ -612,7 +562,7 @@ impl ReductionWorker {
                     let a_cell = self.buffer.get_cell(a.0);
                     let b_cell = self.buffer.get_cell(b.0);
 
-                    self.conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
+                    conn_maybe_redex((a.into(), a_cell), (b.into(), b_cell))
                 })
                 .filter_map(|x| x)
                 .collect(),
@@ -799,20 +749,58 @@ impl Reducer for BufferedMatrixReducer {
         // Push all redexes
         #[cfg(feature = "threadpool")]
         {
-            let redexes = self.root_redexes.par_drain(..).collect();
+            let redexes = self
+                .root_redexes
+                .iter()
+                .cloned()
+                .map(|mut set| (set.pop_first().unwrap(), set.pop_first().unwrap()))
+                .collect::<Vec<_>>()
+                .par_drain(..)
+                .collect();
 
             reduce_redexes(self, redexes);
         }
 
         #[cfg(not(feature = "threadpool"))]
         {
-            let redexes = self.root_redexes.drain(..).collect::<Vec<_>>();
+            let redexes = self
+                .root_redexes
+                .iter()
+                .cloned()
+                .map(|mut set| (set.pop_first().unwrap(), set.pop_first().unwrap()))
+                .collect::<Vec<_>>();
 
             reduce_redexes(self, redexes);
         }
 
         self.readback()
     }
+}
+
+fn conn_maybe_redex(a: (Conn, &CellRepr), b: (Conn, &CellRepr)) -> Option<(Conn, Conn)> {
+    tracing::trace!("linking {} ~ {}", a.0, b.0);
+
+    let (a_conn, a_cell) = a;
+    let (b_conn, b_cell) = b;
+
+    a_cell.store_port_i(a_conn.port, Some(b_conn));
+    b_cell.store_port_i(b_conn.port, Some(a_conn));
+
+    if a_conn.port == 0
+        && b_conn.port == 0
+        && !matches!(a_cell.load_discriminant_uninit_var().unwrap(), Cell::Var(_))
+        && !matches!(b_cell.load_discriminant_uninit_var().unwrap(), Cell::Var(_))
+    {
+        tracing::trace!(
+            "found new redex cell {} >< cell {}",
+            a_conn.cell,
+            b_conn.cell
+        );
+
+        return Some((a_conn, b_conn));
+    }
+
+    None
 }
 
 #[cfg(test)]

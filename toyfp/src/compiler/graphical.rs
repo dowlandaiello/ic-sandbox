@@ -5,20 +5,18 @@ use super::{
 use crate::parser::Expr;
 use inetlib::{
     parser::{
-        ast_combinators::{Constructor, Expr as CExpr, IndexedPort, Port},
+        ast_combinators::{Constructor, Duplicator, Expr as CExpr, IndexedPort, Port},
         naming::NameIter,
     },
     reducers::combinators::reduce_dyn,
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, iter};
 
 pub fn decompile(
     p: &Port,
     names: &NameIter,
-    bind_ids_for_ports: &mut BTreeMap<IndexedPort, String>,
+    bind_ids_for_ports: &mut BTreeMap<Vec<usize>, String>,
 ) -> Expr {
-    let p = p.orient();
-
     tracing::debug!("decoding {}", p.iter_tree_visitor().into_string());
 
     // A constr can indicate an abstraction
@@ -42,19 +40,18 @@ pub fn decompile(
                 names,
             );
 
-            let v = OwnedNetBuilder::new(
-                RawCombinatorBuilder::Var {
-                    name: names.next_var_name(),
-                    primary_port: None,
-                },
-                names,
-            );
-
-            OwnedNetBuilder::connect((0, v.clone()), (1, decoder.clone()));
-
             let decoder = decoder.expand_step(names).combinate();
 
             {
+                let conn_rest_port = p.borrow().primary_port().unwrap().clone();
+                conn_rest_port
+                    .1
+                    .borrow_mut()
+                    .insert_port_i(conn_rest_port.0, Some((2, decoder.clone())));
+                decoder
+                    .borrow_mut()
+                    .insert_aux_port(1, Some(conn_rest_port.clone()));
+
                 decoder.borrow_mut().set_primary_port(Some((0, p.clone())));
                 p.borrow_mut().set_primary_port(Some((0, decoder.clone())));
             }
@@ -93,8 +90,21 @@ pub fn decompile(
             let mut curr = abstr_aux[0].as_ref().unwrap().1.clone();
             let mut parent_port = (1, decoded_abstr_root);
 
+            fn node_position(p: &Port) -> Vec<usize> {
+                match &*p.borrow() {
+                    CExpr::Constr(Constructor { primary_port, .. })
+                    | CExpr::Dup(Duplicator { primary_port, .. }) => match primary_port {
+                        Some(p) => iter::once(p.0)
+                            .chain(node_position(&p.1).into_iter())
+                            .collect(),
+                        None => Default::default(),
+                    },
+                    _ => Default::default(),
+                }
+            }
+
             loop {
-                bind_ids_for_ports.insert(parent_port, bind_id.clone());
+                bind_ids_for_ports.insert(node_position(&parent_port.1), bind_id.clone());
 
                 parent_port = (1, curr.clone());
 
@@ -109,19 +119,19 @@ pub fn decompile(
                 }
             }
 
-            if let Some(inner_bind_id) = bind_ids_for_ports.get(&abstr_aux[1].as_ref().unwrap()) {
+            if let Some(inner_bind_id) =
+                bind_ids_for_ports.get(&node_position(&abstr_aux[1].as_ref().unwrap().1))
+            {
                 Expr::Abstraction {
                     bind_id: bind_id.clone(),
                     body: Box::new(Expr::Id(inner_bind_id.to_owned())),
                 }
             } else {
+                let body_p = abstr_aux[1].as_ref().unwrap().1.clone();
+
                 Expr::Abstraction {
                     bind_id: bind_id.clone(),
-                    body: Box::new(decompile(
-                        &abstr_aux[1].as_ref().unwrap().1,
-                        names,
-                        bind_ids_for_ports,
-                    )),
+                    body: Box::new(decompile(&body_p, names, bind_ids_for_ports)),
                 }
             }
         }

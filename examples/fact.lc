@@ -3,7 +3,6 @@
 #include ../toyfp/stdlib/bool.lc
 
 factgen = \f.\n.((iszero n) one (mult n (f (pred n))))
-bruh    = \n.((iszero n) one two)
 fact    = (Y factgen)
 
-(bruh two)
+(fact two)

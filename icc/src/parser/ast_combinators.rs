@@ -150,6 +150,8 @@ impl Port {
                 .into_iter()
                 .map(|x| x.unwrap())
                 .for_each(|(port, p)| {
+                    tracing::trace!("checksum context: {:?} {:?} in {}", x, p, port);
+
                     assert!(p
                         .iter_ports()
                         .into_iter()

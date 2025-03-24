@@ -824,17 +824,23 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         }
     }
 
-    fn inline(e: Expr, def_table: &BTreeMap<String, Expr>) -> Expr {
+    fn inline(e: Expr, to_replace: &str, def_table: &BTreeMap<String, Expr>) -> Expr {
         match e {
             Expr::Abstraction { bind_id, body } => Expr::Abstraction {
                 bind_id,
-                body: Box::new(inline(*body, def_table)),
+                body: Box::new(inline(*body, to_replace, def_table)),
             },
             Expr::Application { lhs, rhs } => Expr::Application {
-                lhs: Box::new(inline(*lhs, def_table)),
-                rhs: Box::new(inline(*rhs, def_table)),
+                lhs: Box::new(inline(*lhs, to_replace, def_table)),
+                rhs: Box::new(inline(*rhs, to_replace, def_table)),
             },
-            Expr::Id(id) => def_table.get(&id).cloned().unwrap_or(Expr::Id(id)),
+            Expr::Id(id) => {
+                if id == to_replace {
+                    def_table.get(&id).cloned().unwrap_or(Expr::Id(id))
+                } else {
+                    Expr::Id(id)
+                }
+            }
         }
     }
 
@@ -903,7 +909,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         buffer.into()
     }
 
-    let def_table = stmts
+    let mut def_table = stmts
         .clone()
         .filter_map(|stmt| match stmt {
             Stmt::Def { bind_name, def: d } => Some((bind_name.clone(), d.clone())),
@@ -920,10 +926,20 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         .next()
         .unwrap();
 
-    let mut inlined = inline(expr, &def_table);
+    let mut inlined = expr;
 
-    while def_table.keys().any(|k| inlined.contains_var(k)) {
-        inlined = inline(inlined, &def_table);
+    while let Some(k) = def_table
+        .keys()
+        .filter_map(|k| {
+            if inlined.contains_var(k) {
+                Some(k)
+            } else {
+                None
+            }
+        })
+        .next()
+    {
+        inlined = inline(inlined, k, &def_table);
     }
 
     inlined = deduplicate_lc(inlined, &mut Default::default(), &mut Default::default());
@@ -1011,7 +1027,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_partial_lc() {
-        let (case, expected) = ("(\\x.x \\x.x)", "\\v4.v4");
+        let (case, expected) = ("(\\x.x \\x.x)", "\\v3.v3");
         let names = Default::default();
 
         let parsed = lc_parser::parser()
