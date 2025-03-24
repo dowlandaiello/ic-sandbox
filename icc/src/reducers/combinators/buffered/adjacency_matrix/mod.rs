@@ -76,22 +76,14 @@ impl OwnedCell {
 pub fn reduce_dyn(e: &Port) -> Vec<Port> {
     let builder = ReducerBuilder::default();
 
-    let mut results = builder.with_init_net(e).finish().reduce();
-    results.sort_by(|a, b| {
-        b.iter_tree()
-            .filter(|x| {
-                x.borrow()
-                    .as_var()
-                    .map(|v| v.name.0.starts_with("v"))
-                    .unwrap_or_default()
-            })
-            .count()
-            .cmp(
-                &a.iter_tree()
-                    .filter(|x| x.borrow().as_var().is_some())
-                    .count(),
-            )
-    });
+    let mut results = builder
+        .with_init_net(e)
+        .finish()
+        .reduce()
+        .into_iter()
+        .filter(|net| net.iter_tree().any(|x| x.borrow().as_var().is_some()))
+        .collect::<Vec<_>>();
+    results.sort_by(|a, b| b.iter_tree().count().cmp(&a.iter_tree().count()));
 
     results
 }

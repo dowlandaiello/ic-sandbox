@@ -867,6 +867,40 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         }
     }
 
+    fn remove_root_shadow_vars(e: Expr, names: &NameIter) -> Expr {
+        match e {
+            Expr::Id(v) => {
+                if v.starts_with("v") {
+                    Expr::Id(format!("_{}", v))
+                } else {
+                    Expr::Id(v)
+                }
+            }
+            Expr::Application { lhs, rhs } => Expr::Application {
+                lhs: Box::new(remove_root_shadow_vars(*lhs, names)),
+                rhs: Box::new(remove_root_shadow_vars(*rhs, names)),
+            },
+            Expr::Abstraction { bind_id, body } => {
+                if bind_id.starts_with("v") {
+                    let new_bind_id = format!("_{}", bind_id);
+
+                    Expr::Abstraction {
+                        bind_id: new_bind_id.clone(),
+                        body: Box::new(remove_root_shadow_vars(
+                            replace_occurrences_lc(*body, &bind_id, new_bind_id),
+                            names,
+                        )),
+                    }
+                } else {
+                    Expr::Abstraction {
+                        bind_id,
+                        body: Box::new(remove_root_shadow_vars(*body, names)),
+                    }
+                }
+            }
+        }
+    }
+
     fn deduplicate_lc(
         e: Expr,
         used_names: &mut BTreeSet<String>,
@@ -909,7 +943,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         buffer.into()
     }
 
-    let mut def_table = stmts
+    let def_table = stmts
         .clone()
         .filter_map(|stmt| match stmt {
             Stmt::Def { bind_name, def: d } => Some((bind_name.clone(), d.clone())),
@@ -942,11 +976,15 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         inlined = inline(inlined, k, &def_table);
     }
 
-    inlined = deduplicate_lc(inlined, &mut Default::default(), &mut Default::default());
+    inlined = deduplicate_lc(
+        remove_root_shadow_vars(inlined, &names),
+        &mut Default::default(),
+        &mut Default::default(),
+    );
 
     tracing::trace!("inlined: {}", inlined);
 
-    let cc = graphical::compile(inlined, names);
+    let cc = graphical::compile(inlined, &names);
 
     #[cfg(test)]
     cc.checksum();
