@@ -1,0 +1,5 @@
+#include ../toyfp/stdlib/bool.lc
+#include ../toyfp/stdlib/num.lc
+
+f = \n.(iszero n)
+(f zero)
