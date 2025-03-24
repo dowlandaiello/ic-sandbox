@@ -372,63 +372,67 @@ impl ReductionWorker {
             // Commutation of alpha era
             (Cell::Constr, Cell::Era) | (Cell::Dup, Cell::Era) => {
                 let top_ports = a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
-                let mut ports_2 = a_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
+
+                let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
+
+                let conn_map: BTreeMap<Conn, Conn> = [
+                    Conn {
+                        cell: a_id,
+                        port: 1,
+                    },
+                    Conn {
+                        cell: a_id,
+                        port: 2,
+                    },
+                ]
+                .into_iter()
+                .zip(eras.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                .collect();
 
                 // Circular elim
-                if ports_2.next().unwrap().0.cell == a_id && ports_2.next().unwrap().0.cell == a_id
-                {
-                    let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
-                    conn_maybe_redex(
-                        (
-                            Conn {
-                                port: 0,
-                                cell: eras[0],
-                            },
-                            self.buffer.get_cell(eras[0]),
-                        ),
-                        (
-                            Conn {
-                                port: 0,
-                                cell: eras[1],
-                            },
-                            self.buffer.get_cell(eras[1]),
-                        ),
-                    )
-                    .map(|redex| vec![redex])
-                    .unwrap_or_default()
-                } else {
-                    self.make_era_commutation(top_ports)
-                }
+                top_ports
+                    .map(|conn| conn_map.get(&conn.0).cloned().unwrap_or(conn.0))
+                    .zip(eras.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                    .map(|(a, b)| {
+                        conn_maybe_redex(
+                            (a, self.buffer.get_cell(a.cell)),
+                            (b, self.buffer.get_cell(b.cell)),
+                        )
+                    })
+                    .filter_map(|x| x)
+                    .collect()
             }
             (Cell::Era, Cell::Constr) | (Cell::Era, Cell::Dup) => {
                 let top_ports = b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
-                let mut ports_2 = b_cell.iter_aux_ports().map(|x| x.unwrap()).map(map_conn);
+
+                let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
+
+                let conn_map: BTreeMap<Conn, Conn> = [
+                    Conn {
+                        cell: b_id,
+                        port: 1,
+                    },
+                    Conn {
+                        cell: b_id,
+                        port: 2,
+                    },
+                ]
+                .into_iter()
+                .zip(eras.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                .collect();
 
                 // Circular elim
-                if ports_2.next().unwrap().0.cell == b_id && ports_2.next().unwrap().0.cell == b_id
-                {
-                    let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
-                    conn_maybe_redex(
-                        (
-                            Conn {
-                                port: 0,
-                                cell: eras[0],
-                            },
-                            self.buffer.get_cell(eras[0]),
-                        ),
-                        (
-                            Conn {
-                                port: 0,
-                                cell: eras[1],
-                            },
-                            self.buffer.get_cell(eras[1]),
-                        ),
-                    )
-                    .map(|redex| vec![redex])
-                    .unwrap_or_default()
-                } else {
-                    self.make_era_commutation(top_ports)
-                }
+                top_ports
+                    .map(|conn| conn_map.get(&conn.0).cloned().unwrap_or(conn.0))
+                    .zip(eras.into_iter().map(|ptr| Conn { cell: ptr, port: 0 }))
+                    .map(|(a, b)| {
+                        conn_maybe_redex(
+                            (a, self.buffer.get_cell(a.cell)),
+                            (b, self.buffer.get_cell(b.cell)),
+                        )
+                    })
+                    .filter_map(|x| x)
+                    .collect()
             }
             _ => {
                 panic!("invalid redex")
@@ -669,16 +673,6 @@ impl Reducer for BufferedMatrixReducer {
         #[cfg(feature = "threadpool")]
         fn reduce_redexes(slf: &mut BufferedMatrixReducer, mut r: Vec<(Conn, Conn)>) {
             while !r.is_empty() {
-                let res = slf.readback();
-
-                tracing::debug!(
-                    "reduction frame: {}",
-                    res.into_iter()
-                        .map(|graph| graph.iter_tree_visitor().into_string())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
-
                 let lock = slf.locked.clone();
 
                 let n_empty_cells_required = r.len() * 4;
@@ -707,6 +701,17 @@ impl Reducer for BufferedMatrixReducer {
 
                 r = r
                     .into_par_iter()
+                    .filter(|(a, _)| {
+                        slf.buffer.iter_tree(a.cell).any(|cell| {
+                            slf.buffer
+                                .get_cell(cell)
+                                .load_discriminant_uninit_var()
+                                .map(|e| matches!(e, Cell::Var(_)))
+                                .unwrap_or_default()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into_par_iter()
                     .map(move |x| {
                         let worker = ReductionWorker {
                             buffer: buff.clone(),
@@ -722,28 +727,40 @@ impl Reducer for BufferedMatrixReducer {
 
         #[cfg(not(feature = "threadpool"))]
         fn reduce_redexes(slf: &BufferedMatrixReducer, r: impl IntoIterator<Item = (Conn, Conn)>) {
-            r.into_iter().for_each(move |x| {
-                let res = slf.readback();
+            r.into_iter()
+                .filter(|(a, _)| {
+                    slf.buffer.iter_tree(a.cell).any(|cell| {
+                        slf.buffer
+                            .get_cell(cell)
+                            .load_discriminant_uninit_var()
+                            .map(|e| matches!(e, Cell::Var(_)))
+                            .unwrap_or_default()
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .for_each(move |x| {
+                    let res = slf.readback();
 
-                tracing::debug!(
-                    "reduction frame: {}",
-                    res.into_iter()
-                        .map(|graph| graph.iter_tree_visitor().into_string())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
+                    tracing::debug!(
+                        "reduction frame: {}",
+                        res.into_iter()
+                            .map(|graph| graph.iter_tree_visitor().into_string())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
 
-                let worker = ReductionWorker {
-                    buffer: slf.buffer.clone(),
-                    locked: slf.locked.clone(),
-                };
+                    let worker = ReductionWorker {
+                        buffer: slf.buffer.clone(),
+                        locked: slf.locked.clone(),
+                    };
 
-                let redexes = worker.reduce_step(x);
+                    let redexes = worker.reduce_step(x);
 
-                slf.buffer.checksum();
+                    slf.buffer.checksum();
 
-                reduce_redexes(slf, redexes);
-            });
+                    reduce_redexes(slf, redexes);
+                });
         }
 
         // Push all redexes

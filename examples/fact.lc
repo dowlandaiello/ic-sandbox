@@ -2,7 +2,7 @@
 #include ../toyfp/stdlib/num.lc
 #include ../toyfp/stdlib/bool.lc
 
-factgen = \f.\n.((iszero n) one (mult n (f (pred n))))
+factgen = \f.\n.n
 fact    = (Y factgen)
 
-(fact two)
+(fact zero)
