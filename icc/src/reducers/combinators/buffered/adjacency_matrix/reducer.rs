@@ -740,16 +740,6 @@ impl Reducer for BufferedMatrixReducer {
                 .collect::<Vec<_>>()
                 .into_iter()
                 .for_each(move |x| {
-                    let res = slf.readback();
-
-                    tracing::debug!(
-                        "reduction frame: {}",
-                        res.into_iter()
-                            .map(|graph| graph.iter_tree_visitor().into_string())
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    );
-
                     let worker = ReductionWorker {
                         buffer: slf.buffer.clone(),
                         locked: slf.locked.clone(),

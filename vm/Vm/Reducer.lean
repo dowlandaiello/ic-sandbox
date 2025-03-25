@@ -1,5 +1,6 @@
 import Vm.Ast
 import Mathlib.Logic.Basic
+import Init.Prelude
 
 structure Agent (n : Nat) where
   id    : CId n
@@ -7,7 +8,7 @@ structure Agent (n : Nat) where
 
 structure AdjacencyMatrix (n : Nat) where
   cells    : Vector (Option (Expr n)) n
-  nextFree : List (Fin n)
+  nextFree : List (CId n)
 
 def hasCell {n : Nat} (mat : AdjacencyMatrix n) (id : CId n) : Bool :=
   Option.isSome $ mat.cells[id.val]
@@ -40,17 +41,18 @@ def connect {n : Nat} (buff : AdjacencyMatrix n) (fromConn : CId n × Nat) (toCo
       { buff with cells := Vector.set cells' toId.val newToCell }
 
 def push {n : Nat} (buff : AdjacencyMatrix n) (expr : Expr n) (h1 : buff.nextFree ≠ List.nil) : CId n × AdjacencyMatrix n :=
-  match h2 : buff.nextFree with
-  | List.cons x xs =>
-    let cells' := Vector.set buff.cells x $ some expr
-    (x, { buff with cells := cells', nextFree := xs })
-  | List.nil => absurd h2 h1
+  let x := buff.nextFree.head h1
+  let xs := buff.nextFree.tail
 
-def mkCommutationEra {n : Nat} (buff : AdjacencyMatrix n) (port : Port n) (h1 : hasCell buff $ port.id) (h2 : buff.nextFree ≠ List.nil) (h3 : buff.nextFree[0]? ≠ some port.id) : AdjacencyMatrix n :=
+  let cells' := Vector.set buff.cells x.val $ some expr
+  (x, { buff with cells := cells', nextFree := xs })
+
+
+def mkCommutationEra {n : Nat} (buff : AdjacencyMatrix n) (port : Port n) (h1 : hasCell buff $ port.id) (h2 : buff.nextFree ≠ List.nil) (h3 : buff.nextFree.head h2 ≠ port.id) (h4 : cellHasPort buff port.id port.port h1) : AdjacencyMatrix n :=
   let idBuff' := push buff (Expr.Era none) h2
 
-  let buff' := idBuff'.snd
   let eraId := idBuff'.fst
+  let buff' := idBuff'.snd
 
   let hasEra : hasCell buff' $ eraId := by {
     unfold buff'
@@ -59,18 +61,37 @@ def mkCommutationEra {n : Nat} (buff : AdjacencyMatrix n) (port : Port n) (h1 : 
     unfold idBuff'
     unfold hasCell
     unfold push
-    split
     simp [Array.getElem_set]
-    trivial
   }
   let hasOther : hasCell buff' $ port.id := by {
     unfold buff'
     unfold idBuff'
     unfold push
-    cases buff.nextFree with
+    simp
+    cases h5 : buff.cells with
+    | mk arr => {
+      unfold hasCell
+      simp
+      unfold hasCell at h1
+      simp [Array.get_set]
+      simp [Fin.val_inj]
+      simp [h3]
+      simp [h5] at h1
+      simp [h1]
+    }
   }
+  let hasPort0Era : cellHasPort buff' eraId 0 hasEra := by
+    unfold eraId
+    unfold buff'
+    unfold idBuff'
+    unfold cellHasPort
+    unfold getCell
+    unfold push
+    simp
+    unfold hasPort
+    simp
 
-  connect buff' (eraId, 0) (port.id, port.port) hasEra hasOther (by sorry) (by sorry)
+  connect buff' (eraId, 0) (port.id, port.port) hasEra hasOther hasPort0Era (by sorry)
 
 def evalStep {n : Nat} (buff : AdjacencyMatrix n) (lhs : Agent n) (rhs : Agent n) (h1 : buff.nextFree ≠ List.nil) : AdjacencyMatrix n :=
   let mkCommutation := fun (topPorts, botPorts) =>
