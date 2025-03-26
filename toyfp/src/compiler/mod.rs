@@ -1140,6 +1140,49 @@ succ = \\n.\\f.\\x.(f (n f x))
     }
 
     #[test_log::test]
+    fn test_eval_arg_duplication_lc() {
+        let (case, expected) = (
+            "f = \\x.(x x x x x)
+(f \\x.x)",
+            "\\v7.v7",
+        );
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
+            expected
+        );
+    }
+
+    #[test_log::test]
+    fn test_eval_arg_duplication_y_lc() {
+        let (case, expected) = (
+            "Y = \\f.(\\x.(f \\v.(x x v)) \\x.(f \\v.(x x v)))
+f = \\g.\\x.(x x x x x)
+(Y f \\x.x)",
+            "\\v33.v33",
+        );
+        let names = Default::default();
+
+        let parsed = lc_parser::parser()
+            .parse(lc_parser::lexer().parse(case).unwrap())
+            .unwrap();
+        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let result = reduce_dyn(&compiled);
+
+        assert_eq!(
+            decompile(&result[0].orient(), &names).unwrap().to_string(),
+            expected
+        );
+    }
+
+    #[test_log::test]
     fn test_eval_bool_true() {
         let (case, expected) = ("(KSK)", "S");
         let names = Default::default();

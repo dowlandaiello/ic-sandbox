@@ -1,4 +1,2 @@
-#include ../toyfp/stdlib/func.lc
-
-f = \f.\x.(x x)
-(Y f \x.x)
+f = \x.(x x x x x)
+(f \x.x)
