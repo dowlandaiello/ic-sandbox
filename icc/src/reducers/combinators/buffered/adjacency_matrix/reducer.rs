@@ -329,6 +329,8 @@ impl ReductionWorker {
                     a_cell.iter_aux_ports().map(|x| x.unwrap()),
                     b_cell.iter_aux_ports().map(|x| x.unwrap()),
                 ) {
+                    tracing::trace!("circular reference in reduction");
+
                     [conn_maybe_redex(map_conn(a), map_conn(b))]
                         .into_iter()
                         .filter_map(|x| x)
@@ -688,6 +690,8 @@ impl Reducer for BufferedMatrixReducer {
                     .for_each(|x| slf.buffer.push_next_free(*x));
 
                 if free_cells_reduction.len() < n_empty_cells_required {
+                    tracing::trace!("growing buffer");
+
                     slf.buffer.grow(n_empty_cells_required);
                     slf.locked = slf
                         .locked

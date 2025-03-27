@@ -83,7 +83,13 @@ pub fn reduce_dyn(e: &Port) -> Vec<Port> {
         .into_iter()
         .filter(|net| net.iter_tree().any(|x| x.borrow().as_var().is_some()))
         .collect::<Vec<_>>();
-    results.sort_by(|a, b| b.iter_tree().count().cmp(&a.iter_tree().count()));
+    let n_roots = |p: Port| Some(p.borrow().as_var()?.name.0.starts_with("v"));
+    results.sort_by(|a, b| {
+        b.iter_tree()
+            .filter_map(n_roots)
+            .count()
+            .cmp(&a.iter_tree().filter_map(n_roots).count())
+    });
 
     results
 }
