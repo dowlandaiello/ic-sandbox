@@ -1,0 +1,4 @@
+#include ../toyfp/stdlib/func.lc
+
+fgen = \g.\x.(x x x x x)
+(Y f \x.x)

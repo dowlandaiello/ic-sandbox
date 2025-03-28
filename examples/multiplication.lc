@@ -1,0 +1,3 @@
+#include ../toyfp/stdlib/num.lc
+
+(mult two two \x.y x)

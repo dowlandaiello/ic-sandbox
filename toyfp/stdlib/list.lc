@@ -1,0 +1,11 @@
+#include ./func.lc
+#include ./num.lc
+
+pair = \a.\b.\f.((f a) b)
+fst  = \a.\b.a
+snd  = \a.\b.b
+head = \l.(l fst)
+tail = \l.(l snd)
+tail = snd
+idxg = \rec.\n.\lst.(iszero n (head lst) (rec rec (pred n) (tail list)))
+idx  = (Y idxg)

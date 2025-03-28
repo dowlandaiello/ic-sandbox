@@ -1,0 +1,8 @@
+#include ../toyfp/stdlib/func.lc
+#include ../toyfp/stdlib/num.lc
+#include ../toyfp/stdlib/bool.lc
+
+countdowngen = \f.\n.(iszero n one two)
+countdown    = (Y countdowngen)
+
+(countdown one)

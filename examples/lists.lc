@@ -1,0 +1,5 @@
+#include ../toyfp/stdlib/list.lc
+#include ../toyfp/stdlib/num.lc
+
+l = (pair bruh (pair sigma nil))
+(head (tail cl))
