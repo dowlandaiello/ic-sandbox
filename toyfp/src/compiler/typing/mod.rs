@@ -66,6 +66,4 @@ impl fmt::Display for UntypedExpr {
     }
 }
 
-pub fn typecheck(_e: Spanned<Expr>) -> UntypedExpr {
-    todo!()
-}
+pub fn typecheck(_e: Spanned<Expr>) -> UntypedExpr {}

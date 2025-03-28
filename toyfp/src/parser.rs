@@ -1,5 +1,9 @@
 use ast_ext::Spanned;
-use chumsky::prelude::*;
+use chumsky::{
+    error::{LabelError, RichPattern},
+    prelude::*,
+    util::MaybeRef,
+};
 use std::{collections::BTreeSet, fmt};
 
 const COMMENT_STR: &str = "--";
@@ -170,9 +174,22 @@ pub fn parser<'src>(
 ) -> impl Parser<'src, &'src [Spanned<Token>], Vec<Spanned<Stmt>>, extra::Err<Rich<'src, Spanned<Token>>>>
 {
     let span_just = move |val: Token| {
+        let v = val.clone();
+
         select! {
-            Spanned(x, s) if x == val => Spanned({ let z: Token = x; z }, s)
+            Spanned(x, s) if x == v => Spanned({ let z: Token = x; z }, s)
         }
+        .map_err(move |e: Rich<_>| {
+            <Rich<_> as LabelError<&'src [Spanned<Token>], RichPattern<_>>>::merge_expected_found(
+                e.clone(),
+                [RichPattern::Token(MaybeRef::Val(Spanned(
+                    val.clone(),
+                    e.clone().span().into_range(),
+                )))],
+                None,
+                *e.span(),
+            )
+        })
     };
     let id = select! {
     Spanned(Token::Ident(i), s) => Spanned(Expr::Id(Spanned(i, s.clone())), s),

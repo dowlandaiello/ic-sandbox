@@ -626,7 +626,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_id_lc() {
-        let (case, expected) = ("(\\x.x a)", "a");
+        let (case, expected) = ("(\\x:_.x a)", "a");
         let names = Default::default();
 
         let lexed = lc_parser::lexer().parse(case).unwrap();
@@ -640,7 +640,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_partial_lc() {
-        let (case, expected) = ("(\\x.x \\x.x)", "\\v3.v3");
+        let (case, expected) = ("(\\x:_.x \\x:_.x)", "\\v3.v3");
         let names = Default::default();
 
         let lexed = lc_parser::lexer().parse(case).unwrap();
@@ -657,7 +657,7 @@ mod test {
 
     #[test_log::test]
     fn test_eval_bool_lc() {
-        let (case, expected) = ("(\\a.\\b.a x y)", "x");
+        let (case, expected) = ("(\\a:_.\\b:_.a x y)", "x");
         let names = Default::default();
 
         let lexed = lc_parser::lexer().parse(case).unwrap();
@@ -674,9 +674,9 @@ mod test {
     #[test_log::test]
     fn test_eval_church_lc() {
         let (case, expected) = (
-            "id   = \\x.x
-z    = \\f.\\g.g
-succ = \\n.\\f.\\x.(f (n f x))
+            "id   = \\x:_.x
+z    = \\f:_.\\g:_.g
+succ = \\n:_.\\f:_.\\x:_.(f (n f x))
 
 (succ z id a)",
             "a",
@@ -696,7 +696,7 @@ succ = \\n.\\f.\\x.(f (n f x))
 
     #[test_log::test]
     fn test_eval_id_nested_lc() {
-        let (case, expected) = ("(\\x.(\\b.b x) a)", "a");
+        let (case, expected) = ("(\\x:_.(\\b:_.b x) a)", "a");
         let names = Default::default();
 
         let lexed = lc_parser::lexer().parse(case).unwrap();
@@ -713,8 +713,8 @@ succ = \\n.\\f.\\x.(f (n f x))
     #[test_log::test]
     fn test_eval_arg_duplication_lc() {
         let (case, expected) = (
-            "f = \\x.(x x x x x)
-(f \\x.x)",
+            "f = \\x:_.(x x x x x)
+(f \\x:_.x)",
             "\\v7.v7",
         );
         let names = Default::default();
@@ -733,9 +733,9 @@ succ = \\n.\\f.\\x.(f (n f x))
     #[test_log::test]
     fn test_eval_arg_duplication_y_lc() {
         let (case, expected) = (
-            "Y = \\f.(\\x.(f \\v.(x x v)) \\x.(f \\v.(x x v)))
-f = \\g.\\x.(x x x x x)
-(Y f \\x.x)",
+            "Y = \\f:_.(\\x:_.(f \\v:_.(x x v)) \\x:_.(f \\v:_.(x x v)))
+f = \\g:_.\\x:_.(x x x x x)
+(Y f \\x:_.x)",
             "\\v33.v33",
         );
         let names = Default::default();

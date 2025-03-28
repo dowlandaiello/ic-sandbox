@@ -39,8 +39,8 @@ pub fn repl() {
 
                     // This is an expression, we can parse now
                     if !matches!(
-                        parser::lexer().parse(&line).unwrap()[1],
-                        Spanned(Token::Eq, _)
+                        parser::lexer().parse(&line).unwrap().get(1),
+                        Some(Spanned(Token::Eq, _))
                     ) {
                         let parsed = assert_parse_ok(None, stmts.as_str());
                         let combinated = compiler::compile(parsed.clone(), &names);
