@@ -1,28 +1,20 @@
 use super::{
     parser::{Expr, Stmt},
-    parser_icalc::{
-        Abstraction, Application, Definition, Duplication, Expr as IExpr, Stmt as IStmt,
-        Superposition, Var as IVar,
-    },
     parser_sk::Expr as SkExpr,
 };
+use ast_ext::Spanned;
 use builder::{CombinatorBuilder as SkCombinatorBuilder, OwnedNetBuilder};
 use inetlib::{
-    parser::{
-        ast_combinators::{Constructor, Duplicator, Expr as CExpr, Port as AstPort, Var},
-        ast_lafont::Ident,
-        naming::NameIter,
-    },
+    parser::{ast_combinators::Port as AstPort, naming::NameIter},
     reducers::combinators::reduce_dyn,
 };
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fmt,
-};
+use std::collections::{BTreeMap, BTreeSet};
+use typing::UntypedExpr;
 
 mod builder;
 pub mod graphical;
 mod icalc;
+pub mod typing;
 
 pub trait CombinatorBuilder: Sized {
     type CPort;
@@ -33,42 +25,6 @@ pub trait CombinatorBuilder: Sized {
     fn combinate(&self) -> Self::CPort;
 
     fn expand_step(&self, names: &NameIter) -> Self;
-}
-
-pub fn decompile_icalc(p: AstPort, tags: &BTreeMap<usize, String>) -> IExpr {
-    todo!()
-}
-
-fn inline_icalc(e: IExpr, def_table: &BTreeMap<String, IExpr>) -> IExpr {
-    match e {
-        IExpr::Abstraction(Abstraction { bind_var, body }) => IExpr::Abstraction(Abstraction {
-            bind_var,
-            body: Box::new(inline_icalc(*body, def_table)),
-        }),
-        IExpr::Application(Application(lhs, rhs)) => IExpr::Application(Application(
-            Box::new(inline_icalc(*lhs, def_table)),
-            Box::new(inline_icalc(*rhs, def_table)),
-        )),
-        IExpr::Duplication(Duplication {
-            tag,
-            pair,
-            to_clone,
-            in_expr,
-        }) => IExpr::Duplication(Duplication {
-            tag,
-            pair,
-            to_clone: Box::new(inline_icalc(*to_clone, def_table)),
-            in_expr: Box::new(inline_icalc(*in_expr, def_table)),
-        }),
-        IExpr::Superposition(Superposition { tag, lhs, rhs }) => {
-            IExpr::Superposition(Superposition {
-                tag,
-                lhs: Box::new(inline_icalc(*lhs, def_table)),
-                rhs: Box::new(inline_icalc(*rhs, def_table)),
-            })
-        }
-        IExpr::Variable(v) => def_table.get(&v.0).cloned().unwrap_or(IExpr::Variable(v)),
-    }
 }
 
 fn next_dedup(
@@ -88,274 +44,8 @@ fn next_dedup(
     valid_var
 }
 
-fn replace_occurrences(e: &mut IExpr, old: &str, new: String) {
-    match e {
-        IExpr::Abstraction(Abstraction { bind_var, body }) => {
-            if bind_var == old {
-                *bind_var = new.clone();
-            }
-
-            replace_occurrences(body, old, new);
-        }
-        IExpr::Application(Application(lhs, rhs)) => {
-            replace_occurrences(lhs, old, new.clone());
-            replace_occurrences(rhs, old, new.clone());
-        }
-        IExpr::Duplication(Duplication {
-            pair,
-            to_clone,
-            in_expr,
-            ..
-        }) => {
-            if pair.0 == old {
-                (*pair).0 = new.clone();
-            }
-
-            if pair.1 == old {
-                (*pair).0 = new.clone();
-            }
-
-            replace_occurrences(to_clone, old, new.clone());
-            replace_occurrences(in_expr, old, new.clone());
-        }
-        IExpr::Superposition(Superposition { lhs, rhs, .. }) => {
-            replace_occurrences(lhs, old, new.clone());
-            replace_occurrences(rhs, old, new.clone());
-        }
-        IExpr::Variable(v) => {
-            if v.0 == old {
-                (*v).0 = new;
-            }
-        }
-    }
-}
-
-fn deduplicate(
-    e: &mut IExpr,
-    used_names: &mut BTreeSet<String>,
-    available_names: &mut BTreeSet<String>,
-) {
-    match e {
-        IExpr::Abstraction(Abstraction { bind_var, body }) => {
-            let new_var = next_dedup(bind_var.clone(), used_names, available_names);
-
-            *bind_var = new_var.clone();
-
-            replace_occurrences(body.as_mut(), bind_var, new_var.clone());
-
-            deduplicate(body, used_names, available_names);
-        }
-        IExpr::Application(Application(lhs, rhs)) => {
-            deduplicate(lhs, used_names, available_names);
-            deduplicate(rhs, used_names, available_names);
-        }
-        IExpr::Duplication(Duplication {
-            pair,
-            to_clone,
-            in_expr,
-            ..
-        }) => {
-            let new_a = next_dedup(pair.0.clone(), used_names, available_names);
-            let new_b = next_dedup(pair.1.clone(), used_names, available_names);
-
-            replace_occurrences(in_expr.as_mut(), pair.0.as_str(), new_a);
-            replace_occurrences(in_expr.as_mut(), pair.1.as_str(), new_b);
-
-            deduplicate(to_clone, used_names, available_names);
-            deduplicate(in_expr, used_names, available_names);
-        }
-        IExpr::Superposition(Superposition { tag: _, lhs, rhs }) => {
-            deduplicate(lhs, used_names, available_names);
-            deduplicate(rhs, used_names, available_names);
-        }
-        IExpr::Variable(v) => {
-            let new_var = next_dedup(v.0.clone(), used_names, available_names);
-            (*v).0 = new_var;
-        }
-    }
-}
-
-fn make_def_table_icalc(s: &Vec<IStmt>) -> BTreeMap<String, IExpr> {
-    s.iter()
-        .filter_map(|stmt| match stmt {
-            IStmt::Def(d) => Some((d.name.clone(), d.definition.clone())),
-            _ => None,
-        })
-        .collect::<BTreeMap<_, _>>()
-}
-
-fn cc_expr(
-    e: IExpr,
-    net: &mut Vec<AstPort>,
-    tags: &mut BTreeMap<usize, String>,
-    names: &mut NameIter,
-) -> AstPort {
-    tracing::trace!("compiling {:?}", e);
-
-    match e {
-        IExpr::Abstraction(Abstraction { bind_var, body }) => {
-            let body_cc = cc_expr(*body, net, tags, names);
-            let var_cc = CExpr::Var(Var {
-                name: Ident(bind_var.to_string()),
-                port: None,
-            })
-            .into_port(names);
-
-            let lam = CExpr::Constr(Constructor {
-                primary_port: None,
-                aux_ports: [Some((0, body_cc.clone())), Some((0, var_cc.clone()))],
-            })
-            .into_port(names);
-
-            var_cc.borrow_mut().set_primary_port(Some((2, lam.clone())));
-            body_cc
-                .borrow_mut()
-                .set_primary_port(Some((1, lam.clone())));
-
-            lam
-        }
-        IExpr::Application(Application(lhs, rhs)) => {
-            let lhs_cc = cc_expr(*lhs, net, tags, names);
-            let rhs_cc = cc_expr(*rhs, net, tags, names);
-
-            let ret_var = CExpr::Var(Var {
-                name: Ident("ret".into()),
-                port: None,
-            })
-            .into_port(names);
-
-            let app = CExpr::Constr(Constructor {
-                primary_port: Some((0, lhs_cc.clone())),
-                aux_ports: [Some((0, ret_var.clone())), Some((0, rhs_cc.clone()))],
-            })
-            .into_port(names);
-
-            ret_var
-                .borrow_mut()
-                .set_primary_port(Some((1, app.clone())));
-            rhs_cc.borrow_mut().set_primary_port(Some((2, app.clone())));
-
-            lhs_cc.borrow_mut().set_primary_port(Some((0, app.clone())));
-
-            net.push(lhs_cc.clone());
-
-            lhs_cc
-        }
-        IExpr::Duplication(Duplication {
-            pair: (a, b),
-            to_clone,
-            in_expr,
-            tag,
-        }) => {
-            let a_cc = CExpr::Var(Var {
-                name: Ident(a),
-                port: None,
-            })
-            .into_port(names);
-            let b_cc = CExpr::Var(Var {
-                name: Ident(b),
-                port: None,
-            })
-            .into_port(names);
-            let let_cc = CExpr::Dup(Duplicator {
-                primary_port: None,
-                aux_ports: [Some((0, b_cc.clone())), Some((0, a_cc.clone()))],
-            })
-            .into_port(names);
-
-            cc_expr(*in_expr, net, tags, names);
-
-            tags.insert(let_cc.id, tag);
-
-            a_cc.borrow_mut()
-                .set_primary_port(Some((2, let_cc.clone())));
-            a_cc.borrow_mut()
-                .set_primary_port(Some((2, let_cc.clone())));
-
-            let pair_cc = cc_expr(*to_clone, net, tags, names);
-
-            pair_cc
-                .borrow_mut()
-                .set_primary_port(Some((0, let_cc.clone())));
-            let_cc
-                .borrow_mut()
-                .set_primary_port(Some((0, pair_cc.clone())));
-
-            net.push(pair_cc);
-
-            let_cc
-        }
-        IExpr::Superposition(Superposition { tag, lhs, rhs }) => {
-            let lhs_cc = cc_expr(*lhs, net, tags, names);
-            let rhs_cc = cc_expr(*rhs, net, tags, names);
-
-            let pair_cc = CExpr::Dup(Duplicator {
-                primary_port: None,
-                aux_ports: [Some((0, lhs_cc.clone())), Some((0, rhs_cc.clone()))],
-            })
-            .into_port(names);
-
-            lhs_cc
-                .borrow_mut()
-                .set_primary_port(Some((1, pair_cc.clone())));
-            rhs_cc
-                .borrow_mut()
-                .set_primary_port(Some((2, pair_cc.clone())));
-
-            tags.insert(pair_cc.id, tag);
-
-            pair_cc
-        }
-        IExpr::Variable(IVar(i)) => CExpr::Var(Var {
-            name: Ident(i),
-            port: None,
-        })
-        .into_port(names),
-    }
-}
-
-pub fn compile_icalc(mut s: Vec<IStmt>) -> (Vec<AstPort>, BTreeMap<usize, String>) {
-    let mut names = Default::default();
-    let mut net = Default::default();
-    let mut tags = Default::default();
-    let mut used_names = Default::default();
-
-    s.iter_mut()
-        .map(|stmt| match stmt {
-            IStmt::Def(Definition {
-                name: _,
-                definition,
-            }) => definition,
-            IStmt::Expr(e) => e,
-        })
-        .for_each(|e| {
-            deduplicate(e, &mut used_names, &mut Default::default());
-        });
-
-    let def_table = make_def_table_icalc(&s);
-
-    let expr = if let Some(root) = s
-        .iter()
-        .filter_map(|stmt| match stmt {
-            IStmt::Expr(e) => Some(e),
-            _ => None,
-        })
-        .next()
-    {
-        root
-    } else {
-        return Default::default();
-    };
-
-    let inlined = inline_icalc(expr.clone(), &def_table);
-
-    let bruh = cc_expr(inlined, &mut net, &mut tags, &mut names);
-
-    (net, tags)
-}
-
 pub fn compile_sk(e: SkExpr, names: &NameIter) -> AstPort {
-    let cc = build_compilation_expr(e.clone(), false, &names);
+    let cc = build_compilation_expr(e.clone(), &names);
 
     #[cfg(test)]
     cc.checksum();
@@ -427,7 +117,7 @@ pub fn decode_sk(p: &AstPort, names: &NameIter) -> SkExpr {
         .expect("invalid SK expression")
 }
 
-fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNetBuilder {
+fn build_compilation_expr(e: SkExpr, names: &NameIter) -> OwnedNetBuilder {
     tracing::trace!("compiling {}", e);
 
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
@@ -493,7 +183,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
             Vec::new(),
         ),
         SkExpr::Call { callee, params } => {
-            let a_cc = build_compilation_expr(*callee, false, names);
+            let a_cc = build_compilation_expr(*callee, names);
 
             (a_cc, params)
         }
@@ -503,11 +193,7 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
         #[cfg(test)]
         builder.checksum();
 
-        let cc = best_port(
-            &best_port(&build_compilation_expr(x, true, names))
-                .1
-                .encode(names),
-        );
+        let cc = best_port(&best_port(&build_compilation_expr(x, names)).1.encode(names));
 
         let arg_handle = OwnedNetBuilder::new(
             SkCombinatorBuilder::Constr {
@@ -537,14 +223,228 @@ fn build_compilation_expr(e: SkExpr, is_arg: bool, names: &NameIter) -> OwnedNet
     builder
 }
 
-fn mk_id() -> SkExpr {
-    SkExpr::Call {
-        callee: Box::new(SkExpr::S),
-        params: vec![SkExpr::K, SkExpr::S],
+fn deduplicate(
+    e: Spanned<Expr>,
+    used_names: &mut BTreeSet<String>,
+    available_names: &mut BTreeSet<String>,
+) -> Spanned<Expr> {
+    match e {
+        Spanned(
+            Expr::Abstraction {
+                bind_id,
+                bind_ty,
+                body,
+            },
+            s,
+        ) => {
+            let new_var = next_dedup(bind_id.clone().0, used_names, available_names);
+
+            let replaced = replace_occurrences(Spanned(*body.0, body.1), &bind_id, new_var.clone());
+
+            Spanned(
+                Expr::Abstraction {
+                    bind_id: Spanned(new_var, s.clone()),
+                    bind_ty: Spanned(
+                        Box::new(
+                            deduplicate(
+                                Spanned(*bind_ty.0, bind_ty.1.clone()),
+                                used_names,
+                                available_names,
+                            )
+                            .0,
+                        ),
+                        bind_ty.1,
+                    ),
+                    body: Spanned(
+                        Box::new(
+                            deduplicate(
+                                Spanned(replaced.0, replaced.1.clone()),
+                                used_names,
+                                available_names,
+                            )
+                            .0,
+                        ),
+                        replaced.1,
+                    ),
+                },
+                s,
+            )
+        }
+        Spanned(Expr::Application { lhs, rhs }, s) => Spanned(
+            Expr::Application {
+                lhs: Spanned(
+                    Box::new(
+                        deduplicate(Spanned(*lhs.0, lhs.1.clone()), used_names, available_names).0,
+                    ),
+                    lhs.1,
+                ),
+                rhs: Spanned(
+                    Box::new(
+                        deduplicate(Spanned(*rhs.0, rhs.1.clone()), used_names, available_names).0,
+                    ),
+                    rhs.1,
+                ),
+            },
+            s,
+        ),
+        v => v,
     }
 }
 
-pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> AstPort {
+fn remove_root_shadow_vars(e: Spanned<Expr>, names: &NameIter) -> Spanned<Expr> {
+    match e {
+        Spanned(Expr::Id(v), s) => Spanned(
+            {
+                if v.starts_with("v") {
+                    Expr::Id(Spanned(format!("_{}", v.0), v.1))
+                } else {
+                    Expr::Id(v)
+                }
+            },
+            s,
+        ),
+        Spanned(Expr::Application { lhs, rhs }, s) => Spanned(
+            Expr::Application {
+                lhs: Spanned(
+                    Box::new(remove_root_shadow_vars(Spanned(*lhs.0, lhs.1.clone()), names).0),
+                    lhs.1,
+                ),
+                rhs: Spanned(
+                    Box::new(remove_root_shadow_vars(Spanned(*rhs.0, rhs.1.clone()), names).0),
+                    rhs.1,
+                ),
+            },
+            s,
+        ),
+        Spanned(
+            Expr::Abstraction {
+                bind_id,
+                bind_ty,
+                body,
+            },
+            s,
+        ) => Spanned(
+            if bind_id.starts_with("v") {
+                let new_bind_id = format!("_{}", bind_id.0);
+
+                Expr::Abstraction {
+                    bind_id: Spanned(new_bind_id.clone(), bind_id.1.clone()),
+                    bind_ty,
+                    body: Spanned(
+                        Box::new(
+                            remove_root_shadow_vars(
+                                replace_occurrences(
+                                    Spanned(*body.0, body.1.clone()),
+                                    &bind_id,
+                                    new_bind_id,
+                                ),
+                                names,
+                            )
+                            .0,
+                        ),
+                        body.1,
+                    ),
+                }
+            } else {
+                Expr::Abstraction {
+                    bind_id,
+                    bind_ty,
+                    body: Spanned(
+                        Box::new(
+                            remove_root_shadow_vars(Spanned(*body.0, body.1.clone()), names).0,
+                        ),
+                        body.1,
+                    ),
+                }
+            },
+            s,
+        ),
+    }
+}
+
+fn replace_occurrences(e: Spanned<Expr>, old: &str, new: String) -> Spanned<Expr> {
+    match e {
+        Spanned(
+            Expr::Abstraction {
+                bind_id,
+                bind_ty,
+                body,
+            },
+            s,
+        ) => {
+            if bind_id.0 == old {
+                return Spanned(
+                    Expr::Abstraction {
+                        bind_id,
+                        bind_ty: Spanned(
+                            Box::new(
+                                replace_occurrences(
+                                    Spanned(*bind_ty.0, bind_ty.1.clone()),
+                                    old,
+                                    new.clone(),
+                                )
+                                .0,
+                            ),
+                            bind_ty.1,
+                        ),
+                        body: Spanned(
+                            Box::new(
+                                replace_occurrences(Spanned(*body.0, body.1.clone()), old, new).0,
+                            ),
+                            body.1,
+                        ),
+                    },
+                    s,
+                );
+            }
+
+            Spanned(
+                Expr::Abstraction {
+                    bind_id,
+                    bind_ty: Spanned(
+                        Box::new(
+                            replace_occurrences(
+                                Spanned(*bind_ty.0, bind_ty.1.clone()),
+                                old,
+                                new.clone(),
+                            )
+                            .0,
+                        ),
+                        bind_ty.1,
+                    ),
+                    body: Spanned(
+                        Box::new(replace_occurrences(Spanned(*body.0, body.1.clone()), old, new).0),
+                        body.1,
+                    ),
+                },
+                s,
+            )
+        }
+        Spanned(Expr::Application { lhs, rhs }, s) => Spanned(
+            Expr::Application {
+                lhs: Spanned(
+                    Box::new(replace_occurrences(Spanned(*lhs.0, lhs.1), old, new.clone()).0),
+                    s.clone(),
+                ),
+                rhs: Spanned(
+                    Box::new(replace_occurrences(Spanned(*rhs.0, rhs.1), old, new.clone()).0),
+                    s.clone(),
+                ),
+            },
+            s,
+        ),
+        Spanned(Expr::Id(v), s) => Spanned(
+            Expr::Id(if v.0 == old {
+                Spanned(new, s.clone())
+            } else {
+                Spanned(v.0, s.clone())
+            }),
+            s,
+        ),
+    }
+}
+
+pub fn compile(stmts: impl Iterator<Item = Spanned<Stmt>> + Clone, names: &NameIter) -> AstPort {
     tracing::trace!(
         "compiling stmts: {}",
         stmts
@@ -554,399 +454,72 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
             .join("\n")
     );
 
-    #[derive(Clone, Debug)]
-    enum MixedExpr {
-        S,
-        K,
-        B,
-        C,
-        SPrime,
-        W,
-        Id(String),
-        Abstraction {
-            bind_id: String,
-            body: Box<MixedExpr>,
-        },
-        Application {
-            callee: Box<MixedExpr>,
-            params: Vec<MixedExpr>,
-        },
-    }
-
-    impl fmt::Display for MixedExpr {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match self {
-                Self::S => write!(f, "S"),
-                Self::SPrime => write!(f, "S'"),
-                Self::K => write!(f, "K"),
-                Self::B => write!(f, "B"),
-                Self::C => write!(f, "C"),
-                Self::W => write!(f, "W"),
-                Self::Id(id) => write!(f, "{}", id),
-                Self::Abstraction { bind_id, body } => write!(f, "\\{}.{}", bind_id, body),
-                Self::Application { callee, params } => write!(
-                    f,
-                    "({} {})",
-                    callee,
-                    params
-                        .iter()
-                        .map(|param| param.to_string())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ),
-            }
-        }
-    }
-
-    impl From<Expr> for MixedExpr {
-        fn from(e: Expr) -> Self {
-            match e {
-                Expr::Abstraction { bind_id, body } => Self::Abstraction {
-                    bind_id,
-                    body: Box::new((*body).into()),
-                },
-                Expr::Application { lhs, rhs } => Self::Application {
-                    callee: Box::new((*lhs).into()),
-                    params: vec![(*rhs).into()],
-                },
-                Expr::Id(id) => Self::Id(id),
-            }
-        }
-    }
-
-    impl From<MixedExpr> for SkExpr {
-        fn from(e: MixedExpr) -> Self {
-            match e {
-                MixedExpr::Abstraction { .. } => unreachable!(),
-                MixedExpr::Application { callee, params } => Self::Call {
-                    callee: Box::new((*callee).into()),
-                    params: params.into_iter().map(|param| param.into()).collect(),
-                },
-                MixedExpr::Id(id) => Self::Var(id),
-                MixedExpr::K => Self::K,
-                MixedExpr::S => Self::S,
-                MixedExpr::SPrime => Self::SPrime,
-                MixedExpr::B => Self::B,
-                MixedExpr::C => Self::C,
-                MixedExpr::W => Self::W,
-            }
-        }
-    }
-
-    impl MixedExpr {
-        fn is_all_sk(&self) -> bool {
-            match self {
-                Self::Abstraction { .. } => false,
-                Self::Application { callee, params } => {
-                    callee.is_all_sk() && params.iter().all(|param| param.is_all_sk())
-                }
-                Self::Id(_) | Self::S | Self::K | Self::B | Self::C | Self::W | Self::SPrime => {
-                    true
-                }
-            }
-        }
-
-        fn eliminate(&mut self) {
-            if let Self::Abstraction { bind_id, body } = self {
-                match body.as_mut() {
-                    Self::Application { callee, params } => {
-                        let lhs = callee;
-
-                        let mut fst = params
-                            .iter()
-                            .take(usize::max(params.len() - 1, 1))
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        let last = params.iter().skip(usize::max(params.len() - 1, 1)).next();
-
-                        if let Some(last) = last {
-                            *self = Self::Application {
-                                callee: Box::new(Self::S),
-                                params: vec![
-                                    Self::Abstraction {
-                                        bind_id: bind_id.clone(),
-                                        body: Box::new(Self::Application {
-                                            callee: lhs.clone(),
-                                            params: fst,
-                                        }),
-                                    },
-                                    Self::Abstraction {
-                                        bind_id: bind_id.clone(),
-                                        body: Box::new(last.clone()),
-                                    },
-                                ],
-                            };
-
-                            return;
-                        }
-
-                        *self = Self::Application {
-                            callee: Box::new(Self::S),
-                            params: vec![
-                                Self::Abstraction {
-                                    bind_id: bind_id.clone(),
-                                    body: lhs.clone(),
-                                },
-                                Self::Abstraction {
-                                    bind_id: bind_id.clone(),
-                                    body: Box::new(fst.remove(0)),
-                                },
-                            ],
-                        };
-                    }
-                    Self::Id(id) if id == bind_id => {
-                        *self = Self::Application {
-                            callee: Box::new(Self::S),
-                            params: vec![Self::K, Self::S],
-                        };
-                    }
-                    id @ Self::Id(_) => {
-                        *self = Self::Application {
-                            callee: Box::new(Self::K),
-                            params: vec![id.clone()],
-                        };
-                    }
-                    cnst => {
-                        *self = Self::Application {
-                            callee: Box::new(Self::K),
-                            params: vec![cnst.clone()],
-                        };
-                    }
-                }
-            }
-        }
-
-        fn optimize(&mut self) -> bool {
-            match self {
-                Self::S => false,
-                Self::K => false,
-                Self::B => false,
-                Self::C => false,
-                Self::W => false,
-                Self::SPrime => false,
-                Self::Id(_) => false,
-                Self::Abstraction { .. } => unreachable!(),
-                Self::Application { callee, params } => {
-                    callee.optimize()
-                        || params.iter_mut().any(|x| x.optimize())
-                        || match (&**callee, params.as_slice()) {
-                            (
-                                Self::S,
-                                [Self::Application {
-                                    callee: inner_call,
-                                    params: inner_params,
-                                }, x],
-                            ) if matches!(**inner_call, Self::B)
-                                && matches!(&**inner_params, [_, _]) =>
-                            {
-                                *self = Self::Application {
-                                    callee: Box::new(Self::SPrime),
-                                    params: vec![
-                                        inner_params[0].clone(),
-                                        inner_params[1].clone(),
-                                        x.clone(),
-                                    ],
-                                };
-
-                                true
-                            }
-                            (
-                                Self::S,
-                                [Self::Application {
-                                    callee: inner_call,
-                                    params: inner_params,
-                                }, x],
-                            ) if matches!(**inner_call, Self::K) => {
-                                *self = Self::Application {
-                                    callee: Box::new(Self::B),
-                                    params: vec![inner_params[0].clone(), x.clone()],
-                                };
-
-                                true
-                            }
-                            (
-                                Self::S,
-                                [Self::Application {
-                                    callee: inner_call_lhs,
-                                    params: inner_params_lhs,
-                                }, Self::Application {
-                                    callee: inner_call_rhs,
-                                    params: inner_params_rhs,
-                                }],
-                            ) if matches!(&**inner_call_lhs, Self::K)
-                                && matches!(&**inner_call_rhs, Self::K) =>
-                            {
-                                *self = Self::Application {
-                                    callee: Box::new(Self::K),
-                                    params: vec![Self::Application {
-                                        callee: Box::new(inner_params_lhs[0].clone()),
-                                        params: vec![inner_params_rhs[0].clone()],
-                                    }],
-                                };
-
-                                true
-                            }
-                            (
-                                Self::S,
-                                [x, Self::Application {
-                                    callee: inner_call,
-                                    params: inner_params,
-                                }],
-                            ) if matches!(&**inner_call, Self::K) => {
-                                *self = Self::Application {
-                                    callee: Box::new(Self::C),
-                                    params: vec![x.clone(), inner_params[0].clone()],
-                                };
-
-                                true
-                            }
-                            _ => false,
-                        }
-                }
-            }
-        }
-
-        fn eliminate_innermost_abstraction(&mut self) {
-            match self {
-                Self::SPrime | Self::S | Self::K | Self::B | Self::C | Self::W | Self::Id(_) => {}
-                Self::Abstraction { body, .. } => {
-                    body.eliminate_innermost_abstraction();
-
-                    self.eliminate();
-                }
-                Self::Application { callee, params } => {
-                    callee.eliminate_innermost_abstraction();
-                    params
-                        .iter_mut()
-                        .for_each(|x| x.eliminate_innermost_abstraction());
-                }
-            }
-        }
-    }
-
-    fn inline(e: Expr, to_replace: &str, def_table: &BTreeMap<String, Expr>) -> Expr {
+    fn inline(
+        e: Spanned<Expr>,
+        to_replace: &str,
+        def_table: &BTreeMap<String, Spanned<Expr>>,
+    ) -> Spanned<Expr> {
         match e {
-            Expr::Abstraction { bind_id, body } => Expr::Abstraction {
-                bind_id,
-                body: Box::new(inline(*body, to_replace, def_table)),
-            },
-            Expr::Application { lhs, rhs } => Expr::Application {
-                lhs: Box::new(inline(*lhs, to_replace, def_table)),
-                rhs: Box::new(inline(*rhs, to_replace, def_table)),
-            },
-            Expr::Id(id) => {
-                if id == to_replace {
-                    def_table.get(&id).cloned().unwrap_or(Expr::Id(id))
-                } else {
-                    Expr::Id(id)
-                }
-            }
-        }
-    }
-
-    fn replace_occurrences_lc(e: Expr, old: &str, new: String) -> Expr {
-        match e {
-            Expr::Abstraction { bind_id, body } => {
-                if bind_id == old {
-                    return Expr::Abstraction {
-                        bind_id,
-                        body: Box::new(replace_occurrences_lc(*body, old, new)),
-                    };
-                }
-
+            Spanned(
                 Expr::Abstraction {
                     bind_id,
-                    body: Box::new(replace_occurrences_lc(*body, old, new)),
-                }
-            }
-            Expr::Application { lhs, rhs } => Expr::Application {
-                lhs: Box::new(replace_occurrences_lc(*lhs, old, new.clone())),
-                rhs: Box::new(replace_occurrences_lc(*rhs, old, new.clone())),
-            },
-            Expr::Id(v) => Expr::Id(if v == old { new } else { v }),
-        }
-    }
-
-    fn remove_root_shadow_vars(e: Expr, names: &NameIter) -> Expr {
-        match e {
-            Expr::Id(v) => {
-                if v.starts_with("v") {
-                    Expr::Id(format!("_{}", v))
-                } else {
-                    Expr::Id(v)
-                }
-            }
-            Expr::Application { lhs, rhs } => Expr::Application {
-                lhs: Box::new(remove_root_shadow_vars(*lhs, names)),
-                rhs: Box::new(remove_root_shadow_vars(*rhs, names)),
-            },
-            Expr::Abstraction { bind_id, body } => {
-                if bind_id.starts_with("v") {
-                    let new_bind_id = format!("_{}", bind_id);
-
-                    Expr::Abstraction {
-                        bind_id: new_bind_id.clone(),
-                        body: Box::new(remove_root_shadow_vars(
-                            replace_occurrences_lc(*body, &bind_id, new_bind_id),
-                            names,
-                        )),
-                    }
-                } else {
-                    Expr::Abstraction {
-                        bind_id,
-                        body: Box::new(remove_root_shadow_vars(*body, names)),
-                    }
-                }
-            }
-        }
-    }
-
-    fn deduplicate_lc(
-        e: Expr,
-        used_names: &mut BTreeSet<String>,
-        available_names: &mut BTreeSet<String>,
-    ) -> Expr {
-        match e {
-            Expr::Abstraction { bind_id, body } => {
-                let new_var = next_dedup(bind_id.clone(), used_names, available_names);
-
-                let replaced = replace_occurrences_lc(*body, &bind_id, new_var.clone());
-
+                    bind_ty,
+                    body,
+                },
+                span,
+            ) => Spanned(
                 Expr::Abstraction {
-                    bind_id: new_var,
-                    body: Box::new(deduplicate_lc(replaced, used_names, available_names)),
+                    bind_id,
+                    bind_ty: Spanned(
+                        Box::new(
+                            inline(
+                                Spanned(*bind_ty.0, bind_ty.1.clone()),
+                                to_replace,
+                                def_table,
+                            )
+                            .0,
+                        ),
+                        bind_ty.1,
+                    ),
+                    body: Spanned(
+                        Box::new(inline(Spanned(*body.0, body.1.clone()), to_replace, def_table).0),
+                        body.1,
+                    ),
+                },
+                span,
+            ),
+            Spanned(Expr::Application { lhs, rhs }, span) => Spanned(
+                Expr::Application {
+                    lhs: Spanned(
+                        Box::new(inline(Spanned(*lhs.0, lhs.1.clone()), to_replace, def_table).0),
+                        lhs.1.clone(),
+                    ),
+                    rhs: Spanned(
+                        Box::new(inline(Spanned(*rhs.0, rhs.1.clone()), to_replace, def_table).0),
+                        rhs.1,
+                    ),
+                },
+                span,
+            ),
+            Spanned(Expr::Id(id), _) => {
+                if id.0 == to_replace {
+                    def_table
+                        .get(&id.0)
+                        .cloned()
+                        .unwrap_or(Spanned(Expr::Id(id.clone()), id.1))
+                } else {
+                    Spanned(Expr::Id(id.clone()), id.1)
                 }
             }
-            Expr::Application { lhs, rhs } => Expr::Application {
-                lhs: Box::new(deduplicate_lc(*lhs, used_names, available_names)),
-                rhs: Box::new(deduplicate_lc(*rhs, used_names, available_names)),
-            },
-            v => v,
         }
-    }
-
-    fn precompile(e: Expr) -> SkExpr {
-        let mut buffer: MixedExpr = e.into();
-
-        tracing::debug!("eliminating abstraction in {}", buffer);
-
-        while !buffer.is_all_sk() {
-            tracing::debug!("eliminating abstraction in {}", buffer);
-
-            buffer.eliminate_innermost_abstraction();
-        }
-
-        while buffer.optimize() {
-            tracing::debug!("optimizing in {}", buffer);
-        }
-
-        buffer.into()
     }
 
     let def_table = stmts
         .clone()
         .filter_map(|stmt| match stmt {
-            Stmt::Def { bind_name, def: d } => Some((bind_name.clone(), d.clone())),
+            Spanned(Stmt::Def { bind_name, def: d }, s) => {
+                Some((bind_name.clone(), Spanned(d.clone(), s)))
+            }
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
@@ -954,7 +527,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     let expr = stmts
         .into_iter()
         .filter_map(|stmt| match stmt {
-            Stmt::Expr(e) => Some(e),
+            Spanned(Stmt::Expr(e), s) => Some(Spanned(e, s)),
             _ => None,
         })
         .next()
@@ -976,15 +549,15 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
         inlined = inline(inlined, k, &def_table);
     }
 
-    inlined = deduplicate_lc(
+    inlined = deduplicate(
         remove_root_shadow_vars(inlined, &names),
         &mut Default::default(),
         &mut Default::default(),
     );
 
-    tracing::trace!("inlined: {}", inlined);
+    tracing::trace!("inlined: {}", inlined.0);
 
-    let cc = graphical::compile(inlined, &names);
+    let cc = graphical::compile(typing::typecheck(inlined), &names);
 
     #[cfg(test)]
     cc.checksum();
@@ -992,7 +565,7 @@ pub fn compile(stmts: impl Iterator<Item = Stmt> + Clone, names: &NameIter) -> A
     cc
 }
 
-pub fn decompile(p: &AstPort, names: &NameIter) -> Option<Expr> {
+pub fn decompile(p: &AstPort, names: &NameIter) -> Option<UntypedExpr> {
     Some(graphical::decompile(p, names, &mut Default::default()))
 }
 
@@ -1000,7 +573,7 @@ pub fn decompile(p: &AstPort, names: &NameIter) -> Option<Expr> {
 mod test {
     use super::*;
     use crate::{
-        parser as lc_parser, parser_icalc,
+        parser as lc_parser,
         parser_sk::{lexer, parser},
     };
     use ast_ext::Spanned;
@@ -1014,7 +587,8 @@ mod test {
         let (case, expected) = ("((Ka)K)", "a");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1027,7 +601,8 @@ mod test {
         let (case, expected) = ("((Ka)b)", "a");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1040,7 +615,8 @@ mod test {
         let (case, expected) = ("(SKKKS)", "(KS)");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1053,10 +629,9 @@ mod test {
         let (case, expected) = ("(\\x.x a)", "a");
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
 
         let result = reduce_dyn(&compiled);
 
@@ -1068,10 +643,9 @@ mod test {
         let (case, expected) = ("(\\x.x \\x.x)", "\\v3.v3");
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
 
         let result = reduce_dyn(&compiled);
 
@@ -1086,10 +660,9 @@ mod test {
         let (case, expected) = ("(\\a.\\b.a x y)", "x");
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
@@ -1110,10 +683,9 @@ succ = \\n.\\f.\\x.(f (n f x))
         );
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
@@ -1127,10 +699,9 @@ succ = \\n.\\f.\\x.(f (n f x))
         let (case, expected) = ("(\\x.(\\b.b x) a)", "a");
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
@@ -1148,10 +719,9 @@ succ = \\n.\\f.\\x.(f (n f x))
         );
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
@@ -1170,10 +740,9 @@ f = \\g.\\x.(x x x x x)
         );
         let names = Default::default();
 
-        let parsed = lc_parser::parser()
-            .parse(lc_parser::lexer().parse(case).unwrap())
-            .unwrap();
-        let compiled = compile(parsed.into_iter().map(|Spanned(x, _)| x), &names);
+        let lexed = lc_parser::lexer().parse(case).unwrap();
+        let parsed = lc_parser::parser().parse(&lexed).unwrap();
+        let compiled = compile(parsed.into_iter(), &names);
         let result = reduce_dyn(&compiled);
 
         assert_eq!(
@@ -1187,7 +756,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(KSK)", "S");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1200,7 +770,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("K", "K");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1213,7 +784,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("((KK)K)", "K");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1226,7 +798,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(K(KK)KK)", "K");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1239,7 +812,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(SKSK)", "K");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1252,7 +826,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("((KS)K)", "S");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1265,7 +840,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("((K(KS))K)", "(KS)");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1278,7 +854,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(KK)", "(KK)");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1291,7 +868,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(KS)", "(KS)");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1304,7 +882,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(SK)", "(SK)");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1317,7 +896,8 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("(((K(KS))K)K)", "S");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
@@ -1330,7 +910,8 @@ f = \\g.\\x.(x x x x x)
         let case = "((SK)S)";
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let _ = reduce_dyn(&compiled);
@@ -1341,35 +922,13 @@ f = \\g.\\x.(x x x x x)
         let (case, expected) = ("((((SK)S)((SK)S))K)", "K");
         let names = Default::default();
 
-        let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+        let lexed = lexer().parse(case).unwrap();
+        let parsed = parser().parse(&lexed).unwrap();
         let compiled = compile_sk(parsed.into(), &names);
 
         let result = reduce_dyn(&compiled);
 
         assert_eq!(decode_sk(&result[0].orient(), &names).to_string(), expected);
-    }
-
-    #[test_log::test]
-    fn test_cc_icalc() {
-        let case = "def Z = \\s \\z z
-def S = \\n \\s \\z (s n)
-(S Z)";
-
-        let parsed = parser_icalc::parser()
-            .parse(
-                parser_icalc::lexer()
-                    .parse(case)
-                    .unwrap()
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>(),
-            )
-            .unwrap()
-            .into_iter()
-            .map(|Spanned(x, _)| x)
-            .collect();
-
-        let _ = compile_icalc(parsed);
     }
 
     #[test_log::test]
@@ -1379,7 +938,8 @@ def S = \\n \\s \\z (s n)
         for (case, expected) in cases {
             let names = NameIter::default();
 
-            let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+            let lexed = lexer().parse(case).unwrap();
+            let parsed = parser().parse(&lexed).unwrap();
             let compiled = compile_sk(parsed.into(), &names);
 
             let result = reduce_dyn(&compiled);
@@ -1395,7 +955,8 @@ def S = \\n \\s \\z (s n)
         for (case, expected) in cases {
             let names = NameIter::default();
 
-            let parsed = parser().parse(lexer().parse(case).unwrap()).unwrap();
+            let lexed = lexer().parse(case).unwrap();
+            let parsed = parser().parse(&lexed).unwrap();
             let compiled = compile_sk(parsed.into(), &names);
 
             let result = reduce_dyn(&compiled);

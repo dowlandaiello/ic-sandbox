@@ -6,7 +6,6 @@ use super::{
 };
 use crate::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Var},
-    ast_lafont::Ident,
     naming::NameIter,
 };
 #[cfg(feature = "threadpool")]
@@ -21,7 +20,6 @@ use std::{
 #[derive(Default)]
 pub struct ReducerBuilder {
     idents: BTreeMap<Ptr, String>,
-    names: BTreeMap<Ptr, usize>,
 }
 
 impl ReducerBuilder {
@@ -44,8 +42,6 @@ impl ReducerBuilder {
                 net.iter_tree()
                     .enumerate()
                     .map(|(i, elem)| {
-                        self.names.insert(i, elem.id);
-
                         let discriminant = match &*elem.borrow() {
                             Expr::Constr(_) => Cell::Constr,
                             Expr::Dup(_) => Cell::Dup,
@@ -118,7 +114,6 @@ impl ReducerBuilder {
         CapacitiedBufferedMatrixReducerBuilder {
             cells: buff,
             idents: self.idents,
-            names: self.names,
             root_redexes,
             locked: (0..(n_nodes * n_nodes))
                 .map(|_| AtomicBool::new(false))
@@ -131,7 +126,6 @@ impl ReducerBuilder {
         CapacitiedBufferedMatrixReducerBuilder {
             cells: MatrixBuffer::new_with_capacity_nodes(capacity),
             idents: self.idents,
-            names: self.names,
             root_redexes: Default::default(),
             locked: (0..(capacity * capacity))
                 .map(|_| AtomicBool::new(false))
@@ -144,7 +138,6 @@ impl ReducerBuilder {
 pub struct CapacitiedBufferedMatrixReducerBuilder {
     cells: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
-    names: BTreeMap<Ptr, usize>,
     root_redexes: BTreeSet<BTreeSet<Conn>>,
     locked: Arc<[AtomicBool]>,
 }
@@ -154,7 +147,6 @@ impl CapacitiedBufferedMatrixReducerBuilder {
         BufferedMatrixReducer {
             buffer: self.cells,
             idents: self.idents,
-            names: self.names,
             root_redexes: self.root_redexes,
             locked: self.locked,
         }
@@ -164,7 +156,6 @@ impl CapacitiedBufferedMatrixReducerBuilder {
 pub struct BufferedMatrixReducer {
     buffer: MatrixBuffer,
     idents: BTreeMap<Ptr, String>,
-    names: BTreeMap<Ptr, usize>,
     root_redexes: BTreeSet<BTreeSet<Conn>>,
     locked: Arc<[AtomicBool]>,
 }
@@ -463,22 +454,6 @@ impl ReductionWorker {
             .collect::<Vec<_>>()
     }
 
-    fn make_era_commutation<'a>(
-        &'a self,
-        top_ports: impl Iterator<Item = (Conn, &'a CellRepr)> + 'a,
-    ) -> Vec<(Conn, Conn)> {
-        let eras = [self.buffer.push(Cell::Era), self.buffer.push(Cell::Era)];
-
-        top_ports
-            .zip(
-                eras.into_iter()
-                    .map(|ptr| ((ptr, 0).into(), self.buffer.get_cell(ptr))),
-            )
-            .map(|(a, b)| conn_maybe_redex(a, (b.0, b.1)))
-            .filter_map(|x| x)
-            .collect()
-    }
-
     fn make_commutation<'a>(
         &'a self,
         a_id: Ptr,
@@ -601,7 +576,7 @@ impl Reducer for BufferedMatrixReducer {
                         let ident = self.idents.get(&v).unwrap().clone();
 
                         Expr::Var(Var {
-                            name: Ident(ident),
+                            name: ident,
                             port: None,
                         })
                     }
@@ -844,9 +819,8 @@ mod test {
 	];
 
         for (case, expected) in cases {
-            let parsed = parser::parser()
-                .parse(parser::lexer().parse(case).unwrap())
-                .unwrap();
+            let lexed = parser::lexer().parse(case).unwrap();
+            let parsed = parser::parser().parse(&lexed).unwrap();
 
             let builder = ReducerBuilder::default();
             let reducer = builder.with_init_net(&parsed[0].0).finish();
@@ -885,9 +859,8 @@ mod test {
         ];
 
         for (case, expected) in cases {
-            let parsed = parser::parser()
-                .parse(parser::lexer().parse(case).unwrap())
-                .unwrap();
+            let lexed = parser::lexer().parse(case).unwrap();
+            let parsed = parser::parser().parse(&lexed).unwrap();
 
             let builder = ReducerBuilder::default();
             let mut reducer = builder.with_init_net(&parsed[0].0).finish();

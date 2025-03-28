@@ -32,7 +32,7 @@ fn main() {
         Some(("dev", _)) => repl(),
         Some(("eval", arg_matches)) => {
             transform_input_to_output_cli(arg_matches, |program| {
-                let res = reduce_dyn(&program.nets[0]);
+                let res = reduce_dyn(&program[0]);
 
                 res.iter()
                     .map(|n| n.to_string())

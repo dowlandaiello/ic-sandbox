@@ -7,13 +7,12 @@ use lockfree::queue::Queue;
 use std::{
     collections::{BTreeSet, VecDeque},
     iter::DoubleEndedIterator,
-    sync::{atomic::AtomicUsize, Arc},
+    sync::Arc,
 };
 
 #[derive(Clone)]
 pub struct MatrixBuffer {
     pub(crate) cells: Arc<[CellRepr]>,
-    pub(crate) len: Arc<AtomicUsize>,
     pub(crate) next_free: Arc<Queue<usize>>,
 }
 
@@ -44,7 +43,8 @@ impl MatrixBuffer {
             .filter_map(|(i, x)| Some((i, x.load_discriminant_uninit_var()?)))
     }
 
-    pub(crate) fn checksum(&self) {
+    #[cfg(test)]
+    pub fn checksum(&self) {
         self.iter_cells().for_each(|i| {
             self.iter_ports(i)
                 .enumerate()
@@ -92,7 +92,6 @@ impl MatrixBuffer {
             cells: (0..capacity * capacity)
                 .map(|_| CellRepr::default())
                 .collect(),
-            len: AtomicUsize::new(0).into(),
             next_free: Queue::from_iter(0..capacity * capacity).into(),
         }
     }

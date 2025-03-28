@@ -65,12 +65,14 @@ impl ConnRepr {
     }
 }
 
+#[cfg(test)]
 #[derive(Default, Clone, Copy)]
 pub(crate) struct ConnBuilder {
     cell: Option<Ptr>,
     port: Option<u8>,
 }
 
+#[cfg(test)]
 impl ConnBuilder {
     pub(crate) fn new(conn: Option<Conn>) -> Self {
         if let Some(c) = conn {
@@ -121,6 +123,7 @@ impl Default for CellRepr {
     }
 }
 
+#[cfg(test)]
 #[derive(Default, Clone, Copy)]
 pub(crate) struct CellBuilder {
     discriminant: Option<Cell>,
@@ -128,6 +131,7 @@ pub(crate) struct CellBuilder {
     aux_ports: [Option<Conn>; 2],
 }
 
+#[cfg(test)]
 impl CellBuilder {
     pub(crate) fn with_discriminant(mut self, c: Cell) -> Self {
         self.discriminant = Some(c);
@@ -203,10 +207,6 @@ impl Clone for CellRepr {
 }
 
 impl CellRepr {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.load_discriminant_uninit_var().is_none()
-    }
-
     pub(crate) fn load_discriminant_uninit_var(&self) -> Option<Cell> {
         load_optional_u8(&self.discriminant).map(|c| Cell::from_discriminant_uninit_var(c))
     }
@@ -227,15 +227,6 @@ impl CellRepr {
                 self.aux_ports[1].store(c);
             }
             _ => panic!("port out of range"),
-        }
-    }
-
-    pub(crate) fn load_port_i(&self, i: u8) -> Option<Conn> {
-        match i {
-            0 => self.load_primary_port(),
-            1 => self.load_aux_port(0),
-            2 => self.load_aux_port(1),
-            _ => panic!("port out of bounds"),
         }
     }
 

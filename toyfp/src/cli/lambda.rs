@@ -1,6 +1,6 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ast_ext::Spanned;
-use chumsky::{error::SimpleReason, prelude::*};
+use chumsky::{error::RichReason, prelude::*};
 use inetlib::reducers::combinators::reduce_dyn;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{fs::OpenOptions, io::Read, path::PathBuf};
@@ -9,7 +9,7 @@ use toyfplib::{
     parser::{self, Stmt, Token},
 };
 
-pub fn read_program(in_fname: &str) -> impl Iterator<Item = Stmt> + Clone {
+pub fn read_program(in_fname: &str) -> impl Iterator<Item = Spanned<Stmt>> + Clone {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -20,7 +20,7 @@ pub fn read_program(in_fname: &str) -> impl Iterator<Item = Stmt> + Clone {
 
     let input_path = PathBuf::from(in_fname);
 
-    assert_parse_ok(input_path.clone(), input.trim())
+    assert_parse_ok(Some(input_path.clone()), input.trim())
 }
 
 pub fn repl() {
@@ -39,10 +39,10 @@ pub fn repl() {
 
                     // This is an expression, we can parse now
                     if !matches!(
-                        parser::lexer().parse(line).unwrap()[1],
+                        parser::lexer().parse(&line).unwrap()[1],
                         Spanned(Token::Eq, _)
                     ) {
-                        let parsed = assert_parse_literal_ok(stmts.as_str());
+                        let parsed = assert_parse_ok(None, stmts.as_str());
                         let combinated = compiler::compile(parsed.clone(), &names);
 
                         let reduced =
@@ -70,122 +70,80 @@ pub fn repl() {
     }
 }
 
-pub fn assert_parse_ok(fpath: PathBuf, input: &str) -> impl Iterator<Item = Stmt> + Clone {
-    let parent_dir = fpath.parent().clone().unwrap();
+pub fn assert_parse_ok(
+    fpath: Option<PathBuf>,
+    input: &str,
+) -> impl Iterator<Item = Spanned<Stmt>> + Clone {
+    let unwrap_errs = |errs: Vec<Rich<_>>| {
+        let fname = fpath
+            .as_ref()
+            .and_then(|p| p.file_name().and_then(|fname| fname.to_str()))
+            .unwrap_or("");
 
-    let errs: Vec<Simple<char>> = match parser::lexer()
-        .parse(
-            parser::preprocessor()
-                .parse(ast_ext::preprocess(input, parent_dir.into()))
-                .unwrap(),
-        )
-        .map_err(|e| {
-            e.into_iter()
-                .map(|e| e.with_label("lexing error"))
-                .collect::<Vec<_>>()
-        })
-        .and_then(|res| {
-            parser::parser().parse(res).map_err(|e| {
-                e.into_iter()
-                    .map(|e| {
-                        Simple::<char>::custom(
-                            e.found().unwrap().1.clone(),
-                            format!("{}", e.map(|x| x.0)),
-                        )
-                        .with_label("parsing error")
-                    })
-                    .collect::<Vec<_>>()
-            })
-        }) {
-        Ok(v) => {
-            return v.into_iter().map(|Spanned(x, _)| x);
+        for err in errs {
+            Report::build(ReportKind::Error, (fname, err.span().clone().into_range()))
+                .with_message(err.to_string().clone())
+                .with_label(
+                    Label::new((fname, err.span().into_range()))
+                        .with_message(if let Some(label) = err.contexts().next() {
+                            format!(
+                                "{}:{}: {}",
+                                label.0,
+                                label.1,
+                                if let RichReason::Custom(s) = err.reason() {
+                                    s.to_string()
+                                } else {
+                                    err.to_string()
+                                }
+                            )
+                        } else {
+                            err.to_string()
+                        })
+                        .with_color(Color::Red),
+                )
+                .finish()
+                .eprint((fname, Source::from(input)))
+                .unwrap();
         }
-        Err(e) => e,
     };
 
-    let fname = fpath
-        .file_name()
-        .and_then(|fname| fname.to_str())
-        .unwrap_or("");
+    let preprocessed_1 = fpath
+        .as_ref()
+        .map(|p| ast_ext::preprocess(input, p.into()))
+        .unwrap_or(input.to_string());
 
-    for err in errs {
-        Report::build(ReportKind::Error, (fname, err.span().clone()))
-            .with_message(err.to_string().clone())
-            .with_label(
-                Label::new((fname, err.span()))
-                    .with_message(if let Some(label) = err.label() {
-                        format!(
-                            "{}: {}",
-                            label,
-                            if let SimpleReason::Custom(s) = err.reason() {
-                                s.to_string()
-                            } else {
-                                err.to_string()
-                            }
-                        )
-                    } else {
-                        err.to_string()
-                    })
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint((fname, Source::from(input)))
-            .unwrap();
-    }
-
-    panic!()
-}
-
-pub fn assert_parse_literal_ok(input: &str) -> impl Iterator<Item = Stmt> + Clone {
-    let errs: Vec<Simple<char>> = match parser::lexer()
-        .parse(parser::preprocessor().parse(input).unwrap())
+    let lexed = match parser::lexer()
+        .parse(&preprocessed_1)
+        .into_result()
         .map_err(|e| {
             e.into_iter()
-                .map(|e| e.with_label("lexing error"))
+                .map(|e| e.map_token(|c| c.to_string()))
                 .collect::<Vec<_>>()
-        })
-        .and_then(|res| {
-            parser::parser().parse(res).map_err(|e| {
-                e.into_iter()
-                    .map(|e| {
-                        Simple::<char>::custom(e.span(), format!("{}", e.map(|x| x.0)))
-                            .with_label("parsing error")
-                    })
-                    .collect::<Vec<_>>()
-            })
         }) {
-        Ok(v) => {
-            return v.into_iter().map(|Spanned(x, _)| x);
+        Ok(v) => v,
+        Err(e) => {
+            unwrap_errs(e);
+            panic!()
         }
-        Err(e) => e,
     };
 
-    let fname = "<STDIN>";
+    match parser::parser()
+        .parse(&lexed)
+        .into_result()
+        .map_err(|e| {
+            e.into_iter()
+                .map(|c| c.map_token(|c| c.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .map(|x| x.into_iter())
+    {
+        Ok(v) => {
+            return v;
+        }
+        Err(e) => {
+            unwrap_errs(e);
 
-    for err in errs {
-        Report::build(ReportKind::Error, (fname, err.span().clone()))
-            .with_message(err.to_string().clone())
-            .with_label(
-                Label::new((fname, err.span()))
-                    .with_message(if let Some(label) = err.label() {
-                        format!(
-                            "{}: {}",
-                            label,
-                            if let SimpleReason::Custom(s) = err.reason() {
-                                s.to_string()
-                            } else {
-                                err.to_string()
-                            }
-                        )
-                    } else {
-                        err.to_string()
-                    })
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint((fname, Source::from(input)))
-            .unwrap();
-    }
-
-    panic!()
+            panic!()
+        }
+    };
 }

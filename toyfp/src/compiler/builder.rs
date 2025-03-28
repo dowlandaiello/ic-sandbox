@@ -3,11 +3,8 @@ use crate::parser_sk::Expr as SkExpr;
 use ast_ext::{TreeCursor, TreeVisitor, VisualDebug};
 use inetlib::parser::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr as AstExpr, Port as AstPort, Var},
-    ast_lafont::Ident,
     naming::NameIter,
 };
-use inetlib::reducers::combinators::reduce_dyn;
-use itertools::Itertools;
 use std::{cell::RefCell, cmp::Ordering, collections::BTreeMap, iter, rc::Rc};
 
 pub type Port = (usize, OwnedNetBuilder);
@@ -167,10 +164,10 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
         let var = |p: AstPort| {
             p.iter_tree()
                 .filter_map(|x| x.borrow().as_var().cloned())
-                .filter(|var| var.name.0.starts_with("v"))
+                .filter(|var| var.name.starts_with("v"))
                 .next()
                 .and_then(|var| var.port)
-                .and_then(|(_, cell)| cell.borrow().as_var().map(|v| v.name.0.clone()))
+                .and_then(|(_, cell)| cell.borrow().as_var().map(|v| v.name.clone()))
                 .map(|v| SkExpr::Var(v))
         };
 
@@ -243,7 +240,7 @@ impl AbstractCombinatorBuilder for OwnedNetBuilder {
                     CombinatorBuilder::Var { name: var_name, .. } => Some((
                         x.0.borrow().name,
                         AstExpr::Var(Var {
-                            name: Ident(var_name.clone()),
+                            name: var_name.clone(),
                             port: None,
                         })
                         .into_port_named(name),
@@ -1418,14 +1415,6 @@ impl CombinatorBuilder {
         self.iter_ports().count()
     }
 
-    pub(crate) fn last_empty_port(&self) -> Option<usize> {
-        self.iter_ports()
-            .enumerate()
-            .filter(|(_, x)| x.is_none())
-            .map(|(i, _)| i)
-            .last()
-    }
-
     fn iter_ports_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = Option<&'a mut Port>> + 'a> {
         match self {
             Self::ZN {
@@ -1590,6 +1579,7 @@ impl CombinatorBuilder {
 #[cfg(test)]
 mod test {
     use super::*;
+    use inetlib::reducers::combinators::reduce_dyn;
 
     #[test_log::test]
     fn test_k_comb() {

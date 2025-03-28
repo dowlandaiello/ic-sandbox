@@ -1,13 +1,13 @@
 use super::{
     ast_combinators::{Constructor, Duplicator, Eraser, Expr, Port, Token, Var},
-    ast_lafont::Ident,
     naming::NameIter,
 };
-use ast_ext::{Span, Spanned};
+use ast_ext::Spanned;
 use chumsky::prelude::*;
 use std::collections::{BTreeMap, VecDeque};
 
-pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+pub fn lexer<'src>(
+) -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err<Rich<'src, char>>> {
     let era = just("Era").map(|_| Token::Era);
     let constr = just("Constr").map(|_| Token::Constr);
     let dup = just("Dup").map(|_| Token::Dup);
@@ -19,12 +19,11 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
     let tilde = just("~").map(|_| Token::Tilde);
-    let ident = text::ident().map(|s: String| Token::Ident(s.to_owned()));
-    let digits = text::digits(10).try_map(|d: String, span| {
-        Ok(Token::Digit(
-            d.parse::<usize>()
-                .map_err(|e| Simple::custom(span, e.to_string()))?,
-        ))
+    let ident = text::ident().map(|s: &str| Token::Ident(s.to_owned()));
+    let digits = text::int(10).try_map(|u: &str, span| {
+        u.parse()
+            .map_err(|e| Rich::custom(span, e))
+            .map(|d| Token::Digit(d))
     });
     let active_pair = just("><").map(|_| Token::ActivePair);
 
@@ -44,16 +43,28 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
 
     token
         .padded_by(text::whitespace())
-        .map_with_span(|tok, e: Span| Spanned(tok, e))
+        .map_with(|tok: Token, e| {
+            Spanned(
+                tok,
+                {
+                    let x: SimpleSpan = e.span();
+                    x
+                }
+                .into_range(),
+            )
+        })
         .repeated()
+        .collect()
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simple<Spanned<Token>>> {
+pub fn parser<'src>(
+) -> impl Parser<'src, &'src [Spanned<Token>], Vec<Spanned<Port>>, extra::Err<Rich<'src, Spanned<Token>>>>
+{
     let span_just = move |val: Token| {
-        filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
-            tok.0 == val
-        })
+        select! {
+            Spanned(x, s) if x == val => Spanned(x, s)
+        }
     };
     let agent = recursive(|expr| {
         select! {
@@ -82,7 +93,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 			pos.map(|p| Spanned(e.0.clone().with_port(Some(p.0)), e.1.clone())).unwrap_or(e)
 		    }),
                 select! {Spanned(Token::Ident(s), span) => Spanned(AgentBuilder::Expr {
-		    phrase: Expr::Var(Var { name: Ident(s), port: None}),
+		    phrase: Expr::Var(Var { name: s, port: None}),
 		    name: 0,
 		    conns: Vec::new(),
 		    port: Some(0),
@@ -95,9 +106,10 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
 			Spanned(AgentBuilder::Ref { port: idx.0, agent_id: id.0 }, id.1)))
             ))
             .separated_by(span_just(Token::Comma))
+            .collect()
         )
         .then_ignore(span_just(Token::RightParen))
-        .map(|((expr, name), children)| {
+        .map(|((expr, name), children): ((Spanned<AgentBuilder>, Spanned<usize>), Vec<Spanned<AgentBuilder>>)| {
 	    Spanned(expr.0.with_children(children.into_iter().map(|x| x.0).collect()).with_name(name.0), expr.1)
 	})
     });
@@ -107,7 +119,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         .then(agent.clone())
         .try_map(
             |(lhs, rhs): (Spanned<AgentBuilder>, Spanned<AgentBuilder>), span| {
-                build_net(lhs, rhs).ok_or(Simple::custom(span, "couldn't build net"))
+                build_net(lhs, rhs).ok_or(Rich::custom(span, "couldn't build net"))
             },
         );
 
@@ -121,12 +133,12 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
             let mut names = NameIter::default();
 
             let lhs_var = Expr::Var(Var {
-                name: Ident(lhs.0),
+                name: lhs.0,
                 port: None,
             })
             .into_port(&mut names);
             let rhs_var = Expr::Var(Var {
-                name: Ident(rhs.0),
+                name: rhs.0,
                 port: None,
             })
             .into_port(&mut names);
@@ -146,7 +158,7 @@ pub fn parser() -> impl Parser<Spanned<Token>, Vec<Spanned<Port>>, Error = Simpl
         wiring,
         agent.try_map(|agent, span| {
             build_agent(agent, &mut Default::default())
-                .ok_or(Simple::custom(span, "couldn't build agent"))
+                .ok_or(Rich::custom(span, "couldn't build agent"))
                 .map(|a| vec![a])
         }),
     ))

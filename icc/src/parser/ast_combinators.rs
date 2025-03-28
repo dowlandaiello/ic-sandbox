@@ -1,7 +1,4 @@
-use crate::{
-    parser::{ast_lafont::Ident, naming::NameIter},
-    UNIT_STR,
-};
+use crate::{parser::naming::NameIter, UNIT_STR};
 use ast_ext::{TreeCursor, TreeVisitor, VisualDebug};
 use std::{
     cmp::Ordering,
@@ -191,7 +188,7 @@ impl Port {
             .filter(|x| {
                 x.borrow()
                     .as_var()
-                    .map(|v| v.name.0.starts_with("v"))
+                    .map(|v| v.name.starts_with("v"))
                     .unwrap_or_default()
             })
             .collect::<Vec<_>>();
@@ -569,7 +566,7 @@ impl Port {
 
         for i in 0..n_ports {
             let v: Port = Expr::Var(Var {
-                name: Ident(names.next()),
+                name: names.next(),
                 port: Some((i, self.clone())),
             })
             .into_port(names);
@@ -686,7 +683,7 @@ impl Expr {
             Self::Era(_) => String::from("Era"),
             Self::Dup(_) => String::from("Dup"),
             Self::Constr(_) => String::from("Constr"),
-            Self::Var(v) => v.name.0.clone(),
+            Self::Var(v) => v.name.clone(),
         }
     }
 
@@ -910,6 +907,6 @@ impl Constructor {
 
 #[derive(Debug, Clone)]
 pub struct Var {
-    pub name: Ident,
+    pub name: String,
     pub port: Option<IndexedPort>,
 }

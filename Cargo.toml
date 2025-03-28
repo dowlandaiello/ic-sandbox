@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-chumsky = "0.9.3"
+chumsky = "0.10.0"
 ast-ext = { path = "ast-ext" }
 icc = { path = "icc", default-features = false }
 tracing = { version = "0.1", features = ["attributes"] }

@@ -157,7 +157,8 @@ impl fmt::Display for Token {
     }
 }
 
-pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
+pub fn lexer<'src>(
+) -> impl Parser<'src, &'src str, Vec<Spanned<Token>>, extra::Err<Rich<'src, char>>> {
     let sprime = just("S'").map(|_| Token::SPrime);
     let s = just("S").map(|_| Token::S);
     let k = just("K").map(|_| Token::K);
@@ -166,20 +167,32 @@ pub fn lexer() -> impl Parser<char, Vec<Spanned<Token>>, Error = Simple<char>> {
     let w = just("W").map(|_| Token::W);
     let left_paren = just("(").map(|_| Token::LeftParen);
     let right_paren = just(")").map(|_| Token::RightParen);
-    let ident = text::ident().map(|ident| Token::Ident(ident));
+    let ident = text::ident().map(|ident: &str| Token::Ident(ident.to_owned()));
 
     choice((sprime, s, k, b, c, w, left_paren, right_paren, ident))
         .padded_by(text::whitespace())
-        .map_with_span(|tok, e: Span| Spanned(tok, e))
+        .map_with(|tok, e| {
+            Spanned(
+                tok,
+                {
+                    let x: SimpleSpan = e.span();
+                    x
+                }
+                .into_range(),
+            )
+        })
         .repeated()
+        .collect()
         .then_ignore(end())
 }
 
-pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spanned<Token>>> {
+pub fn parser<'src>(
+) -> impl Parser<'src, &'src [Spanned<Token>], SpannedExpr, extra::Err<Rich<'src, Spanned<Token>>>>
+{
     let span_just = move |val: Token| {
-        filter::<Spanned<Token>, _, Simple<Spanned<Token>>>(move |tok: &Spanned<Token>| {
-            **tok == val
-        })
+        select! {
+            Spanned(x, s) if x == val => Spanned(x, s)
+        }
     };
 
     recursive(|expr| {
@@ -206,7 +219,10 @@ pub fn parser() -> impl Parser<Spanned<Token>, SpannedExpr, Error = Simple<Spann
         ));
 
         let call = left_paren
-            .ignore_then(expr.clone().then(expr.clone().repeated().at_least(1)))
+            .ignore_then(
+                expr.clone()
+                    .then(expr.clone().repeated().at_least(1).collect()),
+            )
             .then_ignore(right_paren)
             .map(|(a, b)| SpannedExpr::Call {
                 callee: Box::new(a),
@@ -227,7 +243,7 @@ mod test {
 
         for case in cases {
             let lexed = lexer().parse(case).unwrap();
-            let parsed = parser().parse(lexed).unwrap();
+            let parsed = parser().parse(&lexed).unwrap();
 
             assert_eq!(
                 <SpannedExpr as Into<Expr>>::into(parsed)
@@ -244,7 +260,7 @@ mod test {
 
         for case in cases {
             let lexed = lexer().parse(case).unwrap();
-            let parsed = parser().parse(lexed).unwrap();
+            let parsed = parser().parse(&lexed).unwrap();
 
             assert_eq!(
                 <SpannedExpr as Into<Expr>>::into(parsed)

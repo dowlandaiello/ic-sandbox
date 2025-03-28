@@ -1,17 +1,15 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::{
-    error::{Error, Simple, SimpleReason},
+    error::{Rich, RichReason},
     Parser,
 };
 use clap::{builder::OsStr, Arg, ArgAction, ArgMatches};
 use inetlib::{
-    bytecode::combinated::CombinatedProgram,
-    parser::parser_combinators::{self},
-    preprocessor,
-    reducers::combinators::{
-        buffered::adjacency_matrix::{BufferedMatrixReducer, ReducerBuilder},
-        Reducer,
+    parser::{
+        ast_combinators::Port,
+        parser_combinators::{self},
     },
+    reducers::combinators::{buffered::adjacency_matrix::ReducerBuilder, Reducer},
 };
 use rustyline::{
     completion::Completer, error::ReadlineError, hint::Hinter, history::DefaultHistory, Context,
@@ -87,12 +85,12 @@ pub fn repl() {
 
         match readline {
             Ok(line) => {
-                let parsed = assert_parse_literal_ok(line.as_str());
+                let parsed = assert_parse_ok(None, line.as_str());
 
                 loop {
                     let cmd = rl.readline(&format!(
                         "[{}...] (step|reduce|print|exit) >> ",
-                        &parsed.to_string().chars().take(10).collect::<String>()
+                        &parsed[0].to_string().chars().take(10).collect::<String>()
                     ));
 
                     match cmd.as_ref().map(|s| s.as_str()) {
@@ -100,14 +98,21 @@ pub fn repl() {
                             break;
                         }
                         Ok("print") => {
-                            println!("{}", parsed);
+                            println!(
+                                "{}",
+                                parsed
+                                    .iter()
+                                    .map(|x| x.to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            );
                         }
                         Ok("step") => {
                             todo!()
                         }
                         Ok("reduce") => {
                             let mut reducer = ReducerBuilder::default()
-                                .with_init_nets([&parsed.nets[0]].into_iter())
+                                .with_init_nets([&parsed[0]].into_iter())
                                 .finish();
                             let res = reducer.reduce();
 
@@ -143,7 +148,7 @@ pub fn repl() {
 
 pub fn transform_input_to_output_cli(
     args: &ArgMatches,
-    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
+    transformer: impl Fn(Vec<Port>) -> Vec<u8>,
 ) {
     let out_fname = args
         .get_one::<String>("out")
@@ -155,7 +160,7 @@ pub fn transform_input_to_output_cli(
     transform_input_to_output(input_fname, out_fname, transformer)
 }
 
-pub fn read_program(in_fname: &str) -> CombinatedProgram {
+pub fn read_program(in_fname: &str) -> Vec<Port> {
     let mut input = String::new();
     OpenOptions::new()
         .read(true)
@@ -166,15 +171,7 @@ pub fn read_program(in_fname: &str) -> CombinatedProgram {
 
     let input_path = PathBuf::from(in_fname);
 
-    let parsed: CombinatedProgram = assert_parse_ok(
-        input_path.clone(),
-        input_path
-            .ancestors()
-            .nth(1)
-            .expect("failed to get working dir for file")
-            .to_path_buf(),
-        input.trim(),
-    );
+    let parsed = assert_parse_ok(Some(input_path.clone()), input.trim());
 
     parsed
 }
@@ -182,7 +179,7 @@ pub fn read_program(in_fname: &str) -> CombinatedProgram {
 pub fn transform_input_to_output(
     in_fname: &str,
     out_fname: &str,
-    transformer: impl Fn(CombinatedProgram) -> Vec<u8>,
+    transformer: impl Fn(Vec<Port>) -> Vec<u8>,
 ) {
     let parsed = read_program(in_fname);
     let out = transformer(parsed);
@@ -220,125 +217,71 @@ pub fn arg_out_file_default(default: OsStr) -> Arg {
         .action(ArgAction::Set)
 }
 
-fn assert_parse_literal_ok(input: &str) -> CombinatedProgram {
-    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
-        .parse(input)
-        .map_err(|e| {
-            e.into_iter()
-                .map(|e| e.with_label("lexing error"))
-                .collect::<Vec<_>>()
-        })
-        .and_then(|res| {
-            parser_combinators::parser().parse(res).map_err(|e| {
-                e.into_iter()
-                    .map(|e| {
-                        Simple::<char>::custom(
-                            e.found().unwrap().1.clone(),
-                            format!("{}", e.map(|x| x.0)),
-                        )
-                        .with_label("parsing error")
-                    })
-                    .collect::<Vec<_>>()
-            })
-        }) {
-        Ok(v) => {
-            return CombinatedProgram {
-                nets: v.into_iter().map(|x| x.0).collect(),
-            };
-        }
-        Err(e) => e,
-    };
-
-    let fname = "<repl>";
-
-    for err in errs {
-        Report::build(ReportKind::Error, (fname, err.span().clone()))
-            .with_message(err.to_string().clone())
-            .with_label(
-                Label::new((fname, err.span()))
-                    .with_message(if let Some(label) = err.label() {
-                        format!(
-                            "{}: {}",
-                            label,
-                            if let SimpleReason::Custom(s) = err.reason() {
-                                s.to_string()
-                            } else {
-                                err.to_string()
-                            }
-                        )
-                    } else {
-                        err.to_string()
-                    })
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint((fname, Source::from(input)))
-            .unwrap();
-    }
-
-    panic!()
-}
-
-pub fn assert_parse_ok(fpath: PathBuf, working_dir: PathBuf, input: &str) -> CombinatedProgram {
-    let input = preprocessor::parser(working_dir, input);
-
-    let errs: Vec<Simple<char>> = match parser_combinators::lexer()
-        .parse(input.as_str())
-        .map_err(|e| {
-            e.into_iter()
-                .map(|e| e.with_label("lexing error"))
-                .collect::<Vec<_>>()
-        })
-        .and_then(|res| {
-            parser_combinators::parser().parse(res).map_err(|e| {
-                e.into_iter()
-                    .map(|e| {
-                        Simple::<char>::custom(
-                            e.found().unwrap().1.clone(),
-                            format!("{}", e.map(|x| x.0)),
-                        )
-                        .with_label("parsing error")
-                    })
-                    .collect::<Vec<_>>()
-            })
-        }) {
-        Ok(v) => {
-            return CombinatedProgram {
-                nets: v.into_iter().map(|x| x.0).collect(),
-            };
-        }
-        Err(e) => e,
-    };
-
+pub fn assert_parse_ok(fpath: Option<PathBuf>, input: &str) -> Vec<Port> {
     let fname = fpath
-        .file_name()
-        .and_then(|fname| fname.to_str())
+        .as_ref()
+        .map(|p| p.file_name().and_then(|fname| fname.to_str()))
+        .flatten()
         .unwrap_or("");
 
-    for err in errs {
-        Report::build(ReportKind::Error, (fname, err.span().clone()))
-            .with_message(err.to_string().clone())
-            .with_label(
-                Label::new((fname, err.span()))
-                    .with_message(if let Some(label) = err.label() {
-                        format!(
-                            "{}: {}",
-                            label,
-                            if let SimpleReason::Custom(s) = err.reason() {
-                                s.to_string()
-                            } else {
-                                err.to_string()
-                            }
-                        )
-                    } else {
-                        err.to_string()
-                    })
-                    .with_color(Color::Red),
-            )
-            .finish()
-            .eprint((fname, Source::from(input.as_str())))
-            .unwrap();
-    }
+    let report_errs = |errs: Vec<Rich<_>>| {
+        for err in errs {
+            Report::build(ReportKind::Error, (fname, err.span().clone().into_range()))
+                .with_message(err.to_string().clone())
+                .with_label(
+                    Label::new((fname, err.span().into_range()))
+                        .with_message(if let Some(label) = err.contexts().next() {
+                            format!(
+                                "{}: {}",
+                                label.0,
+                                if let RichReason::Custom(s) = err.reason() {
+                                    s.to_string()
+                                } else {
+                                    err.to_string()
+                                }
+                            )
+                        } else {
+                            err.to_string()
+                        })
+                        .with_color(Color::Red),
+                )
+                .finish()
+                .eprint((fname, Source::from(input)))
+                .unwrap();
+        }
+    };
 
-    panic!()
+    let lexed = match parser_combinators::lexer()
+        .parse(input)
+        .into_result()
+        .map_err(|e| {
+            e.into_iter()
+                .map(|e| e.map_token(|e| e.to_string()))
+                .collect::<Vec<_>>()
+        }) {
+        Ok(v) => v,
+        Err(e) => {
+            report_errs(e);
+            panic!()
+        }
+    };
+
+    let parsed_errs: Result<_, Vec<Rich<_>>> = parser_combinators::parser()
+        .parse(lexed.as_slice())
+        .into_result()
+        .map_err(|errs| {
+            errs.into_iter()
+                .map(|e| e.map_token(|c| c.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .to_owned();
+
+    match parsed_errs {
+        Ok(v) => v.into_iter().map(|p| p.0).collect(),
+        Err(e) => {
+            report_errs(e);
+
+            panic!()
+        }
+    }
 }

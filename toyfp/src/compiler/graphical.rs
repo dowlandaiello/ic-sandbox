@@ -1,11 +1,11 @@
 use super::{
     builder::{CombinatorBuilder as RawCombinatorBuilder, OwnedNetBuilder},
+    typing::UntypedExpr,
     CombinatorBuilder,
 };
-use crate::parser::Expr;
 use inetlib::{
     parser::{
-        ast_combinators::{Constructor, Duplicator, Expr as CExpr, IndexedPort, Port},
+        ast_combinators::{Constructor, Duplicator, Expr as CExpr, Port},
         naming::NameIter,
     },
     reducers::combinators::reduce_dyn,
@@ -16,7 +16,7 @@ pub fn decompile(
     p: &Port,
     names: &NameIter,
     bind_ids_for_ports: &mut BTreeMap<Vec<usize>, String>,
-) -> Expr {
+) -> UntypedExpr {
     tracing::debug!("decoding {}", p.iter_tree_visitor().into_string());
 
     // A constr can indicate an abstraction
@@ -122,31 +122,31 @@ pub fn decompile(
             if let Some(inner_bind_id) =
                 bind_ids_for_ports.get(&node_position(&abstr_aux[1].as_ref().unwrap().1))
             {
-                Expr::Abstraction {
+                UntypedExpr::Abstraction {
                     bind_id: bind_id.clone(),
-                    body: Box::new(Expr::Id(inner_bind_id.to_owned())),
+                    body: Box::new(UntypedExpr::Id(inner_bind_id.to_owned())),
                 }
             } else {
                 let body_p = abstr_aux[1].as_ref().unwrap().1.clone();
 
-                Expr::Abstraction {
+                UntypedExpr::Abstraction {
                     bind_id: bind_id.clone(),
                     body: Box::new(decompile(&body_p, names, bind_ids_for_ports)),
                 }
             }
         }
         CExpr::Var(v) => {
-            if v.name.0.starts_with("v") {
+            if v.name.starts_with("v") {
                 decompile(&v.port.as_ref().unwrap().1, names, bind_ids_for_ports)
             } else {
-                Expr::Id(v.name.0.clone())
+                UntypedExpr::Id(v.name.clone())
             }
         }
         _ => unreachable!(),
     }
 }
 
-pub fn compile(e: Expr, names: &NameIter) -> Port {
+pub fn compile(e: UntypedExpr, names: &NameIter) -> Port {
     let cc = build_compilation_expr(e.clone(), &names);
 
     cc.clone().iter_tree().for_each(|x| {
@@ -167,7 +167,7 @@ pub fn compile(e: Expr, names: &NameIter) -> Port {
     combinated
 }
 
-pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuilder {
+pub(crate) fn build_compilation_expr(e: UntypedExpr, names: &NameIter) -> OwnedNetBuilder {
     let best_port = |p: &OwnedNetBuilder| -> (usize, OwnedNetBuilder) {
         p.clone()
             .iter_tree()
@@ -221,14 +221,14 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
     };
 
     let res = match e.clone() {
-        Expr::Id(x) => OwnedNetBuilder::new(
+        UntypedExpr::Id(x) => OwnedNetBuilder::new(
             RawCombinatorBuilder::Var {
                 name: x,
                 primary_port: None,
             },
             names,
         ),
-        Expr::Abstraction { body, bind_id } => {
+        UntypedExpr::Abstraction { body, bind_id } => {
             let body_cc = build_compilation_expr(*body, names);
             let constr = OwnedNetBuilder::new(
                 RawCombinatorBuilder::Constr {
@@ -293,7 +293,7 @@ pub(crate) fn build_compilation_expr(e: Expr, names: &NameIter) -> OwnedNetBuild
 
             constr.encode(names)
         }
-        Expr::Application { lhs, rhs } => {
+        UntypedExpr::Application { lhs, rhs } => {
             let lhs_cc = build_compilation_expr(*lhs, names);
             let rhs_cc = build_compilation_expr(*rhs, names);
 
